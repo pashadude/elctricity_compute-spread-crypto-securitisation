@@ -1,0 +1,71 @@
+# Phase 3 seed keywords. v1. Add new templates only after backward-window
+# check passes (see tests/backward_check_energy_templates.py).
+# Each top-level key is an energy_template_id; values are case-insensitive
+# substring matches (or regex if they contain metacharacters).
+
+energy_oil_price:
+  - "wti"
+  - "brent"
+  - "crude oil"
+  - "oil price"
+  - "barrel"
+  - "opec"
+
+energy_gas_price:
+  - "natural gas"
+  - "henry hub"
+  - "ttf"
+  - "lng"
+  - "gas price"
+
+energy_electricity:
+  - "electricity price"
+  - "power price"
+  - "megawatt"
+  - "mwh"
+  - "eex"
+  - "nordpool"
+  - "ercot"
+  - "pjm"
+  - "grid"
+  - "blackout"
+  - "interconnect"
+
+energy_policy:
+  - "ferc"
+  - "eia"
+  - "doe"
+  - "iea"
+  - "spr"
+  - "export ban"
+  - "sanctions"
+
+energy_ai_infra:
+  - "data center"
+  - "data-center"
+  - "hyperscaler"
+  - "gpu power"
+  - "ai power demand"
+  - "ai compute"
+  - "compute capacity"
+  # Frontier-model events (electricity-compute spread reflects in release timing)
+  - "best ai model"
+  - "ai model"
+  - "anthropic"
+  - "claude"
+  - "openai"
+  - "gpt-5"
+  - "deepseek"
+  - "nvidia"
+  - "nvda"
+  - "spacex"
+  - "starship"
+
+energy_geopolitics:
+  # Oil/gas chokepoints and supply shocks
+  - "strait of hormuz"
+  - "hormuz"
+  - "suez"
+  - "red sea"
+  - "pipeline"
+  - "tanker"

@@ -1,0 +1,16 @@
+# Backward-window energy classifier check — 2026-05-13T13:24:22.394179+00:00Z
+Total fills:        1301
+Energy-classified:  122
+
+Per template:
+                     n     wr     pnl
+energy_template_id                   
+energy_ai_infra     70  0.971  68.654
+energy_geopolitics  52  0.923 -12.224
+
+Soft-acceptance:
+  [FAIL] n_caught in [10, 100]
+  [PASS] per-template WR >= 0.85 (where n>=5)
+  [PASS] gated subset PnL > 0
+
+NOTE: §6.4 thresholds are SOFT acceptance per delta D9. Phase 4 still runs against a mock energy event regardless.
