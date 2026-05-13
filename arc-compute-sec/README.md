@@ -1,0 +1,37 @@
+# arc-compute-sec
+
+**Electricity-compute arb securitization rail on Circle's Arc Testnet.**
+
+This repo builds an autonomous agent that:
+
+1. **Identifies** dislocations in the electricity-compute spread
+   `S_t = compute_$/gpu_hr − k × electricity_$/MWh × kWh_per_gpu_hr`
+   from live EIA wholesale electricity + AWS EC2 GPU spot prices.
+2. **Routes** the signal to four surfaces where the arb expresses:
+   crypto, hyperscaler equities (IBKR demo paper), AI-company predictive markets,
+   direct energy events.
+3. **Executes** — paper-fills via IBKR demo + Coinbase ticker snapshots;
+   Polymarket is read-only with the existing scorer's premium gate as filter.
+4. **Wraps** each position as an **ERC-8183 job** on Arc Testnet, with the
+   judge layer as evaluator and ERC-8004 reputation accrual.
+
+Authoritative spec: `../.claude/TASK.md`. Plan file: `~/.claude/plans/run-all-in-line-tender-liskov.md`.
+
+## Status
+
+Block 1 (autonomous scaffolding + offline tests + classifier validation) is **complete**.
+
+Next: Gate A (operator credential setup) — see `GATE_A.md`.
+
+## Quick references
+
+| Command | What it does |
+|---|---|
+| `python -m pytest tests/` | Offline unit tests (61 pass) |
+| `python tests/backward_check_energy_templates.py` | Re-run energy classifier on 1,301-fill TSV |
+| `npm run smoke` | USDC round-trip on Arc Testnet (needs Circle + funded wallet) |
+| `npm run register-agent` | Phase 1 ERC-8004 identity |
+| `npm run open-position -- --surface S4 --market mock-001 --notional 1 --expires-hours 1` | Phase 2 createJob+setBudget+fund |
+| `npm run submit-outcome -- --job <id> --outcome-blob-path <file>` | Phase 2 submit |
+| `npm run settle-position -- --job <id> --verdict-blob-path <file> --action complete` | Phase 2 settle (loss uses `--action reject --reason-code <code>`) |
+| `python -m agent.runtime --scan --live --settle --max-actions 3` | Phase 4 live multi-surface |
