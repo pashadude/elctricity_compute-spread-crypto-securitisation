@@ -1,0 +1,21 @@
+{
+  "name": "Electricity-Compute Arb Securitization Desk v0",
+  "description": "Agentic desk that identifies dislocations in the electricity-compute spread (S_t = compute$/GPU-hr − k × electricity$/MWh × kWh/GPU-hr) and routes positions across four surfaces: crypto, hyperscaler equities (IBKR demo paper), predictive markets on AI/compute companies (Polymarket read + scorer gate), and direct energy events. Each position wraps as one ERC-8183 job on Arc Testnet with the judge layer as evaluator; ERC-8004 reputation accrues per resolved position.",
+  "image": "ipfs://bafkreibdi6623n3xpf7ymk62ckb4bo75o3qemwkpfvp5i25j66itxvsoei",
+  "agent_type": "trading",
+  "capabilities": [
+    "arb_identification_electricity_compute_spread",
+    "cross_surface_routing",
+    "premium_gate_screening",
+    "polymarket_event_classification_energy",
+    "ibkr_paper_equities_execution",
+    "ccxt_crypto_paper_fills",
+    "judge_layer_4way_classification",
+    "erc8183_job_wrap_and_settle",
+    "erc8004_reputation_accrual"
+  ],
+  "surfaces": ["polymarket", "ibkr", "crypto", "kalshi"],
+  "version": "0.1.0",
+  "homepage": "https://github.com/<your-handle>/arc-compute-sec",
+  "code_path": "agent/arb_identifier.py (S_t z-score), agent/surface_router.py (routing), agent/judge.py (4-way classifier), agent/scorer_bridge.py (upstream premium gate at api/polymarket/longtail/scorer.py:47)"
+}
