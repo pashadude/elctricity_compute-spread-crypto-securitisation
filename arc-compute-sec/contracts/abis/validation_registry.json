@@ -1,0 +1,41 @@
+[
+  {
+    "type": "function",
+    "name": "validationRequest",
+    "inputs": [
+      {"name": "validator", "type": "address"},
+      {"name": "agentId", "type": "uint256"},
+      {"name": "requestURI", "type": "string"},
+      {"name": "requestHash", "type": "bytes32"}
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "validationResponse",
+    "inputs": [
+      {"name": "requestHash", "type": "bytes32"},
+      {"name": "response", "type": "uint8"},
+      {"name": "responseURI", "type": "string"},
+      {"name": "responseHash", "type": "bytes32"},
+      {"name": "tag", "type": "string"}
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getValidationStatus",
+    "inputs": [{"name": "requestHash", "type": "bytes32"}],
+    "outputs": [
+      {"name": "validatorAddress", "type": "address"},
+      {"name": "agentId", "type": "uint256"},
+      {"name": "response", "type": "uint8"},
+      {"name": "responseHash", "type": "bytes32"},
+      {"name": "tag", "type": "string"},
+      {"name": "lastUpdate", "type": "uint256"}
+    ],
+    "stateMutability": "view"
+  }
+]
