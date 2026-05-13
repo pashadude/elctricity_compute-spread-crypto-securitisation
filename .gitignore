@@ -1,24 +1,83 @@
+# ============================================================
+# Dependency / build directories — never track
+# ============================================================
 node_modules/
 .venv/
 __pycache__/
 *.pyc
-.env
-.env.local
-arc-compute-sec/upstream/py-builder-relayer-client
-arc-compute-sec/data/master_fills_v4.tsv
-arc-compute-sec/logs/*.tsv
-arc-compute-sec/logs/*.sqlite
-arc-compute-sec/logs/*.sqlite-journal
-!arc-compute-sec/logs/.gitkeep
-arc-compute-sec/feeds/__pycache__/
-arc-compute-sec/agent/__pycache__/
-arc-compute-sec/adapters/__pycache__/
-arc-compute-sec/tests/__pycache__/
-arc-compute-sec/templates/energy/__pycache__/
-.DS_Store
-*.log
 .pytest_cache/
 dist/
 build/
 *.egg-info/
 .coverage
+.DS_Store
+*.log
+
+# ============================================================
+# Secrets — env files, anything named like a key or recovery
+# ============================================================
+# Match every .env variant (.env, .env.local, .env.production, .env.foo)
+.env
+.env.*
+# But keep the checked-in template
+!.env.template
+!arc-compute-sec/.env.template
+
+# Private keys, certs, recovery material
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.gpg
+*.asc
+
+# Common secret-file names anyone might drop into the tree
+*secret*
+*recovery*
+mnemonic*
+seed*.txt
+seed*.json
+*private_key*
+*entity-secret*
+*entity_secret*
+circle-recovery*
+circle_recovery*
+
+# IBKR Gateway / TWS configs (contain account ids, login state)
+jts.ini
+tws.ini
+ibg.ini
+IBController.ini
+
+# Cloud SDK credential dumps
+gcp-key*.json
+aws-credentials
+**/.aws/
+**/.gcp/
+**/.azure/
+
+# ============================================================
+# Runtime artifacts (regenerated per session — never useful to commit)
+# ============================================================
+# Upstream is a per-machine symlink to ~/VSProjects/py-builder-relayer-client.
+# Ignore everything under upstream/ EXCEPT the pinned-SHA marker, which is
+# meant to be committed for reproducibility.
+arc-compute-sec/upstream/*
+!arc-compute-sec/upstream/PINNED_SHA.txt
+
+# Symlinked TSV under data/ — same idea
+arc-compute-sec/data/master_fills_v4.tsv
+
+# Everything in logs/ is per-run state; keep only the .gitkeep
+arc-compute-sec/logs/*
+!arc-compute-sec/logs/.gitkeep
+
+# Per-package pycache (catch-all in case the catch-all above misses)
+arc-compute-sec/feeds/__pycache__/
+arc-compute-sec/agent/__pycache__/
+arc-compute-sec/adapters/__pycache__/
+arc-compute-sec/tests/__pycache__/
+arc-compute-sec/templates/energy/__pycache__/
+arc-compute-sec/contracts/__pycache__/
