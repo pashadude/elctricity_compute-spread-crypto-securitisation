@@ -1,0 +1,11 @@
+circle-developer-controlled-wallets>=4.0.0
+web3>=6.20.0
+python-dotenv>=1.0.0
+pandas>=2.2.0
+numpy>=1.26.0
+pyyaml>=6.0.0
+requests>=2.32.0
+pytest>=8.0.0
+responses>=0.25.0
+ccxt>=4.4.0
+ib_insync>=0.9.86
