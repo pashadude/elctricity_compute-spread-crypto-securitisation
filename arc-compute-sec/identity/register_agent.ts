@@ -156,10 +156,47 @@ async function main() {
   const { desk, judge } = await createTwoSca(setId);
   console.log(`Created wallets:\n  desk_owner      = ${desk.address}\n  judge_validator = ${judge.address}`);
 
-  console.log(`\nFund desk_owner with ≥3 USDC at https://faucet.circle.com (no need to fund judge — we'll transfer 0.5 from desk).`);
-  console.log(`Then check: https://testnet.arcscan.app/address/${desk.address}`);
-  console.log(`\nWaiting for operator… press Enter when funded.`);
-  await new Promise<void>((res) => process.stdin.once("data", () => res()));
+  // Auto-fund desk_owner from the smoke wallet set if one exists. This
+  // avoids a second faucet call: the smoke wallet already has USDC from
+  // Gate B, and Circle's internal transfer is free + instant. If no
+  // smoke wallet (or insufficient balance) is found, we fall back to
+  // asking the operator to faucet-fund desk_owner directly.
+  const SMOKE_SET_NAME = "arc-compute-sec-smoke";
+  const DESK_SEED_USDC = "3";
+  const sets = await circle.listWalletSets({});
+  const smokeSet = (sets.data?.walletSets || []).find((w: any) => w.name === SMOKE_SET_NAME);
+  let funded = false;
+  if (smokeSet) {
+    const smokeWallets = await circle.listWallets({ walletSetId: smokeSet.id });
+    for (const w of smokeWallets.data?.wallets || []) {
+      const bal = await circle.getWalletTokenBalance({ id: w.id! });
+      const usdc = (bal.data?.tokenBalances || []).find(
+        (t: any) => (t.token?.symbol || "").toUpperCase() === "USDC"
+      );
+      const amount = parseFloat(usdc?.amount || "0");
+      if (usdc?.token?.id && amount >= parseFloat(DESK_SEED_USDC) + 0.1) {
+        console.log(`Auto-funding desk_owner with ${DESK_SEED_USDC} USDC from smoke wallet ${w.address}`);
+        const tr = await circle.createTransaction({
+          walletId: w.id!,
+          tokenId: usdc.token.id,
+          destinationAddress: desk.address,
+          amounts: [DESK_SEED_USDC],
+          fee: { type: "level", config: { feeLevel: "MEDIUM" } } as any,
+        });
+        const fundTx = await pollTx((tr.data as any)?.id);
+        console.log(`  smoke → desk tx: https://testnet.arcscan.app/tx/${fundTx.txHash}`);
+        funded = true;
+        break;
+      }
+    }
+  }
+  if (!funded) {
+    console.log(`\nNo funded smoke wallet found in set '${SMOKE_SET_NAME}'.`);
+    console.log(`Fund desk_owner with ≥3 USDC at https://faucet.circle.com manually.`);
+    console.log(`Then check: https://testnet.arcscan.app/address/${desk.address}`);
+    console.log(`Waiting for operator… press Enter when funded.`);
+    await new Promise<void>((res) => process.stdin.once("data", () => res()));
+  }
 
   // Internal transfer 0.5 USDC desk -> judge so judge can pay gas later.
   const bal = await circle.getWalletTokenBalance({ id: desk.id });

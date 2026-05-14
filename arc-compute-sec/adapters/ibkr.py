@@ -44,6 +44,12 @@ def _connect():
         from ib_insync import IB
         ib = IB()
         ib.connect(_DEFAULT_HOST, _DEFAULT_PORT, clientId=_DEFAULT_CLIENT_ID, timeout=8)
+        # IBKR paper accounts don't have a real-time market-data
+        # subscription; reqTickers() returns NaN otherwise. Type 3 =
+        # DELAYED_FROZEN — free, returns the last delayed quote. Switching
+        # to real-time is a per-account decision the operator makes inside
+        # Gateway settings; the adapter doesn't override it.
+        ib.reqMarketDataType(3)
         _ib_singleton = ib
         return ib
     except Exception as exc:
@@ -114,7 +120,14 @@ def place_paper_order(symbol: str, direction: str, qty: int = 1,
 
 
 def fetch_last_price(symbol: str) -> float | None:
-    """Used by the Phase 0.6 smoke test."""
+    """Used by the Phase 0.6 smoke test.
+
+    Falls through several ticker fields in preference order because paper
+    accounts on delayed data populate different fields than real-time
+    accounts: marketPrice (NaN on delayed), last/close/midpoint, then
+    explicit delayed fields, finally bid/ask midpoint.
+    """
+    import math
     try:
         ib = _connect()
     except RuntimeError as exc:
@@ -124,4 +137,18 @@ def fetch_last_price(symbol: str) -> float | None:
     contract = Stock(symbol, "SMART", "USD")
     ib.qualifyContracts(contract)
     [tk] = ib.reqTickers(contract)
-    return float(tk.marketPrice() or tk.last or 0.0) or None
+    for cand in (tk.marketPrice(), tk.last, tk.close, tk.midpoint(),
+                 getattr(tk, "delayedLast", None), getattr(tk, "delayedClose", None)):
+        try:
+            v = float(cand)
+            if math.isfinite(v) and v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    # Final fallback: bid/ask midpoint if both available
+    try:
+        if tk.bid > 0 and tk.ask > 0:
+            return (tk.bid + tk.ask) / 2.0
+    except Exception:
+        pass
+    return None
