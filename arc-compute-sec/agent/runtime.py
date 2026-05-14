@@ -313,7 +313,8 @@ def run_once(args: argparse.Namespace) -> int:
             yp = (cand.metadata or {}).get("yes_prices") or []
             if yp:
                 gate = score_polym(price=yp[0], event_avg_yes_price=sum(yp[1:])/max(1, len(yp)-1))
-                scorer_result = gate.__dict__
+                # GateResult is a slotted dataclass; __dict__ doesn't exist. asdict() works.
+                scorer_result = asdict(gate)
         verdict = judge.classify(cand_dict, state, scorer_result)
         judge.log(verdict, cand_dict, scorer_result)
         print(f"  [{cand.surface}/{cand.instrument}] {verdict.label}: {verdict.reason_code}")
