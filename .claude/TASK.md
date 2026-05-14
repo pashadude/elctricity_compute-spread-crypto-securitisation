@@ -152,6 +152,8 @@ Project scaffolding, identifier+adapter+feed modules written, unit tests green. 
 
 **Block 1 commit:** all the above.
 
+### Session boundary — start a fresh Claude Code session before Gate A. Block 1 skills (routing, calibration) stay loaded; Block 2+ loads arc-canteen and chain skills fresh. Each phase commit is also a good session boundary. Rationale: five skills total ~30k tokens of body; fresh sessions prevent context rot across unrelated phases.
+
 ### GATE A — operator credentials
 
 Operator pastes Circle creds + EIA key into `.env`, starts IB Gateway (paper-trading mode) on port 4002, types "ready" to resume.
@@ -178,12 +180,19 @@ One mock arb signal → one Polymarket-surface candidate → wrap as ERC-8183 jo
 
 ### Phase 4 — Agent runtime, live multi-surface (Block 5)
 
-`runtime.py --scan` orchestrates: arb_identifier → surface_router → adapters (Polymarket live, IBKR paper, crypto paper) → judge → on_chain wrap → settle.
+`runtime.py --live` orchestrates a single pass with live feeds (v0): arb_identifier → surface_router → adapters (Polymarket live, IBKR paper, crypto paper) → judge → on_chain wrap → settle. The `--scan` loop (polling interval, idle policy, error recovery for 429/503/RPC-timeout) is deferred to v2.
 
 Three demo cases:
 - **Case A** — live signal (or `--force-signal` mock at z=2.0) → ≥1 EXECUTE, ≥1 REJECT, wrapped + settled across surfaces
 - **Case B** — forced REJECT via premium-gate fail
 - **Case C** — classifier drop (event outside energy scope)
+
+### Phase 4 acceptance — three regression tests
+
+These must pass before the Phase 4 commit:
+1. Gate-fail → REJECT (already in `tests/test_judge.py::test_reject_premium_gate`)
+2. Plausible candidate → EXECUTE (already in `tests/test_judge.py::test_execute_default`)
+3. Off-template event filtered before judging (already in `tests/test_energy_classifier.py`)
 
 ### Phase 5 — Reconciliation
 
@@ -200,6 +209,7 @@ For each settled position, fetch current price, compute realized PnL, append to 
 - **Not deploying to Arc Mainnet.** Mainnet doesn't exist yet.
 - **Not using anyone else's wallets, API keys, or entity secret.** Fresh creds per build.
 - **Not running Kalshi in v0.** Stub only; v1 wires it.
+- **Not including the premium-gate kwarg (`require_non_negative_premium`) in any evolutionary, GA, or automated parameter search.** The gate is the desk's only cross-validated edge. Hard-coded exclusion, enforced by `tests/test_judge.py::test_gate_kwarg_exclusion`.
 
 ---
 
@@ -262,3 +272,13 @@ Anything beyond this is v1+.
 | Δ8 | `submit()` / `complete()` may need to wait for `expiredAt` | NOT gated on `expiredAt`; gated on state (Funded → Submitted → Completed); `expiredAt` only governs the Expired(5) failure path | Verified ERC-8183 tutorial |
 | Δ9 | 4 hard prerequisites | 8 (add IBKR Gateway + EIA API key + read-only upstream rule) | Multi-surface requires new accounts |
 | Δ10 | No paper-PnL probe | New `agent/pnl_probe.py` attaches `est_pnl_per_dollar` to every judgement row + outcome blob; v0-visible without expanding scope past §6 anti-goals | Per user request to make arb numerically legible |
+
+---
+
+## 10. Deferred to v2
+
+- LLM judge (Phase 4.5) — compaction strategy + harness shape to be specified when judge volume justifies stochastic classification
+- Scan-loop mode (`--scan` with polling, idle policy, 429/503/RPC-timeout recovery)
+- Weekly auto-recap (`reports/weekly/<YYYY-WW>.md` following S2 deck structure)
+- GA / Shinka on judge thresholds (after ≥30 days of v0 trace; gate kwarg excluded per §6)
+- `skill-reviewer` slash command (when skill count exceeds ~8)

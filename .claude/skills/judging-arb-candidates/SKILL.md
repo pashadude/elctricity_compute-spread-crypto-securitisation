@@ -50,6 +50,7 @@ CHALLENGE rows in `logs/judgements.tsv` are the highest-priority input to the ne
 
 - **Don't encode reporter-authored content as judge rules.** If the operator complains about one specific position, that's a calibration point — not a new rule. A skill edit should describe how to think about the *class* of position, not how to handle the one that just lost.
 - **Don't weaken the premium-gate REJECT.** It's the only filter with cross-validated alpha. Every other gate is heuristic; this one is empirical.
+- **Don't retry a candidate with `require_non_negative_premium=False`.** The gate is irrevocable at the codepath level, not just at the policy level.
 - **Don't add rules without retiring an equivalent rule.** The judge's job is to be small enough that the operator can hold it in their head. If a new principle subsumes an old one, retire the old one.
 - **Don't make CHALLENGE a hard gate in v0.** Until the debate loop is built, CHALLENGE that doesn't route to DEFER will silently halt positions that should have run.
 
@@ -60,3 +61,4 @@ After every Phase 5 reconciliation:
 - For each REJECT and DEFER, check whether the *would-be* position would have made or lost money. (This is hindsight, not a target — use it sparingly.)
 - For each EXECUTE that lost more than `est_pnl_per_dollar` predicted, check which gate *should* have caught it.
 - Propose at most ONE principle edit per cycle. Many small edits over many cycles beat one big edit per quarter.
+- If the REJECT counter has been zero for 48+ hours during active scanning, investigate. The gate should be catching something; silence means the classifier or router may have drifted.

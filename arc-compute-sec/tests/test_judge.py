@@ -65,3 +65,38 @@ def test_log_writes_row(tmp_path, monkeypatch):
     body = p.read_text()
     assert "EXECUTE" in body
     assert "GOOGL" in body
+
+
+def test_gate_kwarg_exclusion():
+    """Regression: the premium gate kwarg must never be set to False in
+    executable code. The premium gate is the desk's only cross-validated
+    edge (§6 anti-goal)."""
+    import pathlib, re
+    root = pathlib.Path(__file__).resolve().parent.parent
+    # Match actual Python assignment/call usage, not prose mentions
+    pattern = re.compile(r"require_non_negative_premium\s*=\s*False")
+    violations = []
+    for py in root.rglob("*.py"):
+        parts = py.parts
+        if any(skip in parts for skip in (".venv", "node_modules", "__pycache__", "upstream")):
+            continue
+        if py.resolve() == pathlib.Path(__file__).resolve():
+            continue
+        text = py.read_text(errors="replace")
+        in_docstring = False
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            # Track triple-quote docstrings
+            tq_count = stripped.count('"""') + stripped.count("'''")
+            if tq_count == 1:
+                in_docstring = not in_docstring
+                continue
+            if in_docstring:
+                continue
+            if stripped.startswith("#"):
+                continue
+            if pattern.search(line):
+                violations.append(f"{py.relative_to(root)}:{i}: {stripped}")
+    assert not violations, (
+        "Gate kwarg bypass found — this violates §6 anti-goal.\n" + "\n".join(violations)
+    )
