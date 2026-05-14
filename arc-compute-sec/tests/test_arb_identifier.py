@@ -14,16 +14,24 @@ def test_compute_spread_basic():
         electricity_per_mwh=80.0, compute_per_gpu_hr=1.50, region="MOCK",
         k=0.5, kwh_per_gpu_hr=0.7,
     )
-    # 1.50 - 0.5 * 80 * 0.7 = 1.50 - 28 = -26.5
-    assert math.isclose(pt.S_t, -26.5, abs_tol=1e-9)
+    # $/GPU-hr units: 1.50 - 0.5 * (80/1000) * 0.7 = 1.50 - 0.028 = 1.472
+    assert math.isclose(pt.S_t, 1.472, abs_tol=1e-9)
     assert pt.region == "MOCK"
 
 
 def test_compute_spread_with_low_electricity():
     pt = ai.compute_spread(electricity_per_mwh=20.0, compute_per_gpu_hr=2.00,
                             region="X", k=0.5, kwh_per_gpu_hr=0.5)
-    # 2 - 0.5 * 20 * 0.5 = 2 - 5 = -3
-    assert math.isclose(pt.S_t, -3.0, abs_tol=1e-9)
+    # 2 - 0.5 * (20/1000) * 0.5 = 2 - 0.005 = 1.995
+    assert math.isclose(pt.S_t, 1.995, abs_tol=1e-9)
+
+
+def test_compute_spread_ercot_realworld():
+    # Sanity: ERCOT industrial ~$72/MWh, AWS p4d spot ~$1.54/GPU-hr.
+    # 1.54 - 0.5 * (72/1000) * 0.7 = 1.54 - 0.0252 = 1.5148
+    pt = ai.compute_spread(electricity_per_mwh=72.0, compute_per_gpu_hr=1.54,
+                            region="ERCO", k=0.5, kwh_per_gpu_hr=0.7)
+    assert math.isclose(pt.S_t, 1.5148, abs_tol=1e-4)
 
 
 def test_zscore_with_constant_history():

@@ -74,8 +74,22 @@ def compute_spread(
     k: float = DEFAULT_K,
     kwh_per_gpu_hr: float = DEFAULT_KWH_PER_GPU_HR,
 ) -> SpreadPoint:
-    """Compute one S_t observation."""
-    s_t = float(compute_per_gpu_hr) - float(k) * float(electricity_per_mwh) * float(kwh_per_gpu_hr)
+    """Compute one S_t observation.
+
+    Units (this matters — earlier versions had a 1000× bug):
+      electricity_per_mwh  : $/MWh           (industry standard for wholesale)
+      compute_per_gpu_hr   : $/GPU-hr        (AWS spot p4d/p5 quote shape)
+      kwh_per_gpu_hr       : kWh per GPU-hr  (e.g. 0.7 for an H100-class instance)
+      k                    : dimensionless   (PUE × utilisation factor, ≈ 0.4–0.7)
+
+    S_t units must be $/GPU-hr. The electricity term is $/MWh × kWh/GPU-hr,
+    which is $/GPU-hr × (kWh/MWh) = $/GPU-hr ÷ 1000. We divide by 1000
+    inline so callers can keep passing industry-standard $/MWh.
+
+    Sanity check: ERCOT ind ~$72/MWh, p4d ~$1.54/GPU-hr, k=0.5, kWh=0.7
+      S_t = 1.54 − 0.5 × (72 / 1000) × 0.7 = 1.54 − 0.0252 = $1.5148/GPU-hr
+    """
+    s_t = float(compute_per_gpu_hr) - float(k) * (float(electricity_per_mwh) / 1000.0) * float(kwh_per_gpu_hr)
     return SpreadPoint(
         ts=time.time(),
         region=region,

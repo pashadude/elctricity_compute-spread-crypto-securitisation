@@ -1,17 +1,23 @@
-"""Agent runtime — orchestrates one --scan or --once cycle.
+"""Agent runtime — orchestrates ONE pass through the rail. Not a loop.
 
   arb_identifier  →  surface_router  →  adapters  →  judge  →  on_chain
                                                               wrap + settle
 
-Modes:
-    --scan          live: fetch EIA + AWS, compute signal, route, execute
-    --once          single mock signal (operator-provided params)
-    --force-signal  override z-score (still uses live feeds; useful when
-                    market is calm and we need the demo to fire)
+Modes (signal source, mutually exclusive):
+    --scan          one live pass: fetch EIA + AWS, compute spread, score
+    --once          one mock pass: synthesize signal from --mock-elec /
+                    --mock-compute / --force-signal flags
 
-This module DOES write to chain when run with the chain flags below. By
-default `--dry-run` is on, so a session that's still in pre-Gate-A doesn't
-accidentally try to call Circle without credentials.
+Chain submission (independent flags):
+    --live          disable dry-run; actually submit txs via Circle SDK
+                    (default: dry-run ON — safe to use without creds)
+    --settle        after wrap, run the reconciliation pass too
+
+Gap 7 from review_session_deliverables.md (v0): continuous polling is
+DEFERRED to v2. v0 is `cron --scan --live --settle` if you want a loop.
+The runtime does ONE pass, writes its logs, exits with a status code.
+Anything observability-shaped (notifications, retries on RPC 429, idle
+back-off) belongs in the cron wrapper or in a v2 daemon, not here.
 """
 from __future__ import annotations
 
@@ -375,8 +381,10 @@ def run_once(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Arb securitization agent runtime")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--scan", action="store_true", help="Live scan via EIA + AWS feeds")
-    mode.add_argument("--once", action="store_true", help="Single mock cycle")
+    mode.add_argument("--scan", action="store_true",
+                      help="One live pass via EIA + AWS feeds (not a continuous loop — see module docstring)")
+    mode.add_argument("--once", action="store_true",
+                      help="One mock pass with synthetic signal params")
     parser.add_argument("--force-signal", type=float, default=None,
                         help="Force a z-score (bypasses threshold check)")
     parser.add_argument("--mock-elec", type=float, default=None,
