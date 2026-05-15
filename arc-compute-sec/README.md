@@ -20,27 +20,35 @@ Authoritative spec: `../docs/agent-context/TASK.md`. Codex implementation plan:
 
 ## Status
 
-Block 1 (autonomous scaffolding + offline tests + classifier validation) is **complete**.
-The v0 runtime target is deliberately narrow: a stateless S-4 energy
-Polymarket scan that wraps at most one judge-approved position, then exits.
-No daemon loop, no real Polymarket order placement, and no non-Polymarket
-surface execution are part of v0.
+Gate A is complete in the operator-local environment: Circle testnet
+credentials, Arc Testnet RPC, smoke wallet funding, and ERC-8004 agent
+registration have been exercised without committing local secrets or runtime
+state. `GATE_A.md` remains the bootstrap checklist for a fresh machine.
 
-Next: Gate A (operator credential setup) — see `GATE_A.md`.
+The v0 runtime target is deliberately narrow: a stateless S-4 energy
+Polymarket scan that wraps at most one judge-approved position, optionally
+settles it, then exits. No daemon loop, no real Polymarket order placement,
+and no non-Polymarket surface execution are part of v0.
+
+Latest public testnet proof from the operator-local run: ERC-8183 job `16129`
+created, funded, submitted, completed, and given ERC-8004 feedback on Arc
+Testnet. Runtime logs remain ignored under `logs/`.
 
 ## Quick references
 
 | Command | What it does |
 |---|---|
-| `.venv/bin/python -m pytest tests/` | Offline unit tests |
+| `npm test` | Offline Python unit tests |
+| `npm run typecheck` | Type-check TypeScript scripts |
 | `python tests/backward_check_energy_templates.py` | Re-run energy classifier on 1,301-fill TSV |
 | `npm run smoke` | USDC round-trip on Arc Testnet (needs Circle + funded wallet) |
 | `npm run register-agent` | Phase 1 ERC-8004 identity |
 | `npm run open-position -- --surface S4 --market mock-001 --notional 1 --expires-hours 1` | Phase 2 createJob+setBudget+fund |
 | `npm run submit-outcome -- --job <id> --outcome-blob-path <file>` | Phase 2 submit |
 | `npm run settle-position -- --job <id> --verdict-blob-path <file> --action complete` | Phase 2 settle (loss uses `--action reject --reason-code <code>`) |
-| `.venv/bin/python -m agent.runtime --scan --live --max-positions 1` | v0 one-shot S-4 Polymarket scan + Arc wrap after `EXECUTE` |
-| `.venv/bin/python -m agent.runtime --once --dry-run --no-persist` | Offline mock S-4 dry run |
+| `npm run s4:mock` | Offline mock S-4 dry run |
+| `npm run s4:scan` | One read-only live-feed S-4 scan, dry-run only |
+| `npm run s4:testnet:mock` | One mock S-4 Arc Testnet wrap + settle after `EXECUTE` |
 
 ## Runtime invariant
 
@@ -52,3 +60,8 @@ Premium-gate failures are auditable `REJECT` rows. Off-template Polymarket
 events are dropped before scorer/judge. The broader IBKR, crypto, and Kalshi
 modules remain in the repo for later phases, but v0 runtime filters to the
 Polymarket S-4 surface.
+
+The live Arc wrapper also enforces the same boundary internally: a direct
+`wrap_position(..., dry_run=False)` call must carry the `EXECUTE` verdict
+returned by `judge.classify()` or it fails before importing the on-chain
+adapter.

@@ -1,8 +1,12 @@
 # Gate A — operator credential setup
 
 Block 1 (autonomous scaffolding + offline tests + classifier validation) is complete.
-The next blocks (chain operations, live feeds, IBKR paper trades) need credentials
-and a running IB Gateway. Walk through these in order; resume Block 2 after.
+Gate A has been completed in the current operator-local environment. This file
+is now a bootstrap checklist for a fresh machine or rotated credentials.
+
+For v0 S-4, IBKR is not required. The live S-4 path needs Circle testnet
+credentials, Arc Testnet RPC, EIA API access for `--scan`, and the already
+registered ERC-8004 identity. IBKR remains a later-surface dependency.
 
 ## 1. Circle (testnet)
 
@@ -38,7 +42,7 @@ via internal transfer from this first funded wallet.
    EIA_API_KEY=<your key>
    ```
 
-## 4. IBKR Paper Trading Gateway
+## 4. IBKR Paper Trading Gateway (deferred for v0 S-4)
 
 1. You need an Interactive Brokers **Paper Trading** account. If you only
    have a live account, log in to Account Management → User Management →
@@ -52,17 +56,20 @@ via internal transfer from this first funded wallet.
    - "Trusted IP Addresses": add `127.0.0.1`
 4. Verify: `nc -z localhost 4002` returns 0. Then `python -c "from adapters.ibkr import fetch_last_price; print(fetch_last_price('GOOGL'))"` should print a number.
 
-## 5. Resume Block 2
+## 5. Resume S-4
 
-Once all four prerequisites are in place, the operator says "ready" and the
-next session continues with:
+Once prerequisites are in place, the operator says "ready" and the next session
+continues with:
 
+- `npm test` — offline regression suite
+- `npm run typecheck` — TypeScript script typecheck
 - `npm run smoke` — USDC round-trip
-- `python -m feeds.eia` + `python -m feeds.aws_spot` — live data smoke
-- `python -c "from adapters.ibkr import fetch_last_price; print(fetch_last_price('GOOGL'))"` — IBKR smoke
+- `python -m feeds.eia` + `python -m feeds.aws_spot` — live data smoke for `--scan`
 - `npm run register-agent` — Phase 1 ERC-8004 identity
 - `npm run open-position` / `submit-outcome` / `settle-position` — Phase 2 lifecycle
-- `.venv/bin/python -m agent.runtime --scan --live --max-positions 1` — v0 one-shot S-4 energy Polymarket scan; Arc wrap happens only after `judge.classify()` returns `EXECUTE`
+- `npm run s4:mock` — offline mock S-4 dry run
+- `npm run s4:scan` — one read-only live-feed S-4 scan, dry-run only
+- `npm run s4:testnet:mock` — one mock S-4 Arc Testnet wrap + settle; Arc wrap happens only after `judge.classify()` returns `EXECUTE`
 
 The v0 runtime is not a daemon. `--scan` means one stateless scan, at most one
 wrapped position, then exit. Do not use this repo to place real Polymarket

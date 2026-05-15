@@ -297,9 +297,19 @@ def _scorer_result_for_candidate(candidate: surface_router.Candidate) -> dict[st
     return asdict(gate)
 
 
+def _require_execute_verdict_for_chain(verdict: judge.Verdict | None) -> None:
+    if verdict is None:
+        raise RuntimeError("live Arc wrap requires judge.classify() verdict")
+    if verdict.label != judge.LABEL_EXECUTE:
+        raise RuntimeError(
+            f"live Arc wrap requires EXECUTE verdict, got {verdict.label}:{verdict.reason_code}"
+        )
+
+
 def wrap_position(candidate: surface_router.Candidate, fill_report: dict[str, Any],
                   signal: arb_identifier.ArbSignal | None, identity: dict[str, str],
-                  expires_seconds: int = 600, dry_run: bool = True) -> dict[str, Any]:
+                  expires_seconds: int = 600, dry_run: bool = True,
+                  verdict: judge.Verdict | None = None) -> dict[str, Any]:
     """Wrap one filled candidate as an ERC-8183 job on Arc. Returns a dict with
     job_id and all tx hashes from the lifecycle. If `dry_run`, skips chain
     and returns a stub.
@@ -312,6 +322,7 @@ def wrap_position(candidate: surface_router.Candidate, fill_report: dict[str, An
             "deliverable_hash": deliverable_hash,
             "candidate_id": candidate.candidate_id,
         }
+    _require_execute_verdict_for_chain(verdict)
     from agent import on_chain
     description = (
         f"surface={candidate.surface}|instrument={candidate.instrument}"
@@ -443,6 +454,7 @@ def process_candidates(
             identity or {},
             expires_seconds=expires_seconds,
             dry_run=dry_run,
+            verdict=verdict,
         )
         results.append({
             "verdict": asdict(verdict),

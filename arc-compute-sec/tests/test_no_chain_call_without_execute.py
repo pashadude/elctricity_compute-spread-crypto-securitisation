@@ -103,8 +103,10 @@ def test_execute_verdict_is_required_before_wrap(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_POSITIONS_PATH", tmp_path / "positions.tsv")
     calls = {"wrap": 0}
 
-    def fake_wrap(candidate, fill_report, signal, identity, expires_seconds=600, dry_run=True):
+    def fake_wrap(candidate, fill_report, signal, identity, expires_seconds=600, dry_run=True, verdict=None):
         calls["wrap"] += 1
+        assert verdict is not None
+        assert verdict.label == judge.LABEL_EXECUTE
         return {"dry_run": True, "deliverable_hash": "0xabc", "candidate_id": candidate.candidate_id}
 
     monkeypatch.setattr(runtime, "wrap_position", fake_wrap)
@@ -119,3 +121,52 @@ def test_execute_verdict_is_required_before_wrap(tmp_path, monkeypatch):
 
     assert results[0]["verdict"]["label"] == judge.LABEL_EXECUTE
     assert calls["wrap"] == 1
+
+
+def test_live_wrap_requires_execute_verdict_before_importing_on_chain(monkeypatch):
+    def fail_import(name, *args, **kwargs):
+        if name == "agent.on_chain":
+            raise AssertionError("on_chain must not be imported without an EXECUTE verdict")
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fail_import)
+
+    try:
+        runtime.wrap_position(
+            _candidate(),
+            fill_report={"fill_id": "dry"},
+            signal=_signal(),
+            identity={},
+            dry_run=False,
+            verdict=None,
+        )
+    except RuntimeError as exc:
+        assert "requires judge.classify() verdict" in str(exc)
+    else:
+        raise AssertionError("live wrap must reject missing verdict")
+
+
+def test_live_wrap_rejects_non_execute_verdict_before_importing_on_chain(monkeypatch):
+    def fail_import(name, *args, **kwargs):
+        if name == "agent.on_chain":
+            raise AssertionError("on_chain must not be imported for REJECT verdict")
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fail_import)
+
+    verdict = judge.Verdict(judge.LABEL_REJECT, "premium_gate_fail", 1.0)
+    try:
+        runtime.wrap_position(
+            _candidate(),
+            fill_report={"fill_id": "dry"},
+            signal=_signal(),
+            identity={},
+            dry_run=False,
+            verdict=verdict,
+        )
+    except RuntimeError as exc:
+        assert "requires EXECUTE verdict" in str(exc)
+    else:
+        raise AssertionError("live wrap must reject non-EXECUTE verdict")

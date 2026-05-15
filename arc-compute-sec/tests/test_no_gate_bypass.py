@@ -48,7 +48,9 @@ def test_positive_fresh_energy_candidate_executes_without_gate_bypass(tmp_path, 
 
     wrapped = []
 
-    def fake_wrap(candidate, fill_report, signal, identity, expires_seconds=600, dry_run=True):
+    def fake_wrap(candidate, fill_report, signal, identity, expires_seconds=600, dry_run=True, verdict=None):
+        assert verdict is not None
+        assert verdict.label == judge.LABEL_EXECUTE
         wrapped.append(candidate.candidate_id)
         return {"dry_run": True, "deliverable_hash": "0xabc", "candidate_id": candidate.candidate_id}
 

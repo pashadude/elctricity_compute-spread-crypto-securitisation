@@ -7,7 +7,12 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": ".venv/bin/python -m pytest tests/",
+    "test:py": ".venv/bin/python -m pytest tests/",
+    "typecheck": "tsc --noEmit",
+    "s4:mock": ".venv/bin/python -m agent.runtime --once --dry-run --no-persist",
+    "s4:scan": ".venv/bin/python -m agent.runtime --scan --dry-run --max-positions 1 --no-persist",
+    "s4:testnet:mock": ".venv/bin/dotenv -f .env run -- .venv/bin/python -m agent.runtime --once --live --settle --max-positions 1 --expires 3600 --no-persist",
     "register-agent": "tsx --env-file=.env identity/register_agent.ts",
     "open-position": "tsx --env-file=.env jobs/open_position.ts",
     "submit-outcome": "tsx --env-file=.env jobs/submit_outcome.ts",
