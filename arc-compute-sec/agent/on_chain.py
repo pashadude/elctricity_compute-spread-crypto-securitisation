@@ -79,15 +79,29 @@ def _w3():
 
 
 def _poll_tx(tx_api, circle_tx_id: str, timeout_s: float = POLL_TIMEOUT_S) -> dict:
+    def _as_dict(obj: Any) -> dict:
+        if hasattr(obj, "to_dict"):
+            return obj.to_dict()
+        if isinstance(obj, dict):
+            return obj
+        return dict(getattr(obj, "__dict__", {}) or {})
+
+    def _tx_payload(resp_data: Any) -> dict:
+        data = _as_dict(resp_data)
+        tx = data.get("transaction")
+        if tx is not None:
+            return _as_dict(tx)
+        return data
+
     deadline = time.time() + timeout_s
     last_state = None
     while time.time() < deadline:
         resp = tx_api.get_transaction(id=circle_tx_id)
-        data = resp.data
-        state = getattr(data, "state", None) or getattr(data, "status", None)
+        data = _tx_payload(resp.data)
+        state = data.get("state") or data.get("status")
         last_state = state
         if state == "COMPLETE":
-            return data.to_dict() if hasattr(data, "to_dict") else dict(data.__dict__)
+            return data
         if state in {"FAILED", "DENIED", "CANCELLED"}:
             raise RuntimeError(f"Circle tx {circle_tx_id} ended in {state}: {data}")
         time.sleep(POLL_INTERVAL_S)
@@ -144,7 +158,7 @@ def exec_contract(
         "contractAddress": contract_addr,
         "abiFunctionSignature": abi_function_signature,
         "abiParameters": abi_parameters,
-        "fee": {"type": "level", "config": {"feeLevel": fee_level}},
+        "feeLevel": fee_level,
     })
     resp = tx_api.create_developer_transaction_contract_execution(req)
     return resp.data.id

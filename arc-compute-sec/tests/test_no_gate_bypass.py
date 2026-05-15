@@ -1,5 +1,6 @@
 import pathlib
 import re
+from dataclasses import asdict
 from types import SimpleNamespace
 
 from adapters import polymarket
@@ -65,6 +66,16 @@ def test_positive_fresh_energy_candidate_executes_without_gate_bypass(tmp_path, 
     assert len(candidates) == 1
     assert results[0]["verdict"]["label"] == judge.LABEL_EXECUTE
     assert wrapped == [candidates[0].candidate_id]
+
+
+def test_mock_s4_case_a_is_premium_gate_positive():
+    candidates = runtime._polymarket_candidates(_signal(), live_scan=False, sizing_usdc=1.0)
+    assert len(candidates) == 1
+    scorer_result = runtime._scorer_result_for_candidate(candidates[0])
+    verdict = judge.classify(asdict(candidates[0]), judge.default_state(), scorer_result)
+    assert scorer_result["passes_gate"] is True
+    assert scorer_result["premium"] > 0
+    assert verdict.label == judge.LABEL_EXECUTE
 
 
 def test_negative_premium_rejects_and_does_not_wrap(tmp_path, monkeypatch):

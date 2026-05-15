@@ -35,6 +35,11 @@ from agent import arb_identifier, judge, surface_router
 
 _POSITIONS_PATH = Path(__file__).resolve().parent.parent / "logs" / "positions.tsv"
 _ARC_TXS_PATH = Path(__file__).resolve().parent.parent / "logs" / "arc_txs.tsv"
+_POSITIONS_HEADERS = [
+    "ts", "stage", "job_id", "arb_signal_id", "surface", "instrument",
+    "direction", "notional_usdc", "deliverable_hash", "reason_hash",
+    "tx_hash", "fill_report_path", "action_key",
+]
 
 
 def _identity_row() -> dict[str, str]:
@@ -83,17 +88,62 @@ def _position_already_recorded(action_key: str) -> bool:
 
 def _append_position_row(row: dict[str, Any]) -> None:
     _POSITIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_position_schema()
     new = not _POSITIONS_PATH.exists()
-    headers = [
-        "ts", "stage", "job_id", "arb_signal_id", "surface", "instrument",
-        "direction", "notional_usdc", "deliverable_hash", "reason_hash",
-        "tx_hash", "fill_report_path", "action_key",
-    ]
     with _POSITIONS_PATH.open("a", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
         if new:
-            writer.writerow(headers)
-        writer.writerow([str(row.get(h, "")) for h in headers])
+            writer.writerow(_POSITIONS_HEADERS)
+        writer.writerow([str(row.get(h, "")) for h in _POSITIONS_HEADERS])
+
+
+def _ensure_position_schema() -> None:
+    if not _POSITIONS_PATH.exists():
+        return
+    with _POSITIONS_PATH.open("r", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        old_headers = reader.fieldnames or []
+        if old_headers == _POSITIONS_HEADERS:
+            return
+        rows = list(reader)
+    backup = _POSITIONS_PATH.with_suffix(".legacy.tsv")
+    if not backup.exists():
+        backup.write_text(_POSITIONS_PATH.read_text())
+    migrated = [_migrate_position_row(row, old_headers) for row in rows]
+    with _POSITIONS_PATH.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=_POSITIONS_HEADERS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(migrated)
+
+
+def _migrate_position_row(row: dict[str, str], headers: list[str]) -> dict[str, str]:
+    if "arb_signal_id" in headers:
+        return {h: row.get(h, "") for h in _POSITIONS_HEADERS}
+    out = {h: "" for h in _POSITIONS_HEADERS}
+    out.update({
+        "ts": row.get("ts", ""),
+        "stage": row.get("stage", ""),
+        "job_id": row.get("job_id", ""),
+        "surface": row.get("surface", ""),
+        "instrument": row.get("market", ""),
+        "notional_usdc": row.get("notional_usdc", ""),
+        "deliverable_hash": row.get("deliverable_hash", ""),
+        "reason_hash": row.get("reason_hash", ""),
+        "tx_hash": row.get("settle_tx") or row.get("submit_tx") or row.get("fund_tx") or row.get("open_tx", ""),
+    })
+    if row.get("market") == "polymarket" and row.get("expired_at") in {"short", "long"}:
+        out.update({
+            "arb_signal_id": row.get("surface", ""),
+            "surface": row.get("market", ""),
+            "instrument": row.get("notional_usdc", ""),
+            "direction": row.get("expired_at", ""),
+            "notional_usdc": row.get("description", ""),
+            "deliverable_hash": row.get("open_tx", ""),
+            "reason_hash": row.get("fund_tx", ""),
+            "tx_hash": row.get("submit_tx") or row.get("settle_tx", ""),
+            "action_key": row.get("deliverable_hash", ""),
+        })
+    return out
 
 
 def _append_arc_tx_row(row: dict[str, Any]) -> None:
@@ -151,7 +201,7 @@ def _mock_polymarket_events(direction: str, energy_template: str = "energy_oil_p
         {
             "id": "mock-event-A",
             "slug": "mock-oil-price-q3",
-            "yes_prices": [0.40, 0.40, 0.23],   # sum = 1.03, premium +0.03
+            "yes_prices": [0.55, 0.50],   # scorer premium = 0.55 + 0.50 - 1.0
             "energy_template_id": energy_template,
             "title": "Mock: oil price > $X in Q3",
         }
