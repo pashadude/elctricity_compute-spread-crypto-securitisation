@@ -25,6 +25,9 @@ Implemented and tested:
 - Phase 0.6 / Block 2 IBKR paper Gateway smoke is complete: local Gateway
   socket `127.0.0.1:4002` was reachable outside sandbox and
   `npm run ibkr:smoke` returned a GOOGL quote.
+- Phase 0.7 / Block 2 EIA + AWS feed smoke is complete: `npm run feeds:smoke`
+  fetched one live ERCOT/TX EIA electricity proxy point and one AWS
+  `p4d.24xlarge` `us-east-1` spot price.
 
 Latest local public testnet proof: ERC-8183 job `16129` was created, funded,
 submitted, completed, and given ERC-8004 feedback on Arc Testnet. Runtime logs
@@ -77,6 +80,10 @@ The broader IBKR, crypto, and Kalshi adapters remain in the repo for later
 phases and tests, but v0 runtime execution filters to the S-4 Polymarket
 surface.
 
+The current EIA adapter uses EIA's public electricity data as an ERCOT/TX
+electricity price proxy. A true ERCOT real-time LMP adapter is still deferred
+with the broader S-1 electricity execution work.
+
 ## Commands
 
 Safe offline checks:
@@ -85,6 +92,7 @@ Safe offline checks:
 |---|---|
 | `npm test` | Run Python regression tests |
 | `npm run typecheck` | Type-check TypeScript scripts |
+| `npm run feeds:smoke` | Fetch one live EIA ERCOT/TX electricity proxy point and one AWS p4d us-east-1 spot price |
 | `npm run ibkr:smoke` | Quote one symbol through local IBKR paper Gateway |
 | `python tests/backward_check_energy_templates.py` | Re-run energy classifier against historical fills |
 | `npm run s4:mock` | Offline mock S-4 dry run |
@@ -137,6 +145,7 @@ Most recent local verification:
 npm test              -> 75 passed
 npm run typecheck     -> passed
 npm run ibkr:smoke    -> GOOGL quote returned through local paper Gateway
+npm run feeds:smoke   -> EIA ERCOT/TX proxy + AWS p4d us-east-1 spot returned
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```

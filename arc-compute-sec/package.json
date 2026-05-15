@@ -10,7 +10,7 @@
     "test": ".venv/bin/python -m pytest tests/",
     "test:py": ".venv/bin/python -m pytest tests/",
     "typecheck": "tsc --noEmit",
-    "feeds:smoke": ".venv/bin/dotenv -f .env run -- .venv/bin/python scripts/feeds_smoke.py",
+    "feeds:smoke": "set -a; . .env; set +a; .venv/bin/python scripts/feeds_smoke.py",
     "ibkr:smoke": ".venv/bin/python scripts/ibkr_smoke.py",
     "s4:mock": ".venv/bin/python -m agent.runtime --once --dry-run --no-persist",
     "s4:scan": ".venv/bin/python -m agent.runtime --scan --dry-run --max-positions 1 --no-persist",
