@@ -28,10 +28,16 @@ Implemented and tested:
 - Phase 0.7 / Block 2 EIA + AWS feed smoke is complete: `npm run feeds:smoke`
   fetched one live ERCOT/TX EIA electricity proxy point and one AWS
   `p4d.24xlarge` `us-east-1` spot price.
+- Phase 0 USDC smoke / Block 2 is complete: `npm run smoke` created one Circle
+  SCA wallet, the operator funded it from the faucet, and a 0.01 USDC
+  self-transfer completed on Arc Testnet.
 
 Latest local public testnet proof: ERC-8183 job `16129` was created, funded,
 submitted, completed, and given ERC-8004 feedback on Arc Testnet. Runtime logs
 and credentials remain ignored under `.env` and `logs/`.
+
+Latest Phase 0 USDC smoke tx:
+`https://testnet.arcscan.app/tx/0x3fbd69c6c99211d1086d56adbc821f6e6aaaef78b48538eb943840a346069678`.
 
 Authoritative context:
 
@@ -146,6 +152,7 @@ npm test              -> 75 passed
 npm run typecheck     -> passed
 npm run ibkr:smoke    -> GOOGL quote returned through local paper Gateway
 npm run feeds:smoke   -> EIA ERCOT/TX proxy + AWS p4d us-east-1 spot returned
+npm run smoke         -> 0.01 USDC self-transfer completed on Arc Testnet
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```
