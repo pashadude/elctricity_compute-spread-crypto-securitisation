@@ -22,6 +22,9 @@ Implemented and tested:
   and feedback.
 - ERC-8004 identity registration script exists and has been run on Arc Testnet
   in the operator-local environment.
+- Phase 0.6 / Block 2 IBKR paper Gateway smoke is complete: local Gateway
+  socket `127.0.0.1:4002` was reachable outside sandbox and
+  `npm run ibkr:smoke` returned a GOOGL quote.
 
 Latest local public testnet proof: ERC-8183 job `16129` was created, funded,
 submitted, completed, and given ERC-8004 feedback on Arc Testnet. Runtime logs
@@ -133,6 +136,7 @@ Most recent local verification:
 ```text
 npm test              -> 75 passed
 npm run typecheck     -> passed
+npm run ibkr:smoke    -> GOOGL quote returned through local paper Gateway
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```
