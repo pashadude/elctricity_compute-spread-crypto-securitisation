@@ -82,6 +82,7 @@ Safe offline checks:
 |---|---|
 | `npm test` | Run Python regression tests |
 | `npm run typecheck` | Type-check TypeScript scripts |
+| `npm run ibkr:smoke` | Quote one symbol through local IBKR paper Gateway |
 | `python tests/backward_check_energy_templates.py` | Re-run energy classifier against historical fills |
 | `npm run s4:mock` | Offline mock S-4 dry run |
 | `npm run s4:scan` | One read-only live-feed S-4 scan in dry-run mode |

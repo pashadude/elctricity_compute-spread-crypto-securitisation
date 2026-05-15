@@ -63,6 +63,7 @@ continues with:
 
 - `npm test` — offline regression suite
 - `npm run typecheck` — TypeScript script typecheck
+- `npm run ibkr:smoke` — local IBKR paper Gateway quote smoke
 - `npm run smoke` — USDC round-trip
 - `python -m feeds.eia` + `python -m feeds.aws_spot` — live data smoke for `--scan`
 - `npm run register-agent` — Phase 1 ERC-8004 identity
