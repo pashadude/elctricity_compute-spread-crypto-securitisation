@@ -11,12 +11,11 @@
  * Requires `.env` with CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET.
  */
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
-import { parseUnits } from "viem";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
+import { CHAIN_NAME } from "../contracts/arc_addresses";
 
-const ARC = "ARC-TESTNET";
 const USDC_TOKEN_ID_MAP_PATH = "logs/usdc_token_id.txt"; // cache resolved token id between runs
 
 if (!process.env.CIRCLE_API_KEY || !process.env.CIRCLE_ENTITY_SECRET) {
@@ -47,7 +46,7 @@ async function getOrCreateWalletSet(): Promise<string> {
 async function createOne(walletSetId: string) {
   const resp = await client.createWallets({
     walletSetId,
-    blockchains: [ARC as any],
+    blockchains: [CHAIN_NAME as any],
     count: 1,
     accountType: "SCA",
   });
@@ -116,7 +115,7 @@ async function main() {
     walletId: id,
     tokenId,
     destinationAddress: address,
-    amounts: [amount],
+    amount: [amount],
     fee: { type: "level", config: { feeLevel: "MEDIUM" } } as any,
   });
   const txId = (tx.data as any)?.id;

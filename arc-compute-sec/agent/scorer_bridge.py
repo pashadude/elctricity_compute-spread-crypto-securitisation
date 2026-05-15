@@ -121,7 +121,6 @@ def _load_scorer_module():
 
     # Pre-stub sibling modules the scorer imports so its top-level imports work.
     models_path = _UPSTREAM_DIR / "api" / "polymarket" / "longtail" / "models.py"
-    logger_path = _UPSTREAM_DIR / "api" / "polymarket" / "utils" / "logger.py"
 
     if "api" not in sys.modules:
         api_mod = types.ModuleType("api")
@@ -139,6 +138,28 @@ def _load_scorer_module():
         lt_mod = types.ModuleType("api.polymarket.longtail")
         lt_mod.__path__ = [str(_UPSTREAM_DIR / "api" / "polymarket" / "longtail")]  # type: ignore
         sys.modules["api.polymarket.longtail"] = lt_mod
+    if "api.polymarket.utils.logger" not in sys.modules:
+        logger_mod = types.ModuleType("api.polymarket.utils.logger")
+
+        class _NoopLogger:
+            def info(self, *args, **kwargs):
+                return None
+
+            def warning(self, *args, **kwargs):
+                return None
+
+            def debug(self, *args, **kwargs):
+                return None
+
+        def _get_logger(*args, **kwargs):
+            return _NoopLogger()
+
+        def _get_log_dir():
+            return Path("/private/tmp")
+
+        logger_mod.get_logger = _get_logger  # type: ignore[attr-defined]
+        logger_mod.get_log_dir = _get_log_dir  # type: ignore[attr-defined]
+        sys.modules["api.polymarket.utils.logger"] = logger_mod
 
     def _load(name: str, path: Path):
         if name in sys.modules:
@@ -151,7 +172,6 @@ def _load_scorer_module():
         spec.loader.exec_module(mod)
         return mod
 
-    _load("api.polymarket.utils.logger", logger_path)
     _load("api.polymarket.longtail.models", models_path)
     return _load("api.polymarket.longtail.scorer", scorer_path)
 

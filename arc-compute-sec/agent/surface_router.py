@@ -158,8 +158,11 @@ def _polymarket_candidates(
                 metadata={
                     "event_id": ev.get("id"),
                     "slug": ev.get("slug"),
+                    "title": ev.get("title"),
                     "yes_prices": list(ypx),
                     "energy_template_id": ev.get("energy_template_id"),
+                    "premium": ev.get("premium"),
+                    "scorer_result": ev.get("scorer_result"),
                 },
             )
         )

@@ -62,7 +62,12 @@ next session continues with:
 - `python -c "from adapters.ibkr import fetch_last_price; print(fetch_last_price('GOOGL'))"` — IBKR smoke
 - `npm run register-agent` — Phase 1 ERC-8004 identity
 - `npm run open-position` / `submit-outcome` / `settle-position` — Phase 2 lifecycle
-- `python -m agent.runtime --scan --live --settle --max-actions 3` — Phase 4 + 5 live multi-surface
+- `.venv/bin/python -m agent.runtime --scan --live --max-positions 1` — v0 one-shot S-4 energy Polymarket scan; Arc wrap happens only after `judge.classify()` returns `EXECUTE`
+
+The v0 runtime is not a daemon. `--scan` means one stateless scan, at most one
+wrapped position, then exit. Do not use this repo to place real Polymarket
+orders; the Polymarket adapter is read-only and snapshots event prices for the
+Arc audit rail.
 
 ## What's already done (no action needed)
 
@@ -74,5 +79,5 @@ next session continues with:
 - `adapters/`: polymarket (read-only), ibkr (paper), crypto (paper), kalshi (stub)
 - `templates/energy/`: keywords.yaml, classifier.py, backward_check.txt (122 fills caught, WR 97% on AI-infra)
 - TypeScript scripts: register_agent.ts, open_position.ts, submit_outcome.ts, settle_position.ts, smoke.ts
-- 61 offline pytest tests passing
+- Offline pytest suite present, including gate-bypass and no-chain-without-EXECUTE regressions
 - `.claude/TASK.md` rewritten to the multi-surface product vision; prior version archived

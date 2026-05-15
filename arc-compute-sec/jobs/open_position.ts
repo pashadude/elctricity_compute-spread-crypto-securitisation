@@ -8,10 +8,9 @@ import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-
 import { createPublicClient, http, parseEventLogs, parseAbi } from "viem";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { AGENTIC_COMMERCE, CHAIN_NAME, RPC_HTTP, USDC, usdc6 } from "../contracts/arc_addresses";
 
-const ARC_RPC = process.env.ARC_RPC || "https://rpc.testnet.arc.network";
-const AGENTIC_COMMERCE = "0x0747EEf0706327138c69792bF28Cd525089e4583";
-const USDC = "0x3600000000000000000000000000000000000000";
+const ARC_RPC = process.env.ARC_RPC || RPC_HTTP;
 const IDENTITY_TSV = "logs/identity.tsv";
 const POSITIONS_TSV = "logs/positions.tsv";
 
@@ -83,7 +82,7 @@ async function ensureClientWallet(identity: Record<string, string>) {
   if (!set) throw new Error("wallet set not found");
   const c = await circle.createWallets({
     walletSetId: set.id,
-    blockchains: ["ARC-TESTNET" as any],
+    blockchains: [CHAIN_NAME as any],
     count: 1,
     accountType: "SCA",
   });
@@ -104,7 +103,7 @@ async function ensureClientWallet(identity: Record<string, string>) {
     walletId: identity.desk_wallet_id,
     tokenId: usdc.token.id,
     destinationAddress: identity.client_wallet_addr,
-    amounts: ["2"],
+    amount: ["2"],
     fee: { type: "level", config: { feeLevel: "MEDIUM" } } as any,
   });
   await pollTx((tr.data as any)?.id);
@@ -143,19 +142,19 @@ async function main() {
   const commerceAbi = JSON.parse(await readFile("contracts/abis/agentic_commerce.json", "utf8"));
   const receipt = await arc.getTransactionReceipt({ hash: createHash as `0x${string}` });
   const events = parseEventLogs({ abi: commerceAbi, logs: receipt.logs });
-  const created = events.find((e: any) => e.eventName === "JobCreated");
+  const created = events.find((e: any) => e.eventName === "JobCreated") as any;
   if (!created) throw new Error("JobCreated event not found in receipt");
   const jobId = (created.args as any).jobId.toString();
   console.log(`  jobId = ${jobId}`);
 
   // 2. setBudget from desk_owner
   console.log("setBudget…");
-  const notionalBase = BigInt(Math.round(args.notional * 1_000_000)); // 6 decimals
+  const notionalBase = usdc6(args.notional);
   const budgetHash = await execContract(
     identity.desk_wallet_id,
     AGENTIC_COMMERCE,
     "setBudget(uint256,uint256,bytes)",
-    [jobId, notionalBase.toString(), "0x"]
+    [jobId, notionalBase, "0x"]
   );
   console.log(`  https://testnet.arcscan.app/tx/${budgetHash}`);
 
@@ -165,7 +164,7 @@ async function main() {
     identity.client_wallet_id,
     USDC,
     "approve(address,uint256)",
-    [AGENTIC_COMMERCE, notionalBase.toString()]
+    [AGENTIC_COMMERCE, notionalBase]
   );
   console.log(`  approve: https://testnet.arcscan.app/tx/${approveHash}`);
   const fundHash = await execContract(

@@ -10,5 +10,5 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["identity/**/*.ts", "jobs/**/*.ts", "scripts/**/*.ts"]
+  "include": ["contracts/**/*.ts", "identity/**/*.ts", "jobs/**/*.ts", "scripts/**/*.ts"]
 }

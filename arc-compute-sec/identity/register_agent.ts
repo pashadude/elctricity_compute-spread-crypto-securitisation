@@ -24,11 +24,9 @@ import {
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFile } from "node:fs/promises";
+import { CHAIN_NAME, IDENTITY_REGISTRY, RPC_HTTP, VALIDATION_REGISTRY } from "../contracts/arc_addresses";
 
-const ARC = "ARC-TESTNET";
-const RPC = process.env.ARC_RPC || "https://rpc.testnet.arc.network";
-const IDENTITY = "0x8004A818BFB912233c491871b3d84c89A494BD9e";
-const VALIDATION = "0x8004Cb1BF31DAf7788923b405b754f57acEB4272";
+const RPC = process.env.ARC_RPC || RPC_HTTP;
 const METADATA_URI = "ipfs://bafkreibdi6623n3xpf7ymk62ckb4bo75o3qemwkpfvp5i25j66itxvsoei";
 
 const IDENTITY_TSV = "logs/identity.tsv";
@@ -79,7 +77,7 @@ async function getOrCreateWalletSet(): Promise<string> {
 async function createTwoSca(walletSetId: string) {
   const resp = await circle.createWallets({
     walletSetId,
-    blockchains: [ARC as any],
+    blockchains: [CHAIN_NAME as any],
     count: 2,
     accountType: "SCA",
   });
@@ -177,10 +175,10 @@ async function main() {
       if (usdc?.token?.id && amount >= parseFloat(DESK_SEED_USDC) + 0.1) {
         console.log(`Auto-funding desk_owner with ${DESK_SEED_USDC} USDC from smoke wallet ${w.address}`);
         const tr = await circle.createTransaction({
-          walletId: w.id!,
-          tokenId: usdc.token.id,
-          destinationAddress: desk.address,
-          amounts: [DESK_SEED_USDC],
+        walletId: w.id!,
+        tokenId: usdc.token.id,
+        destinationAddress: desk.address,
+        amount: [DESK_SEED_USDC],
           fee: { type: "level", config: { feeLevel: "MEDIUM" } } as any,
         });
         const fundTx = await pollTx((tr.data as any)?.id);
@@ -208,7 +206,7 @@ async function main() {
     walletId: desk.id,
     tokenId: usdc.token.id,
     destinationAddress: judge.address,
-    amounts: ["0.5"],
+    amount: ["0.5"],
     fee: { type: "level", config: { feeLevel: "MEDIUM" } } as any,
   });
   await pollTx((transferRes.data as any)?.id);
@@ -221,7 +219,7 @@ async function main() {
   console.log(`Registering desk identity with metadataURI=${METADATA_URI}`);
   const { txHash: registerHash } = await execContract(
     desk.id,
-    IDENTITY,
+    IDENTITY_REGISTRY,
     "register(string)",
     [METADATA_URI]
   );
@@ -230,7 +228,7 @@ async function main() {
   // Decode the Transfer event to recover the agent tokenId.
   const receipt = await arc.getTransactionReceipt({ hash: registerHash as `0x${string}` });
   const events = parseEventLogs({ abi: identityAbi, logs: receipt.logs });
-  const transfer = events.find((e: any) => e.eventName === "Transfer" && e.address.toLowerCase() === IDENTITY.toLowerCase());
+  const transfer = events.find((e: any) => e.eventName === "Transfer" && e.address.toLowerCase() === IDENTITY_REGISTRY.toLowerCase()) as any;
   if (!transfer) throw new Error("Transfer event not found in register receipt");
   const tokenId = (transfer.args as any).tokenId.toString();
   console.log(`desk_agent_id = ${tokenId}`);
@@ -238,7 +236,7 @@ async function main() {
   // Validation rehearsal.
   const reqHash = keccak256(toHex("phase1-rehearsal-request"));
   const { txHash: vReqTx } = await execContract(
-    desk.id, VALIDATION,
+    desk.id, VALIDATION_REGISTRY,
     "validationRequest(address,uint256,string,bytes32)",
     [judge.address, tokenId, "ipfs://placeholder", reqHash]
   );
@@ -246,7 +244,7 @@ async function main() {
 
   const respHash = keccak256(toHex("phase1-rehearsal-response"));
   const { txHash: vRespTx } = await execContract(
-    judge.id, VALIDATION,
+    judge.id, VALIDATION_REGISTRY,
     "validationResponse(bytes32,uint8,string,bytes32,string)",
     [reqHash, 100, "ipfs://placeholder", respHash, "phase1-rehearsal"]
   );

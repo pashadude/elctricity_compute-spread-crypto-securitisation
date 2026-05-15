@@ -7,8 +7,8 @@
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 import { keccak256, toHex } from "viem";
 import { existsSync, readFileSync, appendFileSync } from "node:fs";
+import { AGENTIC_COMMERCE } from "../contracts/arc_addresses";
 
-const AGENTIC_COMMERCE = "0x0747EEf0706327138c69792bF28Cd525089e4583";
 const IDENTITY_TSV = "logs/identity.tsv";
 const POSITIONS_TSV = "logs/positions.tsv";
 

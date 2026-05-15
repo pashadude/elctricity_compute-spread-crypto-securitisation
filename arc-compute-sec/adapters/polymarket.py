@@ -49,8 +49,68 @@ def fetch_events(limit: int = 50, only_active: bool = True, ttl: float = 60.0) -
         return []
 
 
-def classify_and_gate(events: list[dict]) -> list[dict]:
-    """Filter to energy-classified events with positive premium per the scorer."""
+def _coerce_price(value: Any) -> float | None:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= price <= 1.0:
+        return price
+    return None
+
+
+def _maybe_json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
+def _extract_yes_prices(event: dict) -> list[float]:
+    """Extract YES-side prices from the common Gamma event shapes.
+
+    Tests use simple `markets[].outcomePrice` rows; live Gamma responses can
+    also carry JSON-encoded `outcomePrices` arrays. Keep this parser
+    conservative: unparseable prices are skipped, not guessed.
+    """
+    prices: list[float] = []
+    for raw in event.get("markets") or []:
+        if not isinstance(raw, dict):
+            continue
+        for key in ("outcomePrice", "lastPrice", "price"):
+            price = _coerce_price(raw.get(key))
+            if price is not None:
+                prices.append(price)
+                break
+        else:
+            outcome_prices = _maybe_json_list(raw.get("outcomePrices"))
+            outcomes = _maybe_json_list(raw.get("outcomes"))
+            if outcome_prices:
+                yes_idx = 0
+                for idx, outcome in enumerate(outcomes):
+                    if str(outcome).strip().lower() == "yes":
+                        yes_idx = idx
+                        break
+                if yes_idx < len(outcome_prices):
+                    price = _coerce_price(outcome_prices[yes_idx])
+                    if price is not None:
+                        prices.append(price)
+    return prices
+
+
+def classify_and_gate(events: list[dict], *, include_rejected: bool = False) -> list[dict]:
+    """Classify energy events and run the premium gate.
+
+    By default this returns only scorer-accepted events. Runtime uses
+    `include_rejected=True` so premium failures still reach the judge and
+    become auditable REJECT rows, while off-template events remain dropped
+    before scoring/judging.
+    """
     out: list[dict] = []
     for ev in events:
         title = ev.get("title") or ev.get("slug") or ""
@@ -58,20 +118,13 @@ def classify_and_gate(events: list[dict]) -> list[dict]:
         template = classify_energy(title=title, description=description)
         if template is None:
             continue
-        markets = ev.get("markets") or []
-        yes_prices = []
-        for m in markets:
-            p = m.get("outcomePrice") or m.get("lastPrice") or m.get("price")
-            try:
-                yes_prices.append(float(p))
-            except (TypeError, ValueError):
-                continue
+        yes_prices = _extract_yes_prices(ev)
         if len(yes_prices) < 2:
             continue
         # Sum-of-YES heuristic. Use the first market as "candidate", rest as event_avg.
         evg_avg = sum(yes_prices[1:]) / (len(yes_prices) - 1) if len(yes_prices) > 1 else 0.0
         gate = score_candidate(price=yes_prices[0], event_avg_yes_price=evg_avg)
-        if not gate.passes_gate:
+        if not gate.passes_gate and not include_rejected:
             continue
         out.append({
             "id": ev.get("id") or ev.get("slug"),
@@ -80,6 +133,12 @@ def classify_and_gate(events: list[dict]) -> list[dict]:
             "yes_prices": yes_prices,
             "energy_template_id": template,
             "premium": gate.premium,
+            "scorer_result": {
+                "passes_gate": gate.passes_gate,
+                "premium": gate.premium,
+                "rejection_reason": gate.rejection_reason,
+                "raw": gate.raw,
+            },
         })
     return out
 

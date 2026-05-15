@@ -4,7 +4,8 @@
                                                               wrap + settle
 
 Modes (signal source, mutually exclusive):
-    --scan          one live pass: fetch EIA + AWS, compute spread, score
+    --scan          one live pass: fetch EIA + AWS, compute spread, then
+                    read Polymarket energy events and exit
     --once          one mock pass: synthesize signal from --mock-elec /
                     --mock-compute / --force-signal flags
 
@@ -14,10 +15,9 @@ Chain submission (independent flags):
     --settle        after wrap, run the reconciliation pass too
 
 Gap 7 from review_session_deliverables.md (v0): continuous polling is
-DEFERRED to v2. v0 is `cron --scan --live --settle` if you want a loop.
-The runtime does ONE pass, writes its logs, exits with a status code.
+DEFERRED to v2. The runtime does ONE pass, writes its logs, and exits.
 Anything observability-shaped (notifications, retries on RPC 429, idle
-back-off) belongs in the cron wrapper or in a v2 daemon, not here.
+back-off, daemon loops) is out of scope for v0.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ import argparse
 import csv
 import hashlib
 import json
-import os
 import sys
 import time
 from dataclasses import asdict
@@ -33,10 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from agent import arb_identifier, judge, surface_router
-from agent.pnl_probe import estimate as pnl_estimate
 
 _POSITIONS_PATH = Path(__file__).resolve().parent.parent / "logs" / "positions.tsv"
-_RECON_PATH = Path(__file__).resolve().parent.parent / "logs" / "pnl_reconciliation.tsv"
+_ARC_TXS_PATH = Path(__file__).resolve().parent.parent / "logs" / "arc_txs.tsv"
 
 
 def _identity_row() -> dict[str, str]:
@@ -64,9 +62,23 @@ def _canonical_outcome_blob(candidate_dict: dict[str, Any], fill_report: dict[st
         "candidate": candidate_dict,
         "fill_report": fill_report or {},
         "arb_signal": asdict(signal) if signal is not None else {},
-        "ts": time.time(),
     }
     return json.dumps(blob, sort_keys=True, default=str).encode()
+
+
+def _action_key(candidate_dict: dict[str, Any]) -> str:
+    stable = {k: v for k, v in candidate_dict.items() if k != "candidate_id"}
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _position_already_recorded(action_key: str) -> bool:
+    if not _POSITIONS_PATH.exists():
+        return False
+    with _POSITIONS_PATH.open("r", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        if not reader.fieldnames or "action_key" not in reader.fieldnames:
+            return False
+        return any(row.get("action_key") == action_key for row in reader)
 
 
 def _append_position_row(row: dict[str, Any]) -> None:
@@ -75,13 +87,37 @@ def _append_position_row(row: dict[str, Any]) -> None:
     headers = [
         "ts", "stage", "job_id", "arb_signal_id", "surface", "instrument",
         "direction", "notional_usdc", "deliverable_hash", "reason_hash",
-        "tx_hash", "fill_report_path",
+        "tx_hash", "fill_report_path", "action_key",
     ]
     with _POSITIONS_PATH.open("a", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
         if new:
             writer.writerow(headers)
         writer.writerow([str(row.get(h, "")) for h in headers])
+
+
+def _append_arc_tx_row(row: dict[str, Any]) -> None:
+    _ARC_TXS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    new = not _ARC_TXS_PATH.exists()
+    headers = [
+        "ts", "stage", "job_id", "circle_tx_id", "tx_hash", "block_number",
+    ]
+    with _ARC_TXS_PATH.open("a", newline="") as fh:
+        writer = csv.writer(fh, delimiter="\t")
+        if new:
+            writer.writerow(headers)
+        writer.writerow([str(row.get(h, "")) for h in headers])
+
+
+def _log_chain_tx(stage: str, job_id: int | str, tx: Any) -> None:
+    _append_arc_tx_row({
+        "ts": time.time(),
+        "stage": stage,
+        "job_id": job_id,
+        "circle_tx_id": getattr(tx, "circle_tx_id", ""),
+        "tx_hash": getattr(tx, "tx_hash", ""),
+        "block_number": getattr(tx, "block_number", ""),
+    })
 
 
 def _live_spread() -> arb_identifier.SpreadPoint:
@@ -120,6 +156,30 @@ def _mock_polymarket_events(direction: str, energy_template: str = "energy_oil_p
             "title": "Mock: oil price > $X in Q3",
         }
     ]
+
+
+def _polymarket_events_for_signal(signal: arb_identifier.ArbSignal, *, live_scan: bool) -> list[dict]:
+    if not live_scan:
+        return _mock_polymarket_events(signal.direction)
+    from adapters import polymarket
+    return polymarket.classify_and_gate(polymarket.fetch_events(), include_rejected=True)
+
+
+def _polymarket_candidates(
+    signal: arb_identifier.ArbSignal,
+    *,
+    live_scan: bool,
+    sizing_usdc: float,
+) -> list[surface_router.Candidate]:
+    events = _polymarket_events_for_signal(signal, live_scan=live_scan)
+    candidates = surface_router.route(
+        signal,
+        polymarket_events=events,
+        sizing_per_equity_usdc=0.0,
+        sizing_crypto_usdc=0.0,
+        sizing_polymarket_usdc=sizing_usdc,
+    )
+    return [c for c in candidates if c.surface == "polymarket"]
 
 
 def _settle_outcome_blob(candidate_dict: dict, fill_report: dict, action: str,
@@ -172,6 +232,21 @@ def execute_candidate(
     return fr
 
 
+def _scorer_result_for_candidate(candidate: surface_router.Candidate) -> dict[str, Any] | None:
+    if candidate.surface != "polymarket":
+        return None
+    md = candidate.metadata or {}
+    existing = md.get("scorer_result")
+    if isinstance(existing, dict):
+        return existing
+    from agent.scorer_bridge import score_candidate as score_polym
+    yp = md.get("yes_prices") or []
+    if not yp:
+        return None
+    gate = score_polym(price=yp[0], event_avg_yes_price=sum(yp[1:]) / max(1, len(yp) - 1))
+    return asdict(gate)
+
+
 def wrap_position(candidate: surface_router.Candidate, fill_report: dict[str, Any],
                   signal: arb_identifier.ArbSignal | None, identity: dict[str, str],
                   expires_seconds: int = 600, dry_run: bool = True) -> dict[str, Any]:
@@ -210,17 +285,29 @@ def wrap_position(candidate: surface_router.Candidate, fill_report: dict[str, An
         raise RuntimeError(f"JobCreated event not found in tx {created.tx_hash}")
     job_id = int(job_id_log["args"]["jobId"])
     # Provider sets the budget.
-    on_chain.set_budget(desk_id, job_id, float(candidate.sizing_usdc))
+    budget = on_chain.set_budget(desk_id, job_id, float(candidate.sizing_usdc))
     # Client approves USDC and funds.
-    on_chain.approve_usdc(client_id, on_chain.AGENTIC_COMMERCE, float(candidate.sizing_usdc))
-    on_chain.fund_job(client_id, job_id)
+    approval = on_chain.approve_usdc(client_id, on_chain.AGENTIC_COMMERCE, float(candidate.sizing_usdc))
+    funded = on_chain.fund_job(client_id, job_id)
     # Provider submits deliverable.
-    on_chain.submit_deliverable(desk_id, job_id, deliverable_hash)
+    submitted = on_chain.submit_deliverable(desk_id, job_id, deliverable_hash)
+    for stage, tx in (
+        ("create_job", created),
+        ("set_budget", budget),
+        ("approve_usdc", approval),
+        ("fund_job", funded),
+        ("submit_deliverable", submitted),
+    ):
+        _log_chain_tx(stage, job_id, tx)
     return {
         "dry_run": False,
         "job_id": job_id,
         "deliverable_hash": deliverable_hash,
         "create_tx": created.tx_hash,
+        "set_budget_tx": budget.tx_hash,
+        "approve_tx": approval.tx_hash,
+        "fund_tx": funded.tx_hash,
+        "submit_tx": submitted.tx_hash,
     }
 
 
@@ -247,6 +334,8 @@ def settle_position(job_id: int, candidate_dict: dict[str, Any], fill_report: di
         tag=f"{action}:{reason_code}"[:32],
         feedback_hash_hex=feedback_hash,
     )
+    _log_chain_tx("complete_job", job_id, settle)
+    _log_chain_tx("give_feedback", job_id, fb)
     return {
         "dry_run": False,
         "job_id": job_id,
@@ -256,6 +345,81 @@ def settle_position(job_id: int, candidate_dict: dict[str, Any], fill_report: di
         "action": action,
         "score": score,
     }
+
+
+def process_candidates(
+    candidates: list[surface_router.Candidate],
+    *,
+    state: dict[str, Any],
+    dry_run: bool,
+    signal: arb_identifier.ArbSignal | None,
+    identity: dict[str, str] | None = None,
+    expires_seconds: int = 600,
+    max_positions: int = 1,
+) -> list[dict[str, Any]]:
+    """Judge candidates and wrap only EXECUTE verdicts.
+
+    This is the runtime's critical gate boundary. Tests monkeypatch
+    `wrap_position` here to prove REJECT/DEFER paths have no chain side
+    effect.
+    """
+    results: list[dict[str, Any]] = []
+    executed_count = 0
+    for cand in candidates:
+        if executed_count >= max_positions:
+            break
+        cand_dict = asdict(cand)
+        scorer_result = _scorer_result_for_candidate(cand)
+        verdict = judge.classify(cand_dict, state, scorer_result)
+        judge.log(verdict, cand_dict, scorer_result)
+        print(f"  [{cand.surface}/{cand.instrument}] {verdict.label}: {verdict.reason_code}")
+        if verdict.label != judge.LABEL_EXECUTE:
+            results.append({"verdict": asdict(verdict), "candidate": cand_dict, "executed": False})
+            continue
+        action_key = _action_key(cand_dict)
+        if _position_already_recorded(action_key):
+            results.append({
+                "verdict": {"label": judge.LABEL_DEFER, "reason_code": "duplicate_action_key", "confidence": 1.0},
+                "candidate": cand_dict,
+                "executed": False,
+                "action_key": action_key,
+            })
+            continue
+        fill = execute_candidate(cand, dry_run=dry_run, signal=signal)
+        wrap = wrap_position(
+            cand,
+            fill,
+            signal,
+            identity or {},
+            expires_seconds=expires_seconds,
+            dry_run=dry_run,
+        )
+        results.append({
+            "verdict": asdict(verdict),
+            "candidate": cand_dict,
+            "fill": fill,
+            "wrap": wrap,
+            "executed": True,
+            "action_key": action_key,
+        })
+        executed_count += 1
+        state["positions_open"] = state.get("positions_open", 0) + 1
+        _append_position_row({
+            "ts": time.time(),
+            "stage": "open" if dry_run else "wrapped",
+            "job_id": wrap.get("job_id", ""),
+            "arb_signal_id": cand.arb_signal_id,
+            "surface": cand.surface,
+            "instrument": cand.instrument,
+            "direction": cand.direction,
+            "notional_usdc": cand.sizing_usdc,
+            "deliverable_hash": wrap.get("deliverable_hash", ""),
+            "reason_hash": "",
+            "tx_hash": wrap.get("create_tx", ""),
+            "fill_report_path": "",
+            "action_key": action_key,
+        })
+    return results
 
 
 def run_once(args: argparse.Namespace) -> int:
@@ -280,22 +444,30 @@ def run_once(args: argparse.Namespace) -> int:
                   f"(S_t={pt.S_t:.4f}, elec={pt.electricity_per_mwh:.2f}, "
                   f"compute={pt.compute_per_gpu_hr:.4f}).")
             return 0
+    elif args.once:
+        pt = arb_identifier.compute_spread(
+            electricity_per_mwh=float(args.mock_elec or 80.0),
+            compute_per_gpu_hr=float(args.mock_compute or 1.50),
+            region="MOCK",
+        )
+        signal = arb_identifier.score_signal(pt, threshold_z=0.0,
+                                              forced=-2.0,
+                                              persist=not args.no_persist)
     else:
-        raise SystemExit("Specify one of: --scan, --force-signal")
+        raise SystemExit("Specify one of: --scan, --once, --force-signal")
 
     assert signal is not None
     print(f"[runtime] signal {signal.signal_id}: direction={signal.direction} z={signal.z:.3f}")
 
-    # 2. Route to candidates.
-    polym_events = _mock_polymarket_events(signal.direction)
-    candidates = surface_router.route(
+    # 2. Route to S-4 Polymarket candidates only. Broader surface routing
+    # remains in `surface_router.py` for later phases, but v0 does not execute
+    # equities, crypto, Kalshi, Hyperliquid, or real Polymarket orders.
+    candidates = _polymarket_candidates(
         signal,
-        polymarket_events=polym_events,
-        sizing_per_equity_usdc=args.sizing_equity,
-        sizing_crypto_usdc=args.sizing_crypto,
-        sizing_polymarket_usdc=args.sizing_polymarket,
+        live_scan=bool(args.scan),
+        sizing_usdc=args.sizing_polymarket,
     )
-    print(f"[runtime] {len(candidates)} candidates across surfaces")
+    print(f"[runtime] {len(candidates)} S-4 Polymarket candidates")
     if not candidates:
         return 0
 
@@ -304,44 +476,15 @@ def run_once(args: argparse.Namespace) -> int:
     identity = None
     if not args.dry_run:
         identity = _identity_row()
-    executed: list[dict] = []
-    for cand in candidates[: args.max_actions]:
-        cand_dict = asdict(cand)
-        scorer_result = None
-        if cand.surface == "polymarket":
-            from agent.scorer_bridge import score_candidate as score_polym
-            yp = (cand.metadata or {}).get("yes_prices") or []
-            if yp:
-                gate = score_polym(price=yp[0], event_avg_yes_price=sum(yp[1:])/max(1, len(yp)-1))
-                # GateResult is a slotted dataclass; __dict__ doesn't exist. asdict() works.
-                scorer_result = asdict(gate)
-        verdict = judge.classify(cand_dict, state, scorer_result)
-        judge.log(verdict, cand_dict, scorer_result)
-        print(f"  [{cand.surface}/{cand.instrument}] {verdict.label}: {verdict.reason_code}")
-        if verdict.label != "EXECUTE":
-            executed.append({"verdict": asdict(verdict), "candidate": cand_dict, "executed": False})
-            continue
-        fill = execute_candidate(cand, dry_run=args.dry_run, signal=signal)
-        wrap = wrap_position(cand, fill, signal, identity or {}, expires_seconds=args.expires,
-                             dry_run=args.dry_run)
-        executed.append({"verdict": asdict(verdict), "candidate": cand_dict,
-                         "fill": fill, "wrap": wrap, "executed": True})
-        state["positions_open"] = state.get("positions_open", 0) + 1
-        # Append a position row immediately (open stage).
-        _append_position_row({
-            "ts": time.time(),
-            "stage": "open" if args.dry_run else "wrapped",
-            "job_id": wrap.get("job_id", ""),
-            "arb_signal_id": signal.signal_id,
-            "surface": cand.surface,
-            "instrument": cand.instrument,
-            "direction": cand.direction,
-            "notional_usdc": cand.sizing_usdc,
-            "deliverable_hash": wrap.get("deliverable_hash", ""),
-            "reason_hash": "",
-            "tx_hash": wrap.get("create_tx", ""),
-            "fill_report_path": "",
-        })
+    executed = process_candidates(
+        candidates,
+        state=state,
+        dry_run=args.dry_run,
+        signal=signal,
+        identity=identity,
+        expires_seconds=args.expires,
+        max_positions=args.max_actions,
+    )
 
     # 4. Optional settle pass (Phase 5 reconciliation): only when not dry-run
     #    and the caller asked for it.
@@ -379,6 +522,35 @@ def run_once(args: argparse.Namespace) -> int:
     return 0
 
 
+def scan_once(
+    *,
+    max_positions: int = 1,
+    dry_run: bool = True,
+    settle: bool = False,
+    no_persist: bool = False,
+    sizing_polymarket: float = 1.0,
+    z_threshold: float = arb_identifier.DEFAULT_Z_THRESHOLD,
+) -> int:
+    """Run the v0 stateless scan exactly once and exit."""
+    args = argparse.Namespace(
+        scan=True,
+        once=False,
+        force_signal=None,
+        mock_elec=None,
+        mock_compute=None,
+        z_threshold=z_threshold,
+        sizing_equity=0.0,
+        sizing_crypto=0.0,
+        sizing_polymarket=sizing_polymarket,
+        max_actions=max_positions,
+        expires=600,
+        dry_run=dry_run,
+        settle=settle,
+        no_persist=no_persist,
+    )
+    return run_once(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Arb securitization agent runtime")
     mode = parser.add_mutually_exclusive_group()
@@ -396,7 +568,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sizing-equity", type=float, default=1.0)
     parser.add_argument("--sizing-crypto", type=float, default=1.0)
     parser.add_argument("--sizing-polymarket", type=float, default=1.0)
-    parser.add_argument("--max-actions", type=int, default=6)
+    parser.add_argument("--max-positions", "--max-actions", dest="max_actions", type=int, default=1,
+                        help="Maximum wrapped positions for this one-shot run (default: 1)")
     parser.add_argument("--expires", type=int, default=600,
                         help="Job expiredAt offset in seconds")
     parser.add_argument("--dry-run", action="store_true", default=True,
