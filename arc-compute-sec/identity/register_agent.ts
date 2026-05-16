@@ -145,8 +145,11 @@ async function execContract(
 async function main() {
   let row = readIdentityRow();
   if (row && row.desk_agent_id) {
-    console.log("Identity row already present — using existing wallets:");
-    console.log(row);
+    console.log("Identity row already present — using existing ERC-8004 desk identity.");
+    console.log(`desk_agent_id = ${row.desk_agent_id}`);
+    if (row.register_tx_hash) {
+      console.log(`register tx: https://testnet.arcscan.app/tx/${row.register_tx_hash}`);
+    }
     return;
   }
 

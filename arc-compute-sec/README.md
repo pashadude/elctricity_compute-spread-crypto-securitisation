@@ -31,6 +31,9 @@ Implemented and tested:
 - Phase 0 USDC smoke / Block 2 is complete: `npm run smoke` created one Circle
   SCA wallet, the operator funded it from the faucet, and a 0.01 USDC
   self-transfer completed on Arc Testnet.
+- Phase 1 / Block 3 ERC-8004 desk identity is complete: `desk_owner` registered
+  as desk agent `9931`, `judge_validator` validationRequest/Response rehearsal
+  completed, and `logs/identity.tsv` is present locally.
 
 Latest local public testnet proof: ERC-8183 job `16129` was created, funded,
 submitted, completed, and given ERC-8004 feedback on Arc Testnet. Runtime logs
@@ -38,6 +41,12 @@ and credentials remain ignored under `.env` and `logs/`.
 
 Latest Phase 0 USDC smoke tx:
 `https://testnet.arcscan.app/tx/0x3fbd69c6c99211d1086d56adbc821f6e6aaaef78b48538eb943840a346069678`.
+
+Latest Phase 1 identity proofs:
+
+- register: `https://testnet.arcscan.app/tx/0x40c88f1c424fbaa94bd48f76f9ae6c7a001fd7cca54994eecccb9b776ebdc888`
+- validationRequest: `https://testnet.arcscan.app/tx/0x1952fa34f3d1928c271a6cdfdc8823f282db40a0a55e43ca2b081c185c5ec163`
+- validationResponse: `https://testnet.arcscan.app/tx/0xd3fac1597fa564b8e801613167e06175e7bc76d57e20b865a1fea6c7f44f09d4`
 
 Authoritative context:
 
@@ -153,6 +162,7 @@ npm run typecheck     -> passed
 npm run ibkr:smoke    -> GOOGL quote returned through local paper Gateway
 npm run feeds:smoke   -> EIA ERCOT/TX proxy + AWS p4d us-east-1 spot returned
 npm run smoke         -> 0.01 USDC self-transfer completed on Arc Testnet
+npm run register-agent -> desk_agent_id 9931 confirmed; logs/identity.tsv present
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```
