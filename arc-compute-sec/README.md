@@ -1,10 +1,93 @@
 # arc-compute-sec
 
-Arc-settled S-4 energy outcome desk for Polymarket-style energy candidates.
+Arc-settled outcome desk for the electricity-compute arb.
 
 v0 is deliberately narrow. Arc is the settlement, escrow, identity,
 reputation, and audit rail. Arc is not the alpha source, prediction venue,
 scorer, or Polymarket executor.
+
+## Thesis
+
+Compute is becoming a commodity, but it is not yet a clean securitizable asset.
+The physical data center shell can be financed like infrastructure; raw compute
+cannot. GPU service flow is perishable, utilization is uncertain, hardware
+depreciates technologically before it depreciates physically, and there is no
+industry-standard futures unit for a fungible GPU-hour.
+
+That leaves one practical bridge for a hackathon v0: securitize **outcomes**
+that expose the same bottleneck. Larry Fink framed the destination at Milken:
+["A new asset class will be buying futures of compute"](https://finance.yahoo.com/sectors/technology/articles/blackrock-reveals-surprising-asset-class-022000793.html).
+This repo implements the first auditable step toward that market: find
+electricity/compute dislocations, express them through prediction-market-style
+events or paper liquid proxies, and wrap the judged position as an ERC-8183 job
+on Arc.
+
+Prediction markets are the viable first surface because they already solve the
+hardest problem that compute futures do not yet solve: they turn messy,
+bespoke infrastructure risks into discrete, externally resolvable claims. Grid
+approvals, energy shocks, chip delays, model-release timing, and AI-capacity
+milestones do not need a standardized GPU-hour to trade; they need a canonical
+event, a price, a resolution, and an audit trail. Arc supplies the escrow,
+identity, reputation, and settlement rail around that outcome. It does not
+source alpha.
+
+## How We Get Arbs
+
+The identifier measures the electricity-compute spread:
+
+```text
+S_t = compute_$_per_gpu_hr - k * electricity_$_per_MWh * kWh_per_gpu_hr
+```
+
+with the electricity term converted from MWh to GPU-hours in
+`agent/arb_identifier.py`. A signal is emitted when the rolling z-score of
+`S_t` moves far enough from its local history:
+
+- `z(S_t) > threshold`: compute is expensive relative to electricity.
+- `z(S_t) < -threshold`: electricity is expensive relative to compute.
+
+The router then expresses that one signal on the surfaces where the
+mispricing should show up:
+
+- **S-4 Polymarket energy outcomes:** oil, gas, electricity, grid, OPEC/EIA,
+  and AI-infra power events are filtered through the energy template universe.
+- **Prediction-market AI-infra outcomes:** model releases and capacity events
+  are the direct path to outcome securitization, but v0 keeps Polymarket
+  read-only.
+- **IBKR paper equities:** hyperscaler margin compression/relief is rehearsed
+  with paper orders only.
+- **Crypto paper:** BTC/ETH proxy mining-margin stress from electricity spikes;
+  no Hyperliquid execution in v0.
+
+Every candidate must then pass the same capital gate: energy classifier,
+upstream premium scorer, four-way judge, and only then Arc wrapping. The core
+desk edge is not "call Arc"; it is the upstream premium gate plus a narrow
+energy classifier plus `judge.classify()` refusing to spend USDC unless the
+candidate returns `EXECUTE`.
+
+## Evidence So Far
+
+The Phase 3 backward-window check against historical fills is intentionally
+conservative and committed at `templates/energy/backward_check.txt`:
+
+| Check | Result |
+|---|---:|
+| Historical fills scanned | 1,301 |
+| Energy-classified fills | 122 |
+| `energy_ai_infra` subset | n=70, WR=97.1%, PnL=+68.654 |
+| `energy_geopolitics` subset | n=52, WR=92.3%, PnL=-12.224 |
+| Soft acceptance | WR pass, gated PnL pass, count gate failed high |
+
+The count gate failure is useful: it says the classifier is broad enough to
+need the premium scorer and judge, not that the signal should bypass them. The
+repo therefore treats `require_non_negative_premium=True` as a hard invariant,
+tests for absence of any `False` S-4 code path, and logs premium failures as
+auditable `REJECT` judgements.
+
+Phase 4 then proved the rail live on Arc Testnet: one live-feed multi-surface
+pass routed 11 candidates across crypto, IBKR, and Polymarket; the judge
+selected `crypto/BTC/USD`; and ERC-8183 job `19091` was created, funded,
+submitted, completed, and given ERC-8004 feedback.
 
 ## Current State
 
