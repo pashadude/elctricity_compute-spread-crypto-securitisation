@@ -89,6 +89,12 @@ pass routed 11 candidates across crypto, IBKR, and Polymarket; the judge
 selected `crypto/BTC/USD`; and ERC-8183 job `19091` was created, funded,
 submitted, completed, and given ERC-8004 feedback.
 
+Oracle backtesting is now offline-only: saved Opoint/Nebius analyst+critic
+receipts can be replayed against resolved outcomes to measure calibration,
+Brier score, top-1 hit rate, and whether the oracle would have vetoed winning
+or losing candidates. The oracle remains evidence only; it does not replace the
+premium scorer, energy classifier, judge, or Arc execution gate.
+
 ## Current State
 
 Implemented and tested:
@@ -125,6 +131,8 @@ Implemented and tested:
   phase4:live` fetched live feeds, routed 11 candidates across crypto, IBKR,
   and Polymarket, selected `crypto/BTC/USD`, judge returned `EXECUTE`, and one
   ERC-8183 job was wrapped, submitted, completed, and given feedback.
+- Offline oracle backtest harness exists at `agent/oracle_backtest.py`; it
+  evaluates saved oracle JSONL only and makes no live Opoint/Nebius calls.
 
 Latest local public testnet proof: Phase 4 ERC-8183 job `19091` was created,
 funded, submitted, completed, and given ERC-8004 feedback on Arc Testnet.
@@ -194,6 +202,9 @@ Premium-gate failures become auditable `REJECT` judgements. Off-template
 non-energy events are dropped before scorer and judge. No fallback scorer path
 may disable the premium gate.
 
+Saved oracle receipts can be attached as candidate metadata and backtested
+offline. They are evidence for the judge, not a judge replacement.
+
 Live wraps preflight the client wallet's USDC balance and top it up from the
 desk wallet when local client state is stale or underfunded. This funding
 preflight runs after the judge returns `EXECUTE` and before ERC-8183 job calls.
@@ -233,6 +244,7 @@ Safe offline checks:
 | `npm run feeds:smoke` | Fetch one live EIA ERCOT/TX electricity proxy point and one AWS p4d us-east-1 spot price |
 | `npm run ibkr:smoke` | Quote one symbol through local IBKR paper Gateway |
 | `python tests/backward_check_energy_templates.py` | Re-run energy classifier against historical fills |
+| `npm run oracle:backtest -- --oracle-jsonl <file> [--outcomes-jsonl <file>]` | Replay saved oracle receipts against resolved outcomes; no live API calls |
 | `npm run s4:mock` | Offline mock S-4 dry run |
 | `npm run s4:scan` | One read-only live-feed S-4 scan in dry-run mode |
 
@@ -268,6 +280,7 @@ Arc Testnet commands that require `.env` credentials and funded testnet wallets:
 | Runtime and judge | `agent/runtime.py`, `agent/judge.py` |
 | Signal and routing | `agent/arb_identifier.py`, `agent/surface_router.py` |
 | Scorer bridge | `agent/scorer_bridge.py` |
+| Oracle backtest | `agent/oracle_backtest.py` |
 | Polymarket read-only scanner | `adapters/polymarket.py` |
 | Energy classifier | `templates/energy/classifier.py`, `templates/energy/keywords.yaml` |
 | Arc/Circle adapter | `agent/on_chain.py`, `contracts/arc_addresses.py`, `contracts/arc_addresses.ts` |
@@ -290,6 +303,7 @@ npm run smoke         -> 0.01 USDC self-transfer completed on Arc Testnet
 npm run register-agent -> desk_agent_id 9931 confirmed; logs/identity.tsv present
 npm run s4:testnet:mock -> job 17884 wrapped, submitted, completed, feedback sent
 npm run phase4:live   -> job 19091 wrapped/settled from live multi-surface pass
+npm run oracle:backtest -- --oracle-jsonl <fixture> -> offline harness covered by tests
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```
