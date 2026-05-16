@@ -26,3 +26,22 @@ def test_paper_fill_falls_back_to_last_when_bid_zero():
     with patch("adapters.crypto.fetch_ticker", return_value=_quote(bid=0, ask=0)):
         fr = crypto.paper_fill("BTC/USD", "short", notional_usdc=10.0)
     assert fr["entry_price"] == 60050.0
+
+
+def test_coinbase_quote_is_cache_serializable(monkeypatch, tmp_path):
+    from feeds import coinbase
+
+    class FakeExchange:
+        def fetch_ticker(self, symbol):
+            return {
+                "bid": 60000.0,
+                "ask": 60100.0,
+                "last": 60050.0,
+                "timestamp": 1,
+            }
+
+    monkeypatch.setattr(coinbase, "_client", lambda: FakeExchange())
+    q1 = coinbase.fetch_ticker("UNIT-TEST/USD", ttl=60)
+    q2 = coinbase.fetch_ticker("UNIT-TEST/USD", ttl=60)
+    assert q1.symbol == "UNIT-TEST/USD"
+    assert q1 == q2

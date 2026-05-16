@@ -38,10 +38,14 @@ Implemented and tested:
   `npm run s4:testnet:mock` produced one mock arb signal, one Polymarket S-4
   candidate, judge `EXECUTE`, ERC-8183 wrap, submit, `complete()` settlement,
   and ERC-8004 feedback.
+- Phase 4 / Block 5 live multi-surface one-shot is complete: `npm run
+  phase4:live` fetched live feeds, routed 11 candidates across crypto, IBKR,
+  and Polymarket, selected `crypto/BTC/USD`, judge returned `EXECUTE`, and one
+  ERC-8183 job was wrapped, submitted, completed, and given feedback.
 
-Latest local public testnet proof: ERC-8183 job `16129` was created, funded,
-submitted, completed, and given ERC-8004 feedback on Arc Testnet. Runtime logs
-and credentials remain ignored under `.env` and `logs/`.
+Latest local public testnet proof: Phase 4 ERC-8183 job `19091` was created,
+funded, submitted, completed, and given ERC-8004 feedback on Arc Testnet.
+Runtime logs and credentials remain ignored under `.env` and `logs/`.
 
 Latest Phase 0 USDC smoke tx:
 `https://testnet.arcscan.app/tx/0x3fbd69c6c99211d1086d56adbc821f6e6aaaef78b48538eb943840a346069678`.
@@ -63,6 +67,19 @@ reason hash `0x5c806b9388d86c7620b20373d03eced18f37022b6b0385f06684f0e7a7a41a7a`
 - complete: `https://testnet.arcscan.app/tx/0x6a0796757192dd5670c069e8093198495708271ad5b3d209cab29ceeb393cb76`
 - feedback: `https://testnet.arcscan.app/tx/0xd10ebc83f34be7b71de95d821d14429913ee648c71ce4e217b70d5c562ab6b40`
 
+Latest Phase 4 live multi-surface proof: job `19091`, surface `crypto`,
+instrument `BTC/USD`, deliverable hash
+`0x8b16ce661f18e0e3283f1a70b48550a9f34c18f157ead03f7c3b2b29cfdfa221`,
+reason hash `0x5c806b9388d86c7620b20373d03eced18f37022b6b0385f06684f0e7a7a41a7a`.
+
+- createJob: `https://testnet.arcscan.app/tx/0xee545e01fa19d60ddc268360def58db2e258cd4e767b6da4e72087495b2cbe91`
+- setBudget: `https://testnet.arcscan.app/tx/0xc85c235b14a8511774e03954c9feedf5f3fcfb624745a46710db18d41937b924`
+- approve: `https://testnet.arcscan.app/tx/0xc1dc8809858ecc4d616ee5fd009fd348df21f570e811e6a79d6f0d1d8a5d1856`
+- fund: `https://testnet.arcscan.app/tx/0xdaa1a4d3902bb322daac8ae1773cccc7bdeb4ebde413e31292a6db7c67880513`
+- submit: `https://testnet.arcscan.app/tx/0x657dec2f2cec0425c1d754c60547a531bef3b7e5ac031487090307adda42192a`
+- complete: `https://testnet.arcscan.app/tx/0x10d7128b7598a41ab44b7ca02a9f3c9e3ff03e3ff329f9017e32035460ec7eb5`
+- feedback: `https://testnet.arcscan.app/tx/0xe70fe81a4a2e21519cb31ce1bba5cab938ea48a6eaeea7c80ba246749842c68a`
+
 Authoritative context:
 
 - `../AGENTS.md`
@@ -83,6 +100,9 @@ energy signal
   -> Arc ERC-8183 wrap only if verdict == EXECUTE
   -> optional submit/complete/feedback settlement pass
 ```
+
+Phase 4 adds an explicit `--multi-surface` one-shot mode for live paper
+surfaces. It still exits after one pass and defaults to `max_positions=1`.
 
 The Polymarket adapter is read-only. It snapshots event prices and canonical
 candidate data for the Arc audit trail. It does not place Polymarket orders.
@@ -106,13 +126,14 @@ Deferred out of v0:
 - LLM judge
 - daemon or long-running loop mode
 - real Polymarket order placement
+- polling `--scan` loop, idle policy, and 429/503/RPC-timeout recovery
 - Hyperliquid execution
 - legal securitization or tranching
 - Arc Mainnet deployment
 
-The broader IBKR, crypto, and Kalshi adapters remain in the repo for later
-phases and tests, but v0 runtime execution filters to the S-4 Polymarket
-surface.
+IBKR and crypto are paper-only surfaces in the explicit Phase 4
+`--multi-surface` one-shot path. Kalshi and live external venue execution remain
+deferred.
 
 The current EIA adapter uses EIA's public electricity data as an ERCOT/TX
 electricity price proxy. A true ERCOT real-time LMP adapter is still deferred
@@ -142,6 +163,7 @@ Arc Testnet commands that require `.env` credentials and funded testnet wallets:
 | `npm run submit-outcome -- --job <id> --outcome-blob-path <file>` | Submit a canonical outcome blob hash |
 | `npm run settle-position -- --job <id> --verdict-blob-path <file> --action complete` | Complete and give feedback |
 | `npm run s4:testnet:mock` | One mock S-4 Arc Testnet wrap and settle after judge `EXECUTE` |
+| `npm run phase4:live` | One live-feed multi-surface pass; wraps and settles one judge-approved paper candidate |
 
 ## Safety Invariants
 
@@ -166,6 +188,7 @@ Arc Testnet commands that require `.env` credentials and funded testnet wallets:
 | Polymarket read-only scanner | `adapters/polymarket.py` |
 | Energy classifier | `templates/energy/classifier.py`, `templates/energy/keywords.yaml` |
 | Arc/Circle adapter | `agent/on_chain.py`, `contracts/arc_addresses.py`, `contracts/arc_addresses.ts` |
+| Live/paper adapters | `adapters/polymarket.py`, `adapters/ibkr.py`, `adapters/crypto.py` |
 | ERC-8183 jobs | `jobs/open_position.ts`, `jobs/submit_outcome.ts`, `jobs/settle_position.ts` |
 | ERC-8004 identity | `identity/register_agent.ts`, `identity/agent-metadata.json` |
 | Tests | `tests/` |
@@ -176,13 +199,14 @@ Arc Testnet commands that require `.env` credentials and funded testnet wallets:
 Most recent local verification:
 
 ```text
-npm test              -> 75 passed
+npm test              -> 78 passed
 npm run typecheck     -> passed
 npm run ibkr:smoke    -> GOOGL quote returned through local paper Gateway
 npm run feeds:smoke   -> EIA ERCOT/TX proxy + AWS p4d us-east-1 spot returned
 npm run smoke         -> 0.01 USDC self-transfer completed on Arc Testnet
 npm run register-agent -> desk_agent_id 9931 confirmed; logs/identity.tsv present
 npm run s4:testnet:mock -> job 17884 wrapped, submitted, completed, feedback sent
+npm run phase4:live   -> job 19091 wrapped/settled from live multi-surface pass
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```

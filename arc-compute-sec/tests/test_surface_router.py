@@ -26,6 +26,63 @@ def test_route_elec_expensive_emits_equity_and_crypto():
     assert "crypto" in surfaces
 
 
+def test_runtime_multi_surface_keeps_all_surfaces(monkeypatch):
+    from agent import runtime
+
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE, z=-2.0)
+    monkeypatch.setattr(
+        runtime,
+        "_polymarket_events_for_signal",
+        lambda signal, live_scan: [{
+            "id": "energy",
+            "slug": "wti",
+            "title": "Will WTI > $90?",
+            "yes_prices": [0.55, 0.50],
+            "energy_template_id": "energy_oil_price",
+            "premium": 0.05,
+            "scorer_result": {"passes_gate": True, "premium": 0.05},
+        }],
+    )
+
+    cands = runtime._candidates_for_signal(
+        sig,
+        live_scan=True,
+        multi_surface=True,
+        sizing_equity=1.0,
+        sizing_crypto=1.0,
+        sizing_polymarket=1.0,
+    )
+    surfaces = {c.surface for c in cands}
+    assert {"polymarket", "ibkr", "crypto"} <= surfaces
+
+
+def test_runtime_default_scan_remains_polymarket_only(monkeypatch):
+    from agent import runtime
+
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE, z=-2.0)
+    monkeypatch.setattr(
+        runtime,
+        "_polymarket_events_for_signal",
+        lambda signal, live_scan: [{
+            "id": "energy",
+            "slug": "wti",
+            "yes_prices": [0.55, 0.50],
+            "energy_template_id": "energy_oil_price",
+            "scorer_result": {"passes_gate": True, "premium": 0.05},
+        }],
+    )
+
+    cands = runtime._candidates_for_signal(
+        sig,
+        live_scan=True,
+        multi_surface=False,
+        sizing_equity=1.0,
+        sizing_crypto=1.0,
+        sizing_polymarket=1.0,
+    )
+    assert {c.surface for c in cands} == {"polymarket"}
+
+
 def test_polymarket_uses_yes_prices_for_pnl():
     sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE)
     events = [{

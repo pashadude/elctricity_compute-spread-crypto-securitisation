@@ -5,7 +5,7 @@ by the arb_identifier as an aux compute-side signal (miner economics).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Iterable
 
 import ccxt
@@ -41,7 +41,7 @@ def fetch_ticker(symbol: str = "BTC/USD", ttl: float = 30.0) -> CryptoQuote:
     last = float(t.get("last") or 0.0)
     ts = int(t.get("timestamp") or 0)
     quote = CryptoQuote(symbol=symbol, bid=bid, ask=ask, last=last, timestamp_ms=ts)
-    cache.put("coinbase_ticker", symbol, quote.__dict__, ttl_seconds=ttl)
+    cache.put("coinbase_ticker", symbol, asdict(quote), ttl_seconds=ttl)
     return quote
 
 

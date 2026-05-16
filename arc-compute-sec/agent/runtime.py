@@ -232,6 +232,28 @@ def _polymarket_candidates(
     return [c for c in candidates if c.surface == "polymarket"]
 
 
+def _candidates_for_signal(
+    signal: arb_identifier.ArbSignal,
+    *,
+    live_scan: bool,
+    multi_surface: bool,
+    sizing_equity: float,
+    sizing_crypto: float,
+    sizing_polymarket: float,
+) -> list[surface_router.Candidate]:
+    events = _polymarket_events_for_signal(signal, live_scan=live_scan)
+    candidates = surface_router.route(
+        signal,
+        polymarket_events=events,
+        sizing_per_equity_usdc=sizing_equity if multi_surface else 0.0,
+        sizing_crypto_usdc=sizing_crypto if multi_surface else 0.0,
+        sizing_polymarket_usdc=sizing_polymarket,
+    )
+    if multi_surface:
+        return candidates
+    return [c for c in candidates if c.surface == "polymarket"]
+
+
 def _settle_outcome_blob(candidate_dict: dict, fill_report: dict, action: str,
                          reason_code: str) -> tuple[bytes, bytes]:
     """Return (outcome_blob_bytes, reason_blob_bytes).
@@ -335,6 +357,8 @@ def wrap_position(candidate: surface_router.Candidate, fill_report: dict[str, An
     expired_at = int(time.time()) + int(expires_seconds)
     desk_addr = identity["desk_wallet_addr"]
     judge_addr = identity["judge_wallet_addr"]
+    if not client_addr:
+        raise RuntimeError("identity row missing client_wallet_addr; run Phase 2 open-position setup first")
     top_up = on_chain.ensure_client_usdc(
         desk_wallet_id=desk_id,
         client_wallet_id=client_id,
@@ -497,7 +521,20 @@ def process_candidates(
 def run_once(args: argparse.Namespace) -> int:
     """One scan-and-act cycle."""
     # 1. Acquire signal.
-    if args.force_signal is not None:
+    if args.scan:
+        pt = _live_spread()
+        signal = arb_identifier.score_signal(
+            pt,
+            threshold_z=args.z_threshold,
+            forced=float(args.force_signal) if args.force_signal is not None else None,
+            persist=not args.no_persist,
+        )
+        if signal is None:
+            print(f"[runtime] z below threshold {args.z_threshold}; nothing to do "
+                  f"(S_t={pt.S_t:.4f}, elec={pt.electricity_per_mwh:.2f}, "
+                  f"compute={pt.compute_per_gpu_hr:.4f}).")
+            return 0
+    elif args.force_signal is not None:
         # Build a synthetic point so downstream still has region info.
         pt = arb_identifier.compute_spread(
             electricity_per_mwh=float(args.mock_elec or 80.0),
@@ -507,15 +544,6 @@ def run_once(args: argparse.Namespace) -> int:
         signal = arb_identifier.score_signal(pt, threshold_z=0.0,
                                               forced=float(args.force_signal),
                                               persist=not args.no_persist)
-    elif args.scan:
-        pt = _live_spread()
-        signal = arb_identifier.score_signal(pt, threshold_z=args.z_threshold,
-                                              persist=not args.no_persist)
-        if signal is None:
-            print(f"[runtime] z below threshold {args.z_threshold}; nothing to do "
-                  f"(S_t={pt.S_t:.4f}, elec={pt.electricity_per_mwh:.2f}, "
-                  f"compute={pt.compute_per_gpu_hr:.4f}).")
-            return 0
     elif args.once:
         pt = arb_identifier.compute_spread(
             electricity_per_mwh=float(args.mock_elec or 80.0),
@@ -531,15 +559,21 @@ def run_once(args: argparse.Namespace) -> int:
     assert signal is not None
     print(f"[runtime] signal {signal.signal_id}: direction={signal.direction} z={signal.z:.3f}")
 
-    # 2. Route to S-4 Polymarket candidates only. Broader surface routing
-    # remains in `surface_router.py` for later phases, but v0 does not execute
-    # equities, crypto, Kalshi, Hyperliquid, or real Polymarket orders.
-    candidates = _polymarket_candidates(
+    # 2. Route candidates. Default v0 remains S-4 Polymarket only. Phase 4
+    # uses --multi-surface for one-shot live paper surfaces; no daemon loop.
+    candidates = _candidates_for_signal(
         signal,
         live_scan=bool(args.scan),
-        sizing_usdc=args.sizing_polymarket,
+        multi_surface=bool(args.multi_surface),
+        sizing_equity=args.sizing_equity,
+        sizing_crypto=args.sizing_crypto,
+        sizing_polymarket=args.sizing_polymarket,
     )
-    print(f"[runtime] {len(candidates)} S-4 Polymarket candidates")
+    if args.multi_surface:
+        surfaces = ", ".join(sorted({c.surface for c in candidates})) or "none"
+        print(f"[runtime] {len(candidates)} multi-surface candidates ({surfaces})")
+    else:
+        print(f"[runtime] {len(candidates)} S-4 Polymarket candidates")
     if not candidates:
         return 0
 
@@ -614,6 +648,7 @@ def scan_once(
         sizing_equity=0.0,
         sizing_crypto=0.0,
         sizing_polymarket=sizing_polymarket,
+        multi_surface=False,
         max_actions=max_positions,
         expires=600,
         dry_run=dry_run,
@@ -640,6 +675,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sizing-equity", type=float, default=1.0)
     parser.add_argument("--sizing-crypto", type=float, default=1.0)
     parser.add_argument("--sizing-polymarket", type=float, default=1.0)
+    parser.add_argument("--multi-surface", action="store_true",
+                        help="One-shot Phase 4 route across Polymarket, IBKR paper, and crypto paper")
     parser.add_argument("--max-positions", "--max-actions", dest="max_actions", type=int, default=1,
                         help="Maximum wrapped positions for this one-shot run (default: 1)")
     parser.add_argument("--expires", type=int, default=600,
