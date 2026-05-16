@@ -48,6 +48,14 @@ class OracleCase:
 
 
 @dataclass(frozen=True, slots=True)
+class OutcomeJoin:
+    resolved_outcome: str
+    candidate_outcome: str | None = None
+    side: str | None = None
+    realized_pnl: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CaseScore:
     key: str
     resolved_outcome: str
@@ -84,6 +92,15 @@ def _key(record: dict[str, Any]) -> str:
     raise ValueError("record missing candidate_id/event_id/event_slug key")
 
 
+def _optional_str(record: dict[str, Any], *fields: str, upper: bool = False) -> str | None:
+    for field in fields:
+        value = record.get(field)
+        if value is not None and value != "":
+            out = str(value)
+            return out.upper() if upper else out
+    return None
+
+
 def _keys(record: dict[str, Any]) -> list[str]:
     keys: list[str] = []
     for field in ("candidate_id", "event_id", "event_slug", "slug", "market"):
@@ -91,6 +108,49 @@ def _keys(record: dict[str, Any]) -> list[str]:
         if value:
             keys.append(str(value))
     return keys
+
+
+def _resolved_outcome(record: dict[str, Any]) -> str | None:
+    return _optional_str(
+        record,
+        "resolved_outcome",
+        "resolution",
+        "winning_outcome",
+        "actual_outcome",
+        "final_outcome",
+    )
+
+
+def _candidate_outcome(record: dict[str, Any]) -> str | None:
+    return _optional_str(
+        record,
+        "candidate_outcome",
+        "target_outcome",
+        "market_outcome",
+        "outcome",
+    )
+
+
+def _side(record: dict[str, Any]) -> str | None:
+    return _optional_str(record, "side", "position_side", "direction", upper=True)
+
+
+def _realized_pnl(record: dict[str, Any]) -> float | None:
+    for field in ("realized_pnl", "actual_pnl", "pnl", "realized_pnl_per_dollar"):
+        value = _as_float(record.get(field))
+        if value is not None:
+            return value
+    return None
+
+
+def _probability_label(probabilities: dict[str, float], outcome: str) -> str | None:
+    if outcome in probabilities:
+        return outcome
+    outcome_lower = outcome.lower()
+    for label in probabilities:
+        if label.lower() == outcome_lower:
+            return label
+    return None
 
 
 def _probabilities(record: dict[str, Any]) -> dict[str, float]:
@@ -147,25 +207,74 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def load_outcomes(path: Path | None) -> dict[str, str]:
+def _merge_outcome_join(existing: OutcomeJoin, incoming: OutcomeJoin, *, key: str) -> OutcomeJoin:
+    if existing.resolved_outcome != incoming.resolved_outcome:
+        raise ValueError(
+            f"conflicting resolved_outcome for {key}: "
+            f"{existing.resolved_outcome!r} != {incoming.resolved_outcome!r}"
+        )
+
+    def choose(field: str, a: Any, b: Any) -> Any:
+        if a is None:
+            return b
+        if b is None:
+            return a
+        if a != b:
+            raise ValueError(f"conflicting {field} for {key}: {a!r} != {b!r}")
+        return a
+
+    return OutcomeJoin(
+        resolved_outcome=existing.resolved_outcome,
+        candidate_outcome=choose(
+            "candidate_outcome",
+            existing.candidate_outcome,
+            incoming.candidate_outcome,
+        ),
+        side=choose("side", existing.side, incoming.side),
+        realized_pnl=choose("realized_pnl", existing.realized_pnl, incoming.realized_pnl),
+    )
+
+
+def load_outcomes(path: Path | None) -> dict[str, OutcomeJoin]:
     if path is None:
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, OutcomeJoin] = {}
     for record in load_jsonl(path):
-        resolved = record.get("resolved_outcome") or record.get("resolution")
+        resolved = _resolved_outcome(record)
         if resolved is None:
             raise ValueError(f"outcome record missing resolved_outcome: {record}")
-        for field in ("candidate_id", "event_id", "event_slug", "slug", "market"):
-            value = record.get(field)
-            if value:
-                out[str(value)] = str(resolved)
+        joined = OutcomeJoin(
+            resolved_outcome=resolved,
+            candidate_outcome=_candidate_outcome(record),
+            side=_side(record),
+            realized_pnl=_realized_pnl(record),
+        )
+        keys = _keys(record)
+        if not keys:
+            raise ValueError(f"outcome record missing candidate_id/event_id/event_slug key: {record}")
+        for key in keys:
+            if key in out:
+                out[key] = _merge_outcome_join(out[key], joined, key=key)
+            else:
+                out[key] = joined
     return out
+
+
+def _lookup_outcome_join(
+    record: dict[str, Any],
+    outcome_map: dict[str, OutcomeJoin],
+) -> OutcomeJoin | None:
+    for candidate_key in _keys(record):
+        joined = outcome_map.get(candidate_key)
+        if joined is not None:
+            return joined
+    return None
 
 
 def parse_cases(
     records: Iterable[dict[str, Any]],
     *,
-    outcomes: dict[str, str] | None = None,
+    outcomes: dict[str, OutcomeJoin] | None = None,
     include_critic_fail: bool = False,
 ) -> tuple[list[OracleCase], list[str]]:
     """Return valid cases and skip reasons.
@@ -183,31 +292,38 @@ def parse_cases(
             if not critic_passed and not include_critic_fail:
                 skips.append(f"{idx}:{key}:critic_failed")
                 continue
-            resolved = record.get("resolved_outcome") or record.get("resolution")
-            if resolved is None:
-                for candidate_key in _keys(record):
-                    resolved = outcome_map.get(candidate_key)
-                    if resolved is not None:
-                        break
+            joined = _lookup_outcome_join(record, outcome_map)
+            resolved = _resolved_outcome(record)
+            if resolved is not None and joined is not None and resolved != joined.resolved_outcome:
+                skips.append(f"{idx}:{key}:outcome_conflict")
+                continue
+            if resolved is None and joined is not None:
+                resolved = joined.resolved_outcome
             if resolved is None:
                 skips.append(f"{idx}:{key}:missing_resolution")
                 continue
             probs = _probabilities(record)
-            resolved_s = str(resolved)
-            if resolved_s not in probs:
+            resolved_s = _probability_label(probs, str(resolved))
+            if resolved_s is None:
                 skips.append(f"{idx}:{key}:resolution_not_in_probabilities")
                 continue
-            realized_pnl = _as_float(record.get("realized_pnl"))
+            candidate_outcome = _candidate_outcome(record)
+            if candidate_outcome is None and joined is not None:
+                candidate_outcome = joined.candidate_outcome
+            if candidate_outcome is not None:
+                candidate_outcome = _probability_label(probs, candidate_outcome)
+            side = _side(record)
+            if side is None and joined is not None:
+                side = joined.side
+            realized_pnl = _realized_pnl(record)
+            if realized_pnl is None and joined is not None:
+                realized_pnl = joined.realized_pnl
             cases.append(OracleCase(
                 key=key,
                 probabilities=probs,
                 resolved_outcome=resolved_s,
-                candidate_outcome=(
-                    str(record["candidate_outcome"])
-                    if record.get("candidate_outcome") is not None
-                    else None
-                ),
-                side=(str(record["side"]).upper() if record.get("side") is not None else None),
+                candidate_outcome=candidate_outcome,
+                side=side,
                 confidence=_confidence(record),
                 realized_pnl=realized_pnl,
                 critic_passed=critic_passed,
@@ -215,6 +331,52 @@ def parse_cases(
         except ValueError as exc:
             skips.append(f"{idx}:invalid:{exc}")
     return cases, skips
+
+
+def missing_outcome_stubs(
+    records: Iterable[dict[str, Any]],
+    *,
+    outcomes: dict[str, OutcomeJoin] | None = None,
+) -> list[dict[str, Any]]:
+    outcome_map = outcomes or {}
+    stubs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        try:
+            key = _key(record)
+            if _resolved_outcome(record) is not None or _lookup_outcome_join(record, outcome_map):
+                continue
+        except ValueError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        stub: dict[str, Any] = {"key": key, "resolved_outcome": None}
+        for field in ("candidate_id", "event_id", "event_slug", "slug", "market"):
+            if record.get(field):
+                stub[field] = record[field]
+        if record.get("event_title"):
+            stub["event_title"] = record["event_title"]
+        if record.get("ts"):
+            stub["oracle_ts"] = record["ts"]
+        candidate = _candidate_outcome(record)
+        if candidate is not None:
+            stub["candidate_outcome"] = candidate
+        side = _side(record)
+        if side is not None:
+            stub["side"] = side
+        try:
+            stub["probability_outcomes"] = sorted(_probabilities(record))
+        except ValueError:
+            stub["probability_outcomes"] = []
+        stubs.append(stub)
+    return stubs
+
+
+def write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def score_case(
@@ -386,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Write metrics JSON to this path")
     parser.add_argument("--scores-out", type=Path,
                         help="Write per-case scores JSONL to this path")
+    parser.add_argument("--missing-outcomes-out", type=Path,
+                        help="Write fillable JSONL stubs for oracle rows still missing outcomes")
     args = parser.parse_args(argv)
 
     metrics, scores, skips = run_backtest(
@@ -405,6 +569,13 @@ def main(argv: list[str] | None = None) -> int:
         with args.scores_out.open("w", encoding="utf-8") as fh:
             for score in scores:
                 fh.write(json.dumps(asdict(score), sort_keys=True) + "\n")
+    if args.missing_outcomes_out:
+        records = load_jsonl(args.oracle_jsonl)
+        outcomes = load_outcomes(args.outcomes_jsonl)
+        write_jsonl(
+            args.missing_outcomes_out,
+            missing_outcome_stubs(records, outcomes=outcomes),
+        )
     return 0
 
 

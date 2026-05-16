@@ -108,6 +108,95 @@ def test_parse_can_join_outcomes_from_separate_jsonl(tmp_path):
     assert scores[0].candidate_win is False
 
 
+def test_outcome_join_enriches_candidate_metadata(tmp_path):
+    oracle_path = tmp_path / "oracle.jsonl"
+    outcomes_path = tmp_path / "outcomes.jsonl"
+    oracle_path.write_text(json.dumps({
+        "event_slug": "evt-rich-join",
+        "analyst": {"probabilities": {"YES": 0.80, "NO": 0.20}},
+        "critic": {"passed": True},
+    }) + "\n")
+    outcomes_path.write_text(json.dumps({
+        "event_slug": "evt-rich-join",
+        "resolved_outcome": "YES",
+        "candidate_outcome": "YES",
+        "side": "NO",
+        "realized_pnl": -0.12,
+    }) + "\n")
+
+    metrics, scores, skips = ob.run_backtest(
+        oracle_jsonl=oracle_path,
+        outcomes_jsonl=outcomes_path,
+        no_veto_threshold=0.10,
+    )
+
+    assert skips == []
+    assert metrics["scored"] == 1
+    assert metrics["candidate_scored"] == 1
+    assert metrics["losses_filtered"] == 1
+    assert metrics["oracle_saved_pnl_by_veto"] == 0.12
+    assert scores[0].candidate_outcome == "YES"
+    assert scores[0].side == "NO"
+    assert scores[0].realized_pnl == -0.12
+
+
+def test_outcome_join_rejects_conflicting_resolutions(tmp_path):
+    outcomes_path = tmp_path / "outcomes.jsonl"
+    outcomes_path.write_text(
+        json.dumps({"event_id": "evt-conflict", "resolved_outcome": "YES"}) + "\n"
+        + json.dumps({"event_id": "evt-conflict", "resolved_outcome": "NO"}) + "\n"
+    )
+
+    try:
+        ob.load_outcomes(outcomes_path)
+    except ValueError as exc:
+        assert "conflicting resolved_outcome" in str(exc)
+    else:
+        raise AssertionError("expected conflicting outcome labels to fail")
+
+
+def test_missing_outcome_stubs_are_fillable_and_deduplicated(tmp_path):
+    oracle_path = tmp_path / "oracle.jsonl"
+    missing_path = tmp_path / "missing.jsonl"
+    oracle_path.write_text(
+        json.dumps({
+            "candidate_id": "cand-missing",
+            "event_id": "evt-missing",
+            "event_slug": "slug-missing",
+            "event_title": "Will energy prices spike?",
+            "candidate_outcome": "YES",
+            "side": "NO",
+            "analyst": {"probabilities": {"YES": 0.65, "NO": 0.35}},
+        }) + "\n"
+        + json.dumps({
+            "candidate_id": "cand-missing",
+            "event_id": "evt-missing",
+            "analyst": {"probabilities": {"YES": 0.65, "NO": 0.35}},
+        }) + "\n"
+        + json.dumps({
+            "event_id": "evt-resolved",
+            "resolved_outcome": "NO",
+            "analyst": {"probabilities": {"YES": 0.40, "NO": 0.60}},
+        }) + "\n"
+    )
+
+    records = ob.load_jsonl(oracle_path)
+    ob.write_jsonl(missing_path, ob.missing_outcome_stubs(records))
+    stubs = [json.loads(line) for line in missing_path.read_text().splitlines()]
+
+    assert stubs == [{
+        "candidate_id": "cand-missing",
+        "candidate_outcome": "YES",
+        "event_id": "evt-missing",
+        "event_slug": "slug-missing",
+        "event_title": "Will energy prices spike?",
+        "key": "cand-missing",
+        "probability_outcomes": ["NO", "YES"],
+        "resolved_outcome": None,
+        "side": "NO",
+    }]
+
+
 def test_invalid_probability_sum_is_skipped():
     records = [{
         "event_id": "evt-bad",

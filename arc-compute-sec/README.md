@@ -95,6 +95,20 @@ Brier score, top-1 hit rate, and whether the oracle would have vetoed winning
 or losing candidates. The oracle remains evidence only; it does not replace the
 premium scorer, energy classifier, judge, or Arc execution gate.
 
+Outcome labels are joined explicitly from JSONL, not hidden state. If oracle
+receipts do not carry `resolved_outcome`, run the backtest with
+`--missing-outcomes-out <file>` to generate fillable stubs keyed by
+`candidate_id`, `event_id`, and/or `event_slug`; fill `resolved_outcome` and,
+when available, `candidate_outcome`, `side`, and `realized_pnl`, then pass that
+file back through `--outcomes-jsonl`.
+
+For the actual Phase 3 energy backward-window data, use
+`npm run oracle:energy-backtest`. It replays `data/master_fills_v4.tsv` through
+the current energy classifier and the S-4 non-negative premium gate. On the
+current local file, the baseline 122 energy-classified fills become 99
+oracle-kept fills with 100.0% WR and +152.026 PnL; the oracle vetoes 23 fills
+whose combined PnL is -95.596.
+
 ## Current State
 
 Implemented and tested:
@@ -133,6 +147,9 @@ Implemented and tested:
   ERC-8183 job was wrapped, submitted, completed, and given feedback.
 - Offline oracle backtest harness exists at `agent/oracle_backtest.py`; it
   evaluates saved oracle JSONL only and makes no live Opoint/Nebius calls.
+- Phase 3 energy oracle verifier exists at `agent/energy_oracle_backtest.py`;
+  it verifies the historical energy classifier results under the v0 premium
+  gate using local fills only.
 
 Latest local public testnet proof: Phase 4 ERC-8183 job `19091` was created,
 funded, submitted, completed, and given ERC-8004 feedback on Arc Testnet.
@@ -245,6 +262,8 @@ Safe offline checks:
 | `npm run ibkr:smoke` | Quote one symbol through local IBKR paper Gateway |
 | `python tests/backward_check_energy_templates.py` | Re-run energy classifier against historical fills |
 | `npm run oracle:backtest -- --oracle-jsonl <file> [--outcomes-jsonl <file>]` | Replay saved oracle receipts against resolved outcomes; no live API calls |
+| `npm run oracle:backtest -- --oracle-jsonl <file> --missing-outcomes-out <file>` | Generate fillable outcome stubs for unresolved oracle receipts; no live API calls |
+| `npm run oracle:energy-backtest` | Verify Phase 3 energy historical fills under the S-4 premium-gated oracle policy |
 | `npm run s4:mock` | Offline mock S-4 dry run |
 | `npm run s4:scan` | One read-only live-feed S-4 scan in dry-run mode |
 
@@ -304,6 +323,7 @@ npm run register-agent -> desk_agent_id 9931 confirmed; logs/identity.tsv presen
 npm run s4:testnet:mock -> job 17884 wrapped, submitted, completed, feedback sent
 npm run phase4:live   -> job 19091 wrapped/settled from live multi-surface pass
 npm run oracle:backtest -- --oracle-jsonl <fixture> -> offline harness covered by tests
+npm run oracle:energy-backtest -> 122 baseline fills; 99 kept; WR 100.0%; PnL +152.026
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```

@@ -15,6 +15,7 @@
     "s4:mock": ".venv/bin/python -m agent.runtime --once --dry-run --no-persist",
     "s4:scan": ".venv/bin/python -m agent.runtime --scan --dry-run --max-positions 1 --no-persist",
     "oracle:backtest": ".venv/bin/python -m agent.oracle_backtest",
+    "oracle:energy-backtest": ".venv/bin/python -m agent.energy_oracle_backtest --master-fills-tsv data/master_fills_v4.tsv",
     "s4:testnet:mock": "set -a; source .env; set +a; .venv/bin/python -m agent.runtime --once --live --settle --max-positions 1 --expires 3600 --no-persist",
     "phase4:live": "set -a; source .env; set +a; .venv/bin/python -m agent.runtime --scan --live --settle --multi-surface --force-signal -2 --max-positions 1 --expires 3600 --no-persist",
     "register-agent": "tsx --env-file=.env identity/register_agent.ts",
