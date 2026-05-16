@@ -52,6 +52,24 @@ Use `$calibrating-pnl-estimates` when touching:
 - realized-vs-estimated PnL calibration
 - new surface PnL basis constants
 
+Use `$using-opoint-nebius-oracles` when touching:
+- Opoint news grounding
+- Nebius DeepSeek/Qwen analyst or critic calls
+- LLM oracle evidence blobs, caches, or audit logs
+- event probability vectors or news-grounded outcome metadata
+
+Use `$building-commodity-news-alphas` when touching:
+- commodity news taxonomies
+- per-article relevance, intensity, or sentiment scoring
+- commodity news aggregation
+- futures/outcome IC verification or alpha bakeoffs
+
+Use `$researching-energy-commodity-surfaces` when touching:
+- Brent, crude, natural gas, power, freight, refinery margin, or futures-curve research
+- energy physical-market features for compute/energy routing
+- Polymarket energy template research
+- IBKR/crypto paper surface research for energy signals
+
 Use `$improving-arb-skills` only for skill maintenance or documented self-improvement workflows.
 It must not weaken the premium gate, judge gate, credential rules, or on-chain execution rules.
 
