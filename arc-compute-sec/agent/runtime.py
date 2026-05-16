@@ -329,11 +329,21 @@ def wrap_position(candidate: surface_router.Candidate, fill_report: dict[str, An
         f"|signal={candidate.arb_signal_id}"
     )
     client_id = identity["client_wallet_id"]
+    client_addr = identity.get("client_wallet_addr", "")
     desk_id = identity["desk_wallet_id"]
     judge_id = identity["judge_wallet_id"]
     expired_at = int(time.time()) + int(expires_seconds)
     desk_addr = identity["desk_wallet_addr"]
     judge_addr = identity["judge_wallet_addr"]
+    top_up = on_chain.ensure_client_usdc(
+        desk_wallet_id=desk_id,
+        client_wallet_id=client_id,
+        client_wallet_addr=client_addr,
+        min_usdc=float(candidate.sizing_usdc),
+        top_up_usdc=max(2.0, float(candidate.sizing_usdc)),
+    )
+    if top_up is not None:
+        _log_chain_tx("client_top_up", "", top_up)
     created = on_chain.create_job(
         wallet_id=client_id,
         provider=desk_addr,

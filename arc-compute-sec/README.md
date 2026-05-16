@@ -34,6 +34,10 @@ Implemented and tested:
 - Phase 1 / Block 3 ERC-8004 desk identity is complete: `desk_owner` registered
   as desk agent `9931`, `judge_validator` validationRequest/Response rehearsal
   completed, and `logs/identity.tsv` is present locally.
+- Phase 2 / Block 4 ERC-8183 single-surface mock position is complete:
+  `npm run s4:testnet:mock` produced one mock arb signal, one Polymarket S-4
+  candidate, judge `EXECUTE`, ERC-8183 wrap, submit, `complete()` settlement,
+  and ERC-8004 feedback.
 
 Latest local public testnet proof: ERC-8183 job `16129` was created, funded,
 submitted, completed, and given ERC-8004 feedback on Arc Testnet. Runtime logs
@@ -47,6 +51,17 @@ Latest Phase 1 identity proofs:
 - register: `https://testnet.arcscan.app/tx/0x40c88f1c424fbaa94bd48f76f9ae6c7a001fd7cca54994eecccb9b776ebdc888`
 - validationRequest: `https://testnet.arcscan.app/tx/0x1952fa34f3d1928c271a6cdfdc8823f282db40a0a55e43ca2b081c185c5ec163`
 - validationResponse: `https://testnet.arcscan.app/tx/0xd3fac1597fa564b8e801613167e06175e7bc76d57e20b865a1fea6c7f44f09d4`
+
+Latest Phase 2 mock position proof: job `17884`, deliverable hash
+`0x164ab21cef572f4a8d69764d6432d0b8081c5b04f4810edd92125d80e910fcc6`,
+reason hash `0x5c806b9388d86c7620b20373d03eced18f37022b6b0385f06684f0e7a7a41a7a`.
+
+- createJob: `https://testnet.arcscan.app/tx/0x05bc9a9f5d692fb7c77384ac6a8c563062086c45405a4d7358bca92b165e9998`
+- setBudget: `https://testnet.arcscan.app/tx/0x5302eb98ed0bc52af57a1c1895f33b04385cd0f15aef2a9de03bdf224ff51f23`
+- fund: `https://testnet.arcscan.app/tx/0x0bb9d32c3615e860558403532275774ddf27ddd535dd91a16db78b6d4c16ebcd`
+- submit: `https://testnet.arcscan.app/tx/0xcd6fd00f338d9549ddb863199879398a20eedc87139cb8879b0ba8e64ab7c0e6`
+- complete: `https://testnet.arcscan.app/tx/0x6a0796757192dd5670c069e8093198495708271ad5b3d209cab29ceeb393cb76`
+- feedback: `https://testnet.arcscan.app/tx/0xd10ebc83f34be7b71de95d821d14429913ee648c71ce4e217b70d5c562ab6b40`
 
 Authoritative context:
 
@@ -75,6 +90,10 @@ candidate data for the Arc audit trail. It does not place Polymarket orders.
 Premium-gate failures become auditable `REJECT` judgements. Off-template
 non-energy events are dropped before scorer and judge. No fallback scorer path
 may disable the premium gate.
+
+Live wraps preflight the client wallet's USDC balance and top it up from the
+desk wallet when local client state is stale or underfunded. This funding
+preflight runs after the judge returns `EXECUTE` and before ERC-8183 job calls.
 
 ## What v0 Does Not Do
 
@@ -163,6 +182,7 @@ npm run ibkr:smoke    -> GOOGL quote returned through local paper Gateway
 npm run feeds:smoke   -> EIA ERCOT/TX proxy + AWS p4d us-east-1 spot returned
 npm run smoke         -> 0.01 USDC self-transfer completed on Arc Testnet
 npm run register-agent -> desk_agent_id 9931 confirmed; logs/identity.tsv present
+npm run s4:testnet:mock -> job 17884 wrapped, submitted, completed, feedback sent
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only
 git diff --check      -> passed
 ```

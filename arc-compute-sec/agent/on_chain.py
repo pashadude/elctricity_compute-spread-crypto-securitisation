@@ -73,19 +73,20 @@ def _circle_client():
     return client, developer_controlled_wallets
 
 
+def _as_dict(obj: Any) -> dict:
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if isinstance(obj, dict):
+        return obj
+    return dict(getattr(obj, "__dict__", {}) or {})
+
+
 def _w3():
     from web3 import Web3
     return Web3(Web3.HTTPProvider(RPC_HTTP, request_kwargs={"timeout": 30}))
 
 
 def _poll_tx(tx_api, circle_tx_id: str, timeout_s: float = POLL_TIMEOUT_S) -> dict:
-    def _as_dict(obj: Any) -> dict:
-        if hasattr(obj, "to_dict"):
-            return obj.to_dict()
-        if isinstance(obj, dict):
-            return obj
-        return dict(getattr(obj, "__dict__", {}) or {})
-
     def _tx_payload(resp_data: Any) -> dict:
         data = _as_dict(resp_data)
         tx = data.get("transaction")
@@ -252,6 +253,74 @@ def approve_usdc(wallet_id: str, spender: str, amount_usdc: float) -> ChainTx:
         abi_parameters=[spender, usdc6(amount_usdc)],
     )
     return wait_for_tx(cid, _ERC20_ABI, USDC)
+
+
+def _wallet_usdc(wallet_id: str) -> tuple[float, str | None]:
+    client, developer_controlled_wallets = _circle_client()
+    wallets_api = developer_controlled_wallets.WalletsApi(client)
+    resp = wallets_api.list_wallet_balance(id=wallet_id, include_all=True)
+    data = _as_dict(resp).get("data") or {}
+    balances = data.get("tokenBalances") or data.get("token_balances") or []
+    for bal in balances:
+        b = _as_dict(bal)
+        token = _as_dict(b.get("token") or {})
+        if str(token.get("symbol", "")).upper() != "USDC":
+            continue
+        try:
+            amount = float(b.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        return amount, token.get("id") or token.get("tokenId")
+    return 0.0, None
+
+
+def transfer_usdc(wallet_id: str, token_id: str, destination_addr: str,
+                  amount_usdc: float) -> ChainTx:
+    client, developer_controlled_wallets = _circle_client()
+    tx_api = developer_controlled_wallets.TransactionsApi(client)
+    req = developer_controlled_wallets.CreateTransferTransactionForDeveloperRequest.from_dict({
+        "idempotencyKey": str(uuid.uuid4()),
+        "walletId": wallet_id,
+        "destinationAddress": destination_addr,
+        "amounts": [f"{float(amount_usdc):.6f}".rstrip("0").rstrip(".")],
+        "tokenId": token_id,
+        "feeLevel": "MEDIUM",
+    })
+    resp = tx_api.create_developer_transaction_transfer(req)
+    circle_tx_id = resp.data.id
+    data = _poll_tx(tx_api, circle_tx_id)
+    tx_hash = data.get("txHash") or data.get("transactionHash")
+    if not tx_hash:
+        raise RuntimeError(f"Circle returned COMPLETE without txHash: {data}")
+    receipt = _get_receipt(tx_hash)
+    return ChainTx(
+        circle_tx_id=circle_tx_id,
+        tx_hash=tx_hash,
+        block_number=receipt.get("blockNumber"),
+        logs=[],
+    )
+
+
+def ensure_client_usdc(desk_wallet_id: str, client_wallet_id: str,
+                       client_wallet_addr: str, min_usdc: float,
+                       top_up_usdc: float = 2.0) -> ChainTx | None:
+    client_amount, _ = _wallet_usdc(client_wallet_id)
+    if client_amount >= min_usdc:
+        return None
+    desk_amount, token_id = _wallet_usdc(desk_wallet_id)
+    if not token_id:
+        raise RuntimeError("desk wallet has no discoverable USDC token id")
+    if desk_amount < top_up_usdc:
+        raise RuntimeError(
+            f"desk wallet has insufficient USDC to top up client "
+            f"(need {top_up_usdc}, have {desk_amount})"
+        )
+    return transfer_usdc(
+        wallet_id=desk_wallet_id,
+        token_id=token_id,
+        destination_addr=client_wallet_addr,
+        amount_usdc=top_up_usdc,
+    )
 
 
 def fund_job(wallet_id: str, job_id: int) -> ChainTx:
