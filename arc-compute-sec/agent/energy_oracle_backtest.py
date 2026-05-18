@@ -1,13 +1,13 @@
-"""Offline S-4 energy oracle verification over historical fill rows.
+"""Offline S-4 energy verification over historical fill rows.
 
 This is deliberately local and deterministic. It does not call Opoint, Nebius,
-Arc, Circle, Polymarket, IBKR, or any external API. The "oracle" verified here
-is the v0 desk's auditable pre-chain evidence stack over current repo data:
+Arc, Circle, Polymarket, IBKR, or any external API. By default it verifies the
+v0 desk's hard pre-chain premium gate over current repo data:
 
     historical fill -> energy classifier -> S-4 non-negative premium gate
 
-The output answers whether the Phase 3 backward-window energy figures improve
-once the v0 premium-gated oracle policy is applied.
+When `--llm-receipts-jsonl` is supplied, it also overlays saved Opoint+Nebius
+LLM oracle receipts and scores those decisions against resolved fills.
 """
 from __future__ import annotations
 
@@ -41,6 +41,14 @@ class OracleFill:
     gate_premium: float
     oracle_verdict: str
     reason_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LlmDecision:
+    verdict: str
+    p_yes: float | None
+    reason_code: str | None
+    receipt: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,21 +142,116 @@ def _by_template(rows: Iterable[OracleFill]) -> dict[str, SegmentMetrics]:
     return {template: metrics(items) for template, items in sorted(grouped.items())}
 
 
-def summarize(fills: list[OracleFill]) -> dict[str, Any]:
+def _fill_keys(fill: OracleFill) -> list[str]:
+    return [x for x in (fill.condition_id, fill.slug, fill.event_slug) if x]
+
+
+def _receipt_keys(record: dict[str, Any]) -> list[str]:
+    return [
+        str(x)
+        for x in (
+            record.get("condition_id"),
+            record.get("slug"),
+            record.get("event_slug"),
+        )
+        if x
+    ]
+
+
+def load_llm_decisions(path: Path | None) -> dict[str, LlmDecision]:
+    if path is None:
+        return {}
+    decisions: dict[str, LlmDecision] = {}
+    with path.open("r", encoding="utf-8") as fh:
+        for line_no, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{line_no}: expected JSON object")
+            verdict = str(record.get("verdict") or "").upper()
+            if verdict not in {"KEEP", "VETO", "DEFER"}:
+                raise ValueError(f"{path}:{line_no}: invalid LLM verdict {verdict!r}")
+            p_yes = _as_float(record.get("p_yes")) if record.get("p_yes") is not None else None
+            decision = LlmDecision(
+                verdict=verdict,
+                p_yes=p_yes,
+                reason_code=str(record.get("reason_code") or "") or None,
+                receipt=record,
+            )
+            keys = _receipt_keys(record)
+            if not keys:
+                raise ValueError(f"{path}:{line_no}: missing condition_id/slug/event_slug")
+            for key in keys:
+                decisions[key] = decision
+    return decisions
+
+
+def _lookup_llm(fill: OracleFill, decisions: dict[str, LlmDecision]) -> LlmDecision | None:
+    for key in _fill_keys(fill):
+        decision = decisions.get(key)
+        if decision is not None:
+            return decision
+    return None
+
+
+def _summarize_llm_overlay(
+    fills: list[OracleFill],
+    decisions: dict[str, LlmDecision],
+) -> dict[str, Any] | None:
+    if not decisions:
+        return None
+    covered_pairs = [(fill, _lookup_llm(fill, decisions)) for fill in fills]
+    covered = [(fill, decision) for fill, decision in covered_pairs if decision is not None]
+    covered_fills = [fill for fill, _decision in covered]
+    kept = [fill for fill, decision in covered if decision and decision.verdict == "KEEP"]
+    vetoed = [fill for fill, decision in covered if decision and decision.verdict == "VETO"]
+    deferred = [fill for fill, decision in covered if decision and decision.verdict == "DEFER"]
+    covered_baseline = metrics(covered_fills)
+    llm_kept = metrics(kept)
+    llm_vetoed = metrics(vetoed)
+    return {
+        "coverage": {
+            "receipts": len(decisions),
+            "covered_fills": len(covered_fills),
+            "uncovered_fills": len(fills) - len(covered_fills),
+        },
+        "covered_baseline": asdict(covered_baseline),
+        "llm_kept": asdict(llm_kept),
+        "llm_vetoed": asdict(llm_vetoed),
+        "llm_deferred": asdict(metrics(deferred)),
+        "improvement": {
+            "kept_pnl_minus_covered_baseline_pnl": llm_kept.pnl - covered_baseline.pnl,
+            "kept_wr_minus_covered_baseline_wr": (
+                None if covered_baseline.wr is None or llm_kept.wr is None
+                else llm_kept.wr - covered_baseline.wr
+            ),
+            "losses_vetoed": sum(1 for fill in vetoed if not fill.win),
+            "wins_vetoed": sum(1 for fill in vetoed if fill.win),
+            "vetoed_pnl": llm_vetoed.pnl,
+        },
+    }
+
+
+def summarize(
+    fills: list[OracleFill],
+    *,
+    llm_decisions: dict[str, LlmDecision] | None = None,
+) -> dict[str, Any]:
     kept = [f for f in fills if f.oracle_verdict == "KEEP"]
     vetoed = [f for f in fills if f.oracle_verdict == "VETO"]
     baseline = metrics(fills)
-    oracle = metrics(kept)
+    gate = metrics(kept)
     rejected = metrics(vetoed)
-    return {
+    summary = {
         "policy": "energy_classifier_plus_s4_non_negative_premium_gate",
         "baseline": asdict(baseline),
-        "oracle_kept": asdict(oracle),
-        "oracle_vetoed": asdict(rejected),
+        "gate_kept": asdict(gate),
+        "gate_vetoed": asdict(rejected),
         "improvement": {
-            "kept_pnl_minus_baseline_pnl": oracle.pnl - baseline.pnl,
+            "kept_pnl_minus_baseline_pnl": gate.pnl - baseline.pnl,
             "kept_wr_minus_baseline_wr": (
-                None if baseline.wr is None or oracle.wr is None else oracle.wr - baseline.wr
+                None if baseline.wr is None or gate.wr is None else gate.wr - baseline.wr
             ),
             "vetoed_pnl": rejected.pnl,
             "losses_vetoed": sum(1 for f in vetoed if not f.win),
@@ -157,12 +260,16 @@ def summarize(fills: list[OracleFill]) -> dict[str, Any]:
         "by_template": {
             template: {
                 "baseline": asdict(base),
-                "oracle_kept": asdict(_by_template(kept).get(template, SegmentMetrics(0, None, 0.0))),
-                "oracle_vetoed": asdict(_by_template(vetoed).get(template, SegmentMetrics(0, None, 0.0))),
+                "gate_kept": asdict(_by_template(kept).get(template, SegmentMetrics(0, None, 0.0))),
+                "gate_vetoed": asdict(_by_template(vetoed).get(template, SegmentMetrics(0, None, 0.0))),
             }
             for template, base in _by_template(fills).items()
         },
     }
+    llm_overlay = _summarize_llm_overlay(fills, llm_decisions or {})
+    if llm_overlay is not None:
+        summary["llm_oracle"] = llm_overlay
+    return summary
 
 
 def _fmt(value: Any) -> str:
@@ -175,11 +282,11 @@ def _fmt(value: Any) -> str:
 
 def render_report(summary: dict[str, Any]) -> str:
     baseline = summary["baseline"]
-    kept = summary["oracle_kept"]
-    vetoed = summary["oracle_vetoed"]
+    kept = summary["gate_kept"]
+    vetoed = summary["gate_vetoed"]
     improvement = summary["improvement"]
     lines = [
-        "# Energy Oracle Backtest Report",
+        "# Energy Gate Backtest Report",
         "",
         "Offline replay over `master_fills_v4.tsv`. No external API calls.",
         "",
@@ -188,8 +295,8 @@ def render_report(summary: dict[str, Any]) -> str:
         "| Segment | Fills | WR | PnL |",
         "|---|---:|---:|---:|",
         f"| Baseline energy-classified | {baseline['n']} | {_fmt(baseline['wr'])} | {_fmt(baseline['pnl'])} |",
-        f"| Oracle kept | {kept['n']} | {_fmt(kept['wr'])} | {_fmt(kept['pnl'])} |",
-        f"| Oracle vetoed | {vetoed['n']} | {_fmt(vetoed['wr'])} | {_fmt(vetoed['pnl'])} |",
+        f"| Premium-gate kept | {kept['n']} | {_fmt(kept['wr'])} | {_fmt(kept['pnl'])} |",
+        f"| Premium-gate vetoed | {vetoed['n']} | {_fmt(vetoed['wr'])} | {_fmt(vetoed['pnl'])} |",
         "",
         "| Improvement | Value |",
         "|---|---:|",
@@ -199,18 +306,47 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| Wins vetoed | {improvement['wins_vetoed']} |",
         f"| Vetoed PnL | {_fmt(improvement['vetoed_pnl'])} |",
         "",
-        "| Template | Baseline n | Baseline WR | Baseline PnL | Kept n | Kept WR | Kept PnL | Vetoed n | Vetoed PnL |",
+        "| Template | Baseline n | Baseline WR | Baseline PnL | Gate kept n | Gate kept WR | Gate kept PnL | Gate vetoed n | Gate vetoed PnL |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for template, row in summary["by_template"].items():
         b = row["baseline"]
-        k = row["oracle_kept"]
-        v = row["oracle_vetoed"]
+        k = row["gate_kept"]
+        v = row["gate_vetoed"]
         lines.append(
             f"| `{template}` | {b['n']} | {_fmt(b['wr'])} | {_fmt(b['pnl'])} | "
             f"{k['n']} | {_fmt(k['wr'])} | {_fmt(k['pnl'])} | "
             f"{v['n']} | {_fmt(v['pnl'])} |"
         )
+    if "llm_oracle" in summary:
+        llm = summary["llm_oracle"]
+        cov = llm["coverage"]
+        b = llm["covered_baseline"]
+        k = llm["llm_kept"]
+        v = llm["llm_vetoed"]
+        d = llm["llm_deferred"]
+        imp = llm["improvement"]
+        lines.extend([
+            "",
+            "## Opoint+Nebius LLM Overlay",
+            "",
+            f"Receipts: {cov['receipts']}; covered fills: {cov['covered_fills']}; uncovered fills: {cov['uncovered_fills']}.",
+            "",
+            "| Segment | Fills | WR | PnL |",
+            "|---|---:|---:|---:|",
+            f"| Covered baseline | {b['n']} | {_fmt(b['wr'])} | {_fmt(b['pnl'])} |",
+            f"| LLM kept | {k['n']} | {_fmt(k['wr'])} | {_fmt(k['pnl'])} |",
+            f"| LLM vetoed | {v['n']} | {_fmt(v['wr'])} | {_fmt(v['pnl'])} |",
+            f"| LLM deferred | {d['n']} | {_fmt(d['wr'])} | {_fmt(d['pnl'])} |",
+            "",
+            "| LLM improvement | Value |",
+            "|---|---:|",
+            f"| Kept PnL minus covered baseline PnL | {_fmt(imp['kept_pnl_minus_covered_baseline_pnl'])} |",
+            f"| Kept WR minus covered baseline WR | {_fmt(imp['kept_wr_minus_covered_baseline_wr'])} |",
+            f"| Losses vetoed | {imp['losses_vetoed']} |",
+            f"| Wins vetoed | {imp['wins_vetoed']} |",
+            f"| Vetoed PnL | {_fmt(imp['vetoed_pnl'])} |",
+        ])
     return "\n".join(lines) + "\n"
 
 
@@ -220,9 +356,14 @@ def write_decisions(path: Path, fills: Iterable[OracleFill]) -> None:
             fh.write(json.dumps(asdict(fill), sort_keys=True) + "\n")
 
 
-def run(master_fills_tsv: Path = DEFAULT_MASTER_FILLS) -> tuple[dict[str, Any], list[OracleFill]]:
+def run(
+    master_fills_tsv: Path = DEFAULT_MASTER_FILLS,
+    *,
+    llm_receipts_jsonl: Path | None = None,
+) -> tuple[dict[str, Any], list[OracleFill]]:
     fills = load_energy_fills(master_fills_tsv)
-    return summarize(fills), fills
+    llm_decisions = load_llm_decisions(llm_receipts_jsonl)
+    return summarize(fills, llm_decisions=llm_decisions), fills
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -233,9 +374,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-out", type=Path)
     parser.add_argument("--metrics-out", type=Path)
     parser.add_argument("--decisions-out", type=Path)
+    parser.add_argument("--llm-receipts-jsonl", type=Path,
+                        help="Saved Opoint+Nebius oracle receipts to overlay")
     args = parser.parse_args(argv)
 
-    summary, fills = run(args.master_fills_tsv)
+    summary, fills = run(args.master_fills_tsv, llm_receipts_jsonl=args.llm_receipts_jsonl)
     report = render_report(summary)
     print(report, end="")
     if args.report_out:
