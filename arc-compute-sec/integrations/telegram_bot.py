@@ -17,6 +17,7 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 SENT_NAME = "telegram_sent.jsonl"
 DEFAULT_NOTIFY_MAX_PER_PASS = 3
 DEFAULT_IBKR_REAUTH_REMINDER_HOURS = 4.0
+CHANNEL_ABOUT_KEY = "channel-about:v1"
 
 
 def admin_ids() -> set[str]:
@@ -126,6 +127,23 @@ def format_latest(snap: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_about() -> str:
+    return "\n".join([
+        "Power by Botozen",
+        "Arc-wrapped compute/energy spread desk.",
+        "",
+        "How to read the feed:",
+        "- /latest and the Mini App show IBKR ForecastTrader and Polymarket slugs as direct watchlist inventory.",
+        "- Watchlist rows are research surfaces, not public channel alerts.",
+        "- The channel posts only EXECUTE spread packages, Arc job updates, and runtime errors.",
+        "- REJECT, DEFER, and premium_gate_fail rows stay out of the channel.",
+        "- BTC/ETH are miner-margin proxies; the securitized object is the judged spread package.",
+        "- No Arc action can happen unless judge.classify() returns EXECUTE.",
+        "",
+        "Commands: /latest, /status, /positions, /about, /scan",
+    ])
+
+
 def format_positions(snap: dict[str, Any], limit: int = 5) -> str:
     positions = snap.get("positions") or []
     if not positions:
@@ -150,7 +168,9 @@ def handle_command(text: str, user_id: str | int | None, *, logs: Path | str | N
     command = (text or "").strip().split(maxsplit=1)[0].lower()
     snap = snapshot(logs=logs)
     if command in {"/start", "/help"}:
-        return "Arc Compute Sec bot online. Use /status, /latest, /positions, or /scan."
+        return format_about()
+    if command == "/about":
+        return format_about()
     if command == "/status":
         return format_status(snap)
     if command == "/latest":
@@ -169,7 +189,7 @@ def handle_command(text: str, user_id: str | int | None, *, logs: Path | str | N
             return "Live chain mode is disabled."
         request = scan_requests.enqueue_scan(source="telegram", live=True, settle=True, logs=logs, user_id=user_id)
         return f"Live scan queued: {request['request_id']}"
-    return "Unknown command. Use /status, /latest, /positions, or /scan."
+    return "Unknown command. Use /status, /latest, /positions, /about, or /scan."
 
 
 def process_update(update: dict[str, Any], *, logs: Path | str | None = None) -> None:
@@ -339,6 +359,23 @@ def _package_message(pkg: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def channel_about_message() -> str:
+    return "\n".join([
+        "How this channel works",
+        "",
+        "Power by Botozen tracks electricity stress against GPU compute demand, then packages only judge-approved legs for Arc settlement.",
+        "",
+        "This channel posts:",
+        "- EXECUTE spread packages with grouped IBKR/Polymarket/crypto legs",
+        "- Arc ERC-8183 job updates",
+        "- runtime errors that need operator attention",
+        "",
+        "This channel does not post repeated REJECT/DEFER rows or watchlist-only slugs. Use /latest in the bot or the Mini App for the live watchlist.",
+        "",
+        "BTC/ETH are labelled miner-margin proxies. The securitized object is the judged spread package, and no Arc action can happen unless judge.classify() returns EXECUTE.",
+    ])
+
+
 def channel_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     runtime = snap.get("runtime") or {}
@@ -379,6 +416,18 @@ def channel_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 text += f"\n{pos['arcscan_url']}"
             out.append((f"position:{pos.get('job_id')}:{pos.get('stage', '')}", text))
     return out
+
+
+def notify_channel_about_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_ABOUT_KEY in sent:
+        return 0
+    send_message(channel_id, channel_about_message())
+    _mark_sent(CHANNEL_ABOUT_KEY, logs=logs)
+    return 1
 
 
 def notify_channel_once(*, logs: Path | str | None = None) -> int:
@@ -430,12 +479,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll-once", action="store_true", help="Run one getUpdates poll")
     parser.add_argument("--set-webhook", action="store_true", help="Configure Telegram webhook from PUBLIC_BASE_URL")
     parser.add_argument("--delete-webhook", action="store_true", help="Delete Telegram webhook")
+    parser.add_argument("--post-channel-about", action="store_true", help="Post the deduped channel explainer")
     args = parser.parse_args(argv)
     if args.set_webhook:
         print(json.dumps(set_webhook(), sort_keys=True))
         return 0
     if args.delete_webhook:
         print(json.dumps(delete_webhook(), sort_keys=True))
+        return 0
+    if args.post_channel_about:
+        print(notify_channel_about_once())
         return 0
     if args.notify_once:
         print(notify_channel_once() + notify_ibkr_reauth_reminder_once())

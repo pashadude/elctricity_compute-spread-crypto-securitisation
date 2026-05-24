@@ -284,10 +284,13 @@ npm run docker:telegram
 Telegram uses the Bot API via `TELEGRAM_BOT_TOKEN`, posts channel updates to
 `TELEGRAM_CHANNEL_ID`, and only lets `TELEGRAM_ADMIN_USER_IDS` trigger scans.
 Channel posts are intentionally sparse: runtime errors, Arc positions, and
-one grouped `EXECUTE` spread-package brief. `REJECT` verdicts are muted in the
-channel so repeated premium-gate failures do not spam users; ask the bot for
-`/latest` or `/status` when debugging rejects. Each notification pass is capped
-by `TELEGRAM_NOTIFY_MAX_PER_PASS` (default `3`) to avoid Telegram rate limits.
+one grouped `EXECUTE` spread-package brief. `REJECT`, `DEFER`, and
+watchlist-only rows are muted in the channel so repeated premium-gate failures
+do not spam users. Ask the bot for `/latest` or open the Mini App when you want
+the live IBKR/Polymarket slug watchlist. Use `npm run telegram:channel-about`
+to post the one-time public explainer for this channel policy. Each notification
+pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS` (default `3`) to avoid
+Telegram rate limits.
 Polling mode works locally without ngrok. Use `ngrok http 8080` and set
 `PUBLIC_BASE_URL` when configuring a Telegram Mini App URL or webhook.
 

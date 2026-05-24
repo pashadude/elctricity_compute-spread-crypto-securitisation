@@ -69,6 +69,15 @@ def test_latest_includes_direct_inventory_watchlist():
     assert "unpriced_snapshot" in text
 
 
+def test_about_explains_watchlist_and_channel_policy(tmp_path):
+    text = telegram_bot.handle_command("/start", 7, logs=tmp_path)
+
+    assert "/latest and the Mini App show IBKR ForecastTrader and Polymarket slugs" in text
+    assert "The channel posts only EXECUTE spread packages" in text
+    assert "premium_gate_fail rows stay out of the channel" in text
+    assert "judge.classify() returns EXECUTE" in text
+
+
 def test_channel_messages_group_execute_package():
     messages = telegram_bot.channel_messages({
         "runtime": {},
@@ -153,6 +162,18 @@ def test_channel_messages_include_runtime_errors():
     })
 
     assert messages == [("runtime:error:123", "Runtime error: feed timeout")]
+
+
+def test_channel_about_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_about_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_about_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "This channel does not post repeated REJECT/DEFER rows" in sent[0][1]
+    assert "Use /latest in the bot or the Mini App" in sent[0][1]
 
 
 def test_ibkr_reauth_reminder_goes_to_private_admin_and_dedupes(tmp_path, monkeypatch):
