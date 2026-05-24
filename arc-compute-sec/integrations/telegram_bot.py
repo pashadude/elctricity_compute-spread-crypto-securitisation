@@ -76,6 +76,47 @@ def delete_webhook() -> dict[str, Any]:
     return telegram_call("deleteWebhook", {"drop_pending_updates": False})
 
 
+def bot_short_description() -> str:
+    return "Compute/energy spread desk. Watchlist in /latest; channel posts only EXECUTE packages/jobs."
+
+
+def bot_description() -> str:
+    return "\n".join([
+        "Power by Botozen wraps judged compute/energy spread packages on Arc.",
+        "",
+        "/latest and the Mini App show direct IBKR ForecastTrader and Polymarket watchlist slugs.",
+        "The public channel posts only EXECUTE packages, Arc job updates, and runtime errors.",
+        "REJECT, DEFER, and premium_gate_fail rows are intentionally muted.",
+        "",
+        "No Arc action can happen unless judge.classify() returns EXECUTE.",
+    ])
+
+
+def configure_bot_profile() -> dict[str, Any]:
+    calls = [
+        ("setMyShortDescription", {"short_description": bot_short_description()}),
+        ("setMyDescription", {"description": bot_description()}),
+        ("setMyCommands", {"commands": [
+            {"command": "start", "description": "Open desk policy and commands"},
+            {"command": "about", "description": "Explain watchlist vs channel posts"},
+            {"command": "latest", "description": "Show signal and watchlist slugs"},
+            {"command": "status", "description": "Show worker and judge status"},
+            {"command": "positions", "description": "Show recent Arc jobs"},
+        ]}),
+    ]
+    base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if base:
+        calls.append(("setChatMenuButton", {"menu_button": {
+            "type": "web_app",
+            "text": "Open Power",
+            "web_app": {"url": base + "/tg"},
+        }}))
+    results = {}
+    for method, payload in calls:
+        results[method] = telegram_call(method, payload).get("ok", False)
+    return results
+
+
 def send_message(chat_id: str | int, text: str, *, reply_markup: dict[str, Any] | None = None) -> None:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -487,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll-once", action="store_true", help="Run one getUpdates poll")
     parser.add_argument("--set-webhook", action="store_true", help="Configure Telegram webhook from PUBLIC_BASE_URL")
     parser.add_argument("--delete-webhook", action="store_true", help="Delete Telegram webhook")
+    parser.add_argument("--configure-bot-profile", action="store_true", help="Configure bot description, commands, and menu")
     parser.add_argument("--post-channel-about", action="store_true", help="Post the deduped channel explainer")
     args = parser.parse_args(argv)
     if args.set_webhook:
@@ -494,6 +536,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.delete_webhook:
         print(json.dumps(delete_webhook(), sort_keys=True))
+        return 0
+    if args.configure_bot_profile:
+        print(json.dumps(configure_bot_profile(), sort_keys=True))
         return 0
     if args.post_channel_about:
         print(notify_channel_about_once())

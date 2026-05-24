@@ -291,6 +291,8 @@ the live IBKR/Polymarket slug watchlist. Use `npm run telegram:channel-about`
 to post the one-time public explainer for this channel policy. Each notification
 pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS` (default `3`) to avoid
 Telegram rate limits.
+Use `npm run telegram:configure` after token rotation to set the bot description,
+command menu, and Mini App menu button from `PUBLIC_BASE_URL`.
 Polling mode works locally without ngrok. Use `ngrok http 8080` and set
 `PUBLIC_BASE_URL` when configuring a Telegram Mini App URL or webhook.
 

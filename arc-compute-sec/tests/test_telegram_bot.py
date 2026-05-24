@@ -28,6 +28,27 @@ def test_telegram_http_error_redacts_bot_token(monkeypatch):
     assert "Too Many Requests" in message
 
 
+def test_configure_bot_profile_sets_description_commands_and_menu(monkeypatch):
+    calls = []
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://power.example.com/")
+    monkeypatch.setattr(
+        telegram_bot,
+        "telegram_call",
+        lambda method, payload: calls.append((method, payload)) or {"ok": True},
+    )
+
+    assert telegram_bot.configure_bot_profile() == {
+        "setMyShortDescription": True,
+        "setMyDescription": True,
+        "setMyCommands": True,
+        "setChatMenuButton": True,
+    }
+    methods = [method for method, _payload in calls]
+    assert methods == ["setMyShortDescription", "setMyDescription", "setMyCommands", "setChatMenuButton"]
+    assert "channel posts only EXECUTE" in calls[1][1]["description"]
+    assert calls[3][1]["menu_button"]["web_app"]["url"] == "https://power.example.com/tg"
+
+
 def test_scan_command_requires_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM_ADMIN_USER_IDS", "42")
 
