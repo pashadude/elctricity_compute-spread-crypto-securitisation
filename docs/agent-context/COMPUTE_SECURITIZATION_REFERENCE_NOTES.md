@@ -90,7 +90,7 @@ core hedge basket. The proposal should prioritize:
 2. priced public hedge basket;
 3. priced direct event contracts;
 4. proxy/context rows;
-5. unpriced discovery gaps.
+5. pricing gaps that still need live venue quotes.
 
 This is now represented in `agent/synthetic_instrument.py` as:
 
@@ -99,5 +99,8 @@ This is now represented in `agent/synthetic_instrument.py` as:
 - `outputs.direct_reference_legs`;
 - `outputs.proxy_reference_legs`;
 - `outputs.discovery_gaps`;
+- `outputs.build_instructions`;
+- `outputs.agent_search_plan`;
 - `inputs.search_adjustment`;
-- `structure.index_governance`.
+- `structure.index_governance`;
+- `structure.schematic_steps`.

@@ -108,7 +108,8 @@ def test_latest_includes_direct_inventory_watchlist():
             "outputs": {
                 "agent_next_actions": ["Find one direct regional energy/grid-stress leg."],
                 "priced_hedge_basket": [{"slug": "NVDA"}, {"slug": "CEG"}],
-                "discovery_gaps": [{"slug": "retxc-ec"}],
+                "discovery_gaps": [{"slug": "retxc-ec", "status_label": "Needs live venue price"}],
+                "agent_search_plan": [{"surface": "opoint_nebius", "target": "news-grounded spread drivers"}],
             },
         },
         "direct_inventory": [{
@@ -117,16 +118,19 @@ def test_latest_includes_direct_inventory_watchlist():
             "leg_slug": "retxc-ec",
             "direct_pair_role": "energy/grid-stress leg",
             "pricing_status": "unpriced_snapshot",
+            "pricing_status_label": "Needs live venue price",
         }],
     })
 
     assert "direct watchlist:" in text
     assert "proposal: ERCOT power compute receivable hedge note abc123 (not_asset_backed_v0)" in text
     assert "priced hedges: NVDA, CEG" in text
-    assert "unpriced discovery: retxc-ec" in text
+    assert "pricing gaps: retxc-ec (Needs live venue price)" in text
+    assert "search next: opoint_nebius:news-grounded spread drivers" in text
     assert "next: Find one direct regional energy/grid-stress leg." in text
     assert "Texas Commercial Electricity Generation Sales Revenue" in text
-    assert "unpriced_snapshot" in text
+    assert "Needs live venue price" in text
+    assert "unpriced_snapshot" not in text
 
 
 def test_about_explains_watchlist_and_channel_policy(tmp_path):

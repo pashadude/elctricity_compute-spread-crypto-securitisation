@@ -173,10 +173,19 @@ def format_latest(snap: dict[str, Any]) -> str:
         actions = (((proposal.get("outputs") or {}).get("agent_next_actions")) or [])
         hedges = (((proposal.get("outputs") or {}).get("priced_hedge_basket")) or [])
         gaps = (((proposal.get("outputs") or {}).get("discovery_gaps")) or [])
+        search_plan = (((proposal.get("outputs") or {}).get("agent_search_plan")) or [])
         if hedges:
             lines.append("priced hedges: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in hedges[:4]))
         if gaps:
-            lines.append("unpriced discovery: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in gaps[:4]))
+            lines.append("pricing gaps: " + ", ".join(
+                f"{gap.get('slug') or gap.get('title')} ({gap.get('status_label') or 'Needs price'})"
+                for gap in gaps[:4]
+            ))
+        if search_plan:
+            lines.append("search next: " + ", ".join(
+                f"{item.get('surface')}:{item.get('target')}"
+                for item in search_plan[:3]
+            ))
         if actions:
             lines.append(f"next: {actions[0]}")
     inventory = [row for row in (snap.get("direct_inventory") or []) if isinstance(row, dict)]
@@ -186,7 +195,7 @@ def format_latest(snap: dict[str, Any]) -> str:
             title = _leg_name(row)
             surface = row.get("surface", "")
             role = row.get("direct_pair_role") or row.get("leg_role") or "direct leg"
-            status = row.get("pricing_status") or row.get("reason_code") or "watchlist"
+            status = row.get("pricing_status_label") or row.get("pricing_status") or row.get("reason_code") or "watchlist"
             slug = row.get("leg_slug") or row.get("slug") or ""
             lines.append(f"- {surface} | {role} | {title} | {status}{f' | {slug}' if slug else ''}")
     return "\n".join(lines)

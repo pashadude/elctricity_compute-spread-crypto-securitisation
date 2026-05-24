@@ -286,9 +286,24 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
           <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '6px' }}>
             Priced hedges: {((data.syntheticInstrument.outputs?.priced_hedge_basket || []).slice(0, 3).map(leg => leg.slug || leg.title).join(', ')) || 'needs live Yahoo/public prices'}
           </div>
+          {(data.syntheticInstrument.structure?.schematic_steps || []).length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
+              {data.syntheticInstrument.structure.schematic_steps.slice(0, 4).map((step, i) => (
+                <div key={step.key || i} style={{ background: TG_THEME.elevated, borderRadius: '7px', padding: '7px' }}>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>{step.status}</div>
+                  <div style={{ fontSize: '11px', color: TG_THEME.text, lineHeight: 1.25, marginTop: '2px' }}>{step.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
           {(data.syntheticInstrument.outputs?.discovery_gaps || []).length > 0 && (
             <div style={{ fontSize: '12px', color: TG_THEME.orange, lineHeight: 1.4, marginBottom: '6px' }}>
-              Unpriced discovery: {data.syntheticInstrument.outputs.discovery_gaps.slice(0, 2).map(gap => gap.slug || gap.title).join(', ')}
+              Pricing gaps: {data.syntheticInstrument.outputs.discovery_gaps.slice(0, 2).map(gap => `${gap.slug || gap.title} (${gap.status_label || 'Needs price'})`).join(', ')}
+            </div>
+          )}
+          {(data.syntheticInstrument.outputs?.agent_search_plan || []).length > 0 && (
+            <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '6px' }}>
+              Search next: {data.syntheticInstrument.outputs.agent_search_plan.slice(0, 2).map(item => `${item.surface}:${item.target}`).join(', ')}
             </div>
           )}
           <div style={{ fontSize: '12px', color: TG_THEME.tertiary, lineHeight: 1.4 }}>

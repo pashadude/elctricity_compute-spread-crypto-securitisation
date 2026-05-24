@@ -106,7 +106,12 @@ between "we watch slugs" and "we can structure a product":
   about nuclear baseload, gas marginal power, renewables, congestion, PPAs, or
   another local input;
 - it separates priced public hedge legs, direct reference legs, proxy reference
-  legs, and unpriced discovery gaps;
+  legs, and pricing gaps that still need live venue quotes;
+- it exposes a schematic build path: compute sale, priced hedge basket, direct
+  event references, judge gates, and Arc wrap;
+- it exposes an agent search queue for Opoint/Nebius evidence, Polymarket
+  direct events, IBKR ForecastTrader pricing, public-market hedges, and
+  walk-forward validation;
 - it states the collateral status. v1 is `not_asset_backed_v0`; it becomes
   asset-backed only if real collateral such as GPU rental receivables, compute
   invoices, power purchase agreements, miner power hedges, escrowed USDC, or a
@@ -122,6 +127,21 @@ spread. The design borrows two controls from public commodity-index practice:
 daily direction/quantum/tenor decisions with transparent weights, and
 search-adjusted promotion so testing many slugs does not create a false
 strategy.
+
+### Building A Demo Hedge Note
+
+1. Define the commercial exposure: region, buyer, seller, GPU-hour quantity,
+   delivery window, and price.
+2. Attach evidence: invoice or rental receivable, delivery meter, PPA/power
+   hedge, and optional escrow proof.
+3. Freeze the priced hedge basket from public quotes; these are liquid proxies,
+   not the asset-backed claim.
+4. Promote only priced direct event references from Polymarket, IBKR
+   ForecastTrader, or another approved venue.
+5. Run the premium scorer and `judge.classify()`. No Arc action happens unless
+   the verdict is `EXECUTE`.
+6. Backtest the exact basket and count every tested slug/symbol/model for
+   FDR-style promotion control.
 
 ## Evidence So Far
 

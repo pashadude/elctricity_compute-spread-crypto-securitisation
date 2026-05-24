@@ -269,11 +269,13 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert len(snap["direct_inventory"]) == 3
     by_surface = {(row["surface"], row["leg_slug"]): row for row in snap["direct_inventory"]}
     assert by_surface[("ibkr_prediction", "retxc-ec")]["pricing_status"] == "unpriced_snapshot"
+    assert by_surface[("ibkr_prediction", "retxc-ec")]["pricing_status_label"] == "Needs live venue price"
     assert by_surface[("ibkr_prediction", "itnvd-ec")]["direct_pair_role"] == "AI compute-demand leg"
     assert by_surface[("polymarket", "ai-data-center-moratorium-passed-before-2027")]["label"] == "WATCHLIST"
     assert all(not row["is_mock"] for row in snap["direct_inventory"])
     assert snap["public_hedges"][0]["leg_slug"] == "NVDA"
     assert snap["public_hedges"][0]["pricing_status"] == "priced_public_market"
+    assert snap["public_hedges"][0]["pricing_status_label"] == "Public price available"
     proposal = snap["synthetic_instrument"]
     assert proposal["proposal_type"] == "compute_receivable_hedge_note"
     assert proposal["asset_backed"] is False

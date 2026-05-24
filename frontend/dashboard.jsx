@@ -37,6 +37,17 @@ const formatEventDate = (value) => {
   return d.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+const pricingStatusLabel = (status) => {
+  const low = String(status || '').toLowerCase();
+  if (low === 'unpriced_snapshot') return 'Needs live venue price';
+  if (low === 'metadata_watchlist') return 'Metadata only';
+  if (low === 'priced_watchlist') return 'Live price available';
+  if (low === 'priced_public_market') return 'Public price available';
+  if (low === 'price_unavailable') return 'Price unavailable';
+  if (low === 'closed_watchlist') return 'Closed';
+  return String(status || 'Needs review').replaceAll('_', ' ');
+};
+
 const isMockRow = (row = {}) => {
   const text = [row.instrument, row.displayName, row.slug, row.description]
     .filter(Boolean).join(' ').toLowerCase();
@@ -167,6 +178,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
     ts: tsMs(v.ts || snapshot.generated_at),
     label: v.label || (v.inventory ? 'WATCHLIST' : 'DEFER'),
     reason: v.reason_code || '',
+    reasonLabel: pricingStatusLabel(v.reason_code || v.pricing_status || ''),
     instrument: v.instrument || '',
     displayName: v.display_label || v.leg_title || v.instrument || '',
     slug: v.leg_slug || '',
@@ -183,6 +195,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
     sizing: numberOr(v.sizing_usdc, 0),
     estPnl: (v.est_pnl_per_dollar === undefined || v.est_pnl_per_dollar === '') ? '' : numberOr(v.est_pnl_per_dollar, 0).toFixed(4),
     pricingStatus: v.pricing_status || '',
+    pricingStatusLabel: v.pricing_status_label || pricingStatusLabel(v.pricing_status || ''),
     directPairRole: v.direct_pair_role || '',
     inventory: Boolean(v.inventory),
     source: v.source || '',
@@ -241,11 +254,13 @@ const mapSnapshotToDashboardData = (snapshot) => {
     conviction: Math.abs(numberOr(signal.z, 0)).toFixed(2),
     estPnl: v.estPnl,
     pricingStatus: v.pricingStatus,
+    pricingStatusLabel: v.pricingStatusLabel,
     directPairRole: v.directPairRole,
     inventory: v.inventory,
     source: v.source,
     label: v.label,
     reason: v.reason,
+    reasonLabel: v.reasonLabel,
     repeatCount: v.repeatCount,
   }));
   const sortedCandidates = sortByPrimarySurface(candidates);
@@ -516,7 +531,7 @@ const PackageLegRow = ({ leg }) => (
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
         {leg.label && <Badge color={verdictColor(leg.label)}>{leg.label}</Badge>}
         <MonoText style={{ display: 'block', fontSize: '11px', marginTop: '4px', color: numberOr(leg.estPnl) < 0 ? THEME.red[400] : THEME.primary[400] }}>
-          {leg.estPnl ? `${leg.estPnl} $/$` : (leg.pricingStatus || 'watchlist')}
+          {leg.estPnl ? `${leg.estPnl} $/$` : (leg.pricingStatusLabel || pricingStatusLabel(leg.pricingStatus) || 'watchlist')}
         </MonoText>
       </div>
     </div>
@@ -532,7 +547,7 @@ const PackageLegRow = ({ leg }) => (
     )}
     {leg.reason && (
       <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, marginTop: '6px' }}>
-        reason: {leg.reason}
+        reason: {leg.reasonLabel || pricingStatusLabel(leg.reason)}
       </div>
     )}
   </div>
@@ -764,14 +779,14 @@ const CandidatesPanel = ({ candidates, title = 'Liquid Proxy Legs', emptyText = 
               )}
               {c.reason && (
                 <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, marginTop: '4px' }}>
-                  reason: {c.reason}
+                  reason: {c.reasonLabel || pricingStatusLabel(c.reason)}
                 </div>
               )}
             </div>
           </div>
           <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
             {c.label && <Badge color={verdictColor(c.label)}>{c.label}</Badge>}
-            <MonoText style={{ fontSize: '12px' }}>{c.estPnl ? `${c.estPnl} $/$` : (c.pricingStatus || 'watchlist')}</MonoText>
+            <MonoText style={{ fontSize: '12px' }}>{c.estPnl ? `${c.estPnl} $/$` : (c.pricingStatusLabel || pricingStatusLabel(c.pricingStatus) || 'watchlist')}</MonoText>
             <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted }}>{c.sizing} USDC</div>
           </div>
         </div>
@@ -796,6 +811,16 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   const actions = proposal.outputs?.agent_next_actions || [];
   const structure = proposal.structure || {};
   const inputs = proposal.inputs || {};
+  const schematic = structure.schematic_steps || [];
+  const buildInstructions = proposal.outputs?.build_instructions || [];
+  const searchPlan = proposal.outputs?.agent_search_plan || [];
+  const statusColor = (status = '') => {
+    const low = String(status).toLowerCase();
+    if (low.includes('ready') || low.includes('clear')) return 'primary';
+    if (low.includes('locked') || low.includes('pending') || low.includes('search')) return 'blue';
+    if (low.includes('need')) return 'amber';
+    return 'muted';
+  };
   return (
     <Card glow style={{ marginBottom: '16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '12px' }}>
@@ -816,6 +841,45 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
       <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.secondary, lineHeight: 1.45, marginBottom: '12px' }}>
         {proposal.thesis}
       </div>
+      {schematic.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
+          gap: '8px',
+          marginBottom: '12px',
+        }}>
+          {schematic.map((step, i) => (
+            <div key={step.key || i} style={{
+              minHeight: '112px',
+              padding: '10px',
+              borderRadius: '8px',
+              background: THEME.bg.elevated,
+              border: `1px solid ${THEME.border.subtle}`,
+              position: 'relative',
+            }}>
+              {i < schematic.length - 1 && (
+                <div style={{
+                  position: 'absolute',
+                  right: '-7px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: THEME.text.faint,
+                  fontFamily: THEME.font.mono,
+                  fontSize: '14px',
+                  zIndex: 1,
+                }}>→</div>
+              )}
+              <Badge color={statusColor(step.status)} style={{ marginBottom: '8px' }}>{step.status}</Badge>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.25 }}>
+                {step.label}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+                {step.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Real-world inputs</div>
@@ -845,17 +909,55 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           </div>
         </div>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Next agent action</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Build instructions</div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
-            {actions[0] || 'Wait for a stronger spread signal.'}
+            {buildInstructions.length ? buildInstructions[0].detail : (actions[0] || 'Wait for a stronger spread signal.')}
           </div>
           {gaps.length > 0 && (
             <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.amber[400], lineHeight: 1.35, marginTop: '6px' }}>
-              Unpriced discovery: {gaps.map(gap => gap.slug || gap.title).slice(0, 2).join(', ')}
+              Pricing gaps: {gaps.map(gap => `${gap.slug || gap.title} (${gap.status_label || 'Needs price'})`).slice(0, 2).join(', ')}
             </div>
           )}
         </div>
       </div>
+      {(buildInstructions.length > 1 || searchPlan.length > 0) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '10px', marginTop: '10px' }}>
+          {buildInstructions.length > 1 && (
+            <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Operator build path</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                {buildInstructions.slice(0, 5).map((step, i) => (
+                  <div key={`${step.title}-${i}`} style={{ display: 'grid', gridTemplateColumns: '86px 1fr', gap: '8px', alignItems: 'start' }}>
+                    <Badge color={statusColor(step.status)}>{step.status}</Badge>
+                    <div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 700 }}>{step.title}</div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35 }}>{step.detail}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {searchPlan.length > 0 && (
+            <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Agent search queue</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                {searchPlan.slice(0, 4).map((item, i) => (
+                  <div key={`${item.surface}-${i}`} style={{ paddingBottom: i === Math.min(searchPlan.length, 4) - 1 ? 0 : '7px', borderBottom: i === Math.min(searchPlan.length, 4) - 1 ? 'none' : `1px solid ${THEME.border.subtle}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 700 }}>{item.target}</div>
+                      <Badge color="blue">{item.surface}</Badge>
+                    </div>
+                    <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '4px', overflowWrap: 'anywhere' }}>
+                      {item.query}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 };

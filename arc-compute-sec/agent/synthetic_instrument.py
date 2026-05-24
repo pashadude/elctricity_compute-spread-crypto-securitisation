@@ -120,6 +120,7 @@ def _leg_title(row: dict[str, Any]) -> str:
 def _leg_summary(row: dict[str, Any]) -> dict[str, Any]:
     surface = _text(row.get("surface"))
     role = _leg_role(row)
+    pricing_status = _first_nonempty(row.get("pricing_status"), row.get("status"), row.get("label"))
     return {
         "surface": surface,
         "title": _leg_title(row),
@@ -128,7 +129,8 @@ def _leg_summary(row: dict[str, Any]) -> dict[str, Any]:
         "direction": _first_nonempty(row.get("direction"), row.get("dir"), default="watch"),
         "status": _first_nonempty(row.get("label"), row.get("status"), row.get("pricing_status"), default="WATCHLIST"),
         "resolution": _first_nonempty(row.get("leg_end_date"), row.get("end_date")),
-        "pricing_status": _first_nonempty(row.get("pricing_status"), row.get("status"), row.get("label")),
+        "pricing_status": pricing_status,
+        "status_label": _status_label(pricing_status),
         "last_price": row.get("last_price", ""),
         "currency": _text(row.get("currency")),
         "directness": "direct" if surface in DIRECT_SURFACES or "direct" in role.lower() else "proxy",
@@ -169,18 +171,50 @@ def _proposal_visible_leg(row: dict[str, Any]) -> bool:
     )
 
 
+def _status_label(status: Any) -> str:
+    low = _text(status).lower()
+    if low == "unpriced_snapshot":
+        return "Needs live venue price"
+    if low == "metadata_watchlist":
+        return "Metadata only"
+    if low == "priced_watchlist":
+        return "Live price available"
+    if low == "priced_public_market":
+        return "Public price available"
+    if low == "price_unavailable":
+        return "Price unavailable"
+    if low == "closed_watchlist":
+        return "Closed"
+    return _text(status, default="Needs review").replace("_", " ")
+
+
+def _gap_next_step(row: dict[str, Any]) -> str:
+    surface = _text(row.get("surface"))
+    pricing = _text(row.get("pricing_status")).lower()
+    if surface == "ibkr_prediction" and "unpriced" in pricing:
+        return "Reconnect IBKR Client Portal, fetch EC bid/ask or yes/no contracts, then rerun priced discovery."
+    if surface == "polymarket" and pricing == "metadata_watchlist":
+        return "Fetch Gamma market prices and run the premium scorer before showing this as a direct reference."
+    if pricing == "price_unavailable":
+        return "Fetch a current public quote or replace the leg with a priced proxy."
+    return "Add price, tenor, and liquidity before promoting this row."
+
+
 def _discovery_gap(row: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
     pricing = _text(row.get("pricing_status")).lower()
     label = _text(row.get("label")).upper()
+    reason = _first_nonempty(row.get("reason_code"), row.get("pricing_status"), row.get("label"), default="not priced")
     if label == "REJECT" or "unpriced" in pricing or pricing in {"metadata_watchlist", "price_unavailable"}:
         return {
             "surface": _text(row.get("surface")),
             "title": _leg_title(row),
             "slug": _leg_slug(row),
             "role": _leg_role(row),
-            "reason": _first_nonempty(row.get("reason_code"), row.get("pricing_status"), row.get("label"), default="not priced"),
+            "reason": reason,
+            "status_label": _status_label(reason),
+            "next_step": _gap_next_step(row),
         }
     return None
 
@@ -219,6 +253,130 @@ def _agent_actions(
     actions.append("Apply FDR/search-adjusted promotion: count every tested slug/model before calling a strategy robust.")
     actions.append("Backtest the exact leg pair against historical spread moves before promoting it to channel alerts.")
     return actions
+
+
+def _build_instructions(
+    direct_legs: list[dict[str, Any]],
+    hedge_basket: list[dict[str, Any]],
+    discovery_gaps: list[dict[str, Any]],
+    collateral_status: str,
+) -> list[dict[str, str]]:
+    hedge_names = ", ".join(leg["slug"] for leg in hedge_basket[:4]) or "no priced basket yet"
+    direct_names = ", ".join(leg["slug"] for leg in direct_legs[:3]) or "no priced direct pair yet"
+    gap_names = ", ".join(gap["slug"] for gap in discovery_gaps[:3]) or "none"
+    return [
+        {
+            "status": "READY" if collateral_status == "asset_backed" else "NEEDS COLLATERAL",
+            "title": "Attach compute sale",
+            "detail": "Upload or hash the GPU-hour invoice, rental receivable, delivery meter, and buyer/seller terms.",
+        },
+        {
+            "status": "READY" if hedge_basket else "NEEDS PRICE",
+            "title": "Freeze priced hedge basket",
+            "detail": f"Use public-priced proxies for sizing now: {hedge_names}.",
+        },
+        {
+            "status": "READY" if direct_legs else "SEARCHING",
+            "title": "Match direct event legs",
+            "detail": f"Pair one energy/grid leg with one compute-demand leg: {direct_names}.",
+        },
+        {
+            "status": "NEEDS ACTION" if discovery_gaps else "CLEAR",
+            "title": "Resolve discovery gaps",
+            "detail": f"Rows needing price or eligibility before promotion: {gap_names}.",
+        },
+        {
+            "status": "LOCKED",
+            "title": "Judge then Arc wrap",
+            "detail": "Run premium scorer, judge.classify(), and only then create the ERC-8183 job if verdict is EXECUTE.",
+        },
+    ]
+
+
+def _schematic_steps(
+    *,
+    collateral_status: str,
+    hedge_basket: list[dict[str, Any]],
+    direct_legs: list[dict[str, Any]],
+    discovery_gaps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": "cashflow",
+            "label": "1. Compute sale",
+            "status": "ready" if collateral_status == "asset_backed" else "needs collateral",
+            "detail": "Forward GPU-hours, invoice or receivable, delivery meter.",
+        },
+        {
+            "key": "hedge",
+            "label": "2. Priced hedge basket",
+            "status": "ready" if hedge_basket else "needs price",
+            "detail": ", ".join(leg["slug"] for leg in hedge_basket[:5]) or "Fetch public market quotes.",
+        },
+        {
+            "key": "direct_refs",
+            "label": "3. Direct event refs",
+            "status": "ready" if direct_legs else "searching",
+            "detail": ", ".join(leg["slug"] for leg in direct_legs[:4]) or "Search Polymarket/IBKR/Kalshi style event legs.",
+        },
+        {
+            "key": "judge",
+            "label": "4. Judge gates",
+            "status": "pending",
+            "detail": "Energy classifier, premium scorer, judge.classify().",
+        },
+        {
+            "key": "arc",
+            "label": "5. Arc wrap",
+            "status": "locked" if discovery_gaps or collateral_status != "asset_backed" else "ready",
+            "detail": "ERC-8183 job only after EXECUTE.",
+        },
+    ]
+
+
+def _agent_search_plan(
+    region_profile: dict[str, Any],
+    direction_profile: dict[str, str],
+    direct_legs: list[dict[str, Any]],
+    discovery_gaps: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    region = _text(region_profile.get("region"), "ERCOT/Texas")
+    direct_pair = direction_profile["direct_pair"]
+    has_energy = any("energy" in leg["role"].lower() or "power" in leg["role"].lower() or "grid" in leg["role"].lower() for leg in direct_legs)
+    has_compute = any("compute" in leg["role"].lower() or "ai" in leg["role"].lower() or "gpu" in leg["title"].lower() for leg in direct_legs)
+    gap_slugs = ", ".join(gap["slug"] for gap in discovery_gaps[:4]) or "none"
+    return [
+        {
+            "surface": "opoint_nebius",
+            "target": "news-grounded spread drivers",
+            "query": f"{region} data center power grid interconnection AI GPU capacity electricity price",
+            "reason": "Find evidence that power, grid, GPU, or AI-capacity news is driving the current spread.",
+        },
+        {
+            "surface": "polymarket",
+            "target": "direct event pair",
+            "query": f"{direct_pair}; data center moratorium, AI capex, GPU shortage, power grid stress",
+            "reason": "Find priced event contracts that can become direct references after premium scoring.",
+        },
+        {
+            "surface": "ibkr_forecasttrader",
+            "target": "forecast contract pricing",
+            "query": f"Refresh EC prices for discovery gaps: {gap_slugs}",
+            "reason": "Replace metadata-only ForecastTrader rows with priced yes/no contracts.",
+        },
+        {
+            "surface": "public_market",
+            "target": "liquid hedge basket",
+            "query": "NVDA VRT ETN CEG NRG BTC-USD ETH-USD plus liquid data-center power beneficiaries",
+            "reason": "Keep a priced, liquid hedge basket while direct event markets are thin.",
+        },
+        {
+            "surface": "backtest",
+            "target": "spread-linked validation",
+            "query": "walk-forward test of each slug/symbol against electricity-compute spread changes",
+            "reason": "Count every tested slug/model for FDR-style promotion control.",
+        },
+    ]
 
 
 def propose_synthetic_instrument(
@@ -266,6 +424,14 @@ def propose_synthetic_instrument(
     hedge_basket = _dedupe_legs([*priced_public_hedges, *proxy_source], limit=8)
     collateral_status = "asset_backed" if any(_text((pos or {}).get("collateral_hash")) for pos in (positions or [])) else "not_asset_backed_v0"
     tenor_days = max(1, int(_num((package or {}).get("ttl_hours"), 24.0) / 24.0) if package else 30)
+    build_instructions = _build_instructions(direct_legs, hedge_basket, discovery_gaps, collateral_status)
+    schematic_steps = _schematic_steps(
+        collateral_status=collateral_status,
+        hedge_basket=hedge_basket,
+        direct_legs=direct_legs,
+        discovery_gaps=discovery_gaps,
+    )
+    agent_search_plan = _agent_search_plan(region_profile, direction_profile, direct_legs, discovery_gaps)
 
     thesis = (
         f"Hedge a forward compute sale in {region_profile['short_name']} against AI compute demand. "
@@ -315,6 +481,7 @@ def propose_synthetic_instrument(
                 "miner power hedges",
                 "escrowed USDC or tokenized collateral claim",
             ],
+            "schematic_steps": schematic_steps,
         },
         "inputs": {
             "spread_formula": "S_t = compute_per_gpu_hr - k * electricity_per_MWh / 1000 * kWh_per_gpu_hr",
@@ -339,6 +506,8 @@ def propose_synthetic_instrument(
             "proxy_reference_legs": proxy_legs,
             "priced_hedge_basket": hedge_basket,
             "discovery_gaps": discovery_gaps,
+            "build_instructions": build_instructions,
+            "agent_search_plan": agent_search_plan,
             "guardrails": [
                 "No on-chain action before judge.classify().",
                 "No Arc action unless verdict is EXECUTE.",

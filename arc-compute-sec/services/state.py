@@ -499,6 +499,23 @@ def _env_csv(name: str, default: tuple[str, ...] = ()) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _pricing_status_label(status: Any) -> str:
+    low = str(status or "").strip().lower()
+    if low == "unpriced_snapshot":
+        return "Needs live venue price"
+    if low == "metadata_watchlist":
+        return "Metadata only"
+    if low == "priced_watchlist":
+        return "Live price available"
+    if low == "priced_public_market":
+        return "Public price available"
+    if low == "price_unavailable":
+        return "Price unavailable"
+    if low == "closed_watchlist":
+        return "Closed"
+    return str(status or "Needs review").replace("_", " ")
+
+
 def _fetch_public_quote(symbol: str) -> dict[str, Any] | None:
     cache_key = str(symbol or "").strip().upper()
     if not cache_key:
@@ -548,6 +565,7 @@ def public_hedge_state(*, logs: Path | str | None = None) -> list[dict[str, Any]
             "direction": meta.get("direction") or "watch",
             "label": "PRICED" if price is not None else "PRICE_MISSING",
             "pricing_status": "priced_public_market" if price is not None else "price_unavailable",
+            "pricing_status_label": _pricing_status_label("priced_public_market" if price is not None else "price_unavailable"),
             "last_price": price if price is not None else "",
             "currency": quote.get("currency", "") if isinstance(quote, dict) else "",
             "exchange": quote.get("exchange", "") if isinstance(quote, dict) else "",
@@ -619,6 +637,7 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
             "leg_role": role,
             "direct_pair_role": str(meta.get("pair_role") or "direct forecast leg"),
             "pricing_status": pricing_status,
+            "pricing_status_label": _pricing_status_label(pricing_status),
             "venue": str(event.get("venue") or "IBKR ForecastTrader"),
             "exchange": str(event.get("exchange") or "FORECASTX"),
             "sec_type": str(event.get("sec_type") or "EC"),
@@ -660,6 +679,7 @@ def _polymarket_inventory_rows() -> list[dict[str, Any]]:
             "leg_role": "direct_prediction_event",
             "direct_pair_role": str(fallback.get("pair_role") or "direct prediction-event leg"),
             "pricing_status": status,
+            "pricing_status_label": _pricing_status_label(status),
             "yes_prices": yes_prices,
             "volume": event.get("volume") or "",
             "liquidity": event.get("liquidity") or "",

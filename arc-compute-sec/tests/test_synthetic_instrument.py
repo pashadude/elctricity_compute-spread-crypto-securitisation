@@ -50,8 +50,14 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert "gas-fired" in proposal["region_profile"]["source_note"]
     assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "ai-data-center-moratorium-passed-before-2027"
     assert proposal["outputs"]["discovery_gaps"][0]["slug"] == "retxc-ec"
+    assert proposal["outputs"]["discovery_gaps"][0]["status_label"] == "Needs live venue price"
+    assert "Reconnect IBKR" in proposal["outputs"]["discovery_gaps"][0]["next_step"]
     assert proposal["outputs"]["proxy_reference_legs"][0]["slug"] == "BTC/USD"
     assert proposal["outputs"]["priced_hedge_basket"][0]["slug"] == "NVDA"
+    assert proposal["structure"]["schematic_steps"][0]["label"] == "1. Compute sale"
+    assert proposal["outputs"]["build_instructions"][0]["title"] == "Attach compute sale"
+    assert proposal["outputs"]["agent_search_plan"][0]["surface"] == "opoint_nebius"
+    assert "ERCOT" in proposal["outputs"]["agent_search_plan"][0]["query"]
     assert proposal["inputs"]["underlying_contract"]["type"] == "forward_compute_sale"
     assert "not legal ABS" in proposal["structure"]["securitization_style"]
     assert "FDR-style" in proposal["inputs"]["search_adjustment"]["rule"]

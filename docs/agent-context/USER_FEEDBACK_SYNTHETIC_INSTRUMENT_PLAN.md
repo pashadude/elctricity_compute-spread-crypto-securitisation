@@ -27,8 +27,8 @@
   forward GPU-hour sale style proposal.
 - Direct event/forecast legs come from Polymarket and IBKR ForecastTrader style
   metadata when available.
-- Unpriced IBKR/Polymarket rows remain discovery gaps; they are not hedge
-  basket legs and cannot be marketed as priced exposure.
+- IBKR/Polymarket rows without live venue quotes remain pricing gaps; they are
+  not hedge basket legs and cannot be marketed as priced exposure.
 - A Yahoo-style public quote basket can provide priced proxy hedge rows such as
   NVDA, VRT, ETN, CEG, NRG, BTC-USD, and ETH-USD.
 - BTC/ETH and IBKR stocks are labelled proxy legs, not direct claims.
@@ -52,7 +52,10 @@ shaped object that says what the agent would try to securitize next:
 - direction and payoff thesis;
 - real-world inputs: electricity, compute, z-score, power stack, oracle role;
 - outputs: priced hedge basket, direct reference legs, proxy reference legs,
-  unpriced discovery gaps, guardrails, and next agent actions;
+  pricing gaps, guardrails, schematic build steps, and next agent actions;
+- agent search plan: Opoint/Nebius evidence, Polymarket direct-event slugs,
+  IBKR ForecastTrader pricing refresh, public hedge basket expansion, and
+  walk-forward validation;
 - search-adjusted validation: every tested slug, symbol, prompt, model, and
   feature counts before a strategy is called robust;
 - collateral status: `not_asset_backed_v0` unless real collateral hashes are
@@ -78,7 +81,8 @@ The tests prove that:
 
 - the proposal is explicitly synthetic and not asset-backed in v1;
 - regional/source-aware energy notes are included;
-- unpriced rows are kept out of the hedge basket and shown as discovery gaps;
+- rows without live venue quotes are kept out of the hedge basket and shown as
+  pricing gaps;
 - direct event legs are separated from priced public hedge and proxy legs;
 - package EXECUTE legs outrank passive watchlist legs;
 - `/latest` shows the proposal and next agent action;
