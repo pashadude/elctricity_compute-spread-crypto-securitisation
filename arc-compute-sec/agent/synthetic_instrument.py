@@ -603,6 +603,11 @@ def _mock_hedge_construction(
                 "job": "Refresh prices and mark stale or missing legs before recommending a buy.",
             },
             {
+                "name": "Venue inviter",
+                "uses": "IBKR ForecastTrader, Polymarket, and future event venues",
+                "job": "Find or request new venue contracts, but keep them in research until they are priced and thesis-matched.",
+            },
+            {
                 "name": "Contract creator",
                 "uses": "Arc ERC-8183 mock wrapper after judge EXECUTE",
                 "job": "Freeze the canonical price blob, leg weights, and entry prices for tracking.",
