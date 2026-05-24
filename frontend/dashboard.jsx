@@ -44,6 +44,7 @@ const pricingStatusLabel = (status) => {
   if (low === 'priced_watchlist') return 'Live price available';
   if (low === 'priced_public_market') return 'Public price available';
   if (low === 'price_unavailable') return 'Price unavailable';
+  if (low === 'ibkr_quote_unavailable') return 'IBKR quote unavailable';
   if (low === 'closed_watchlist') return 'Closed';
   return String(status || 'Needs review').replaceAll('_', ' ');
 };
@@ -196,6 +197,13 @@ const mapSnapshotToDashboardData = (snapshot) => {
     estPnl: (v.est_pnl_per_dollar === undefined || v.est_pnl_per_dollar === '') ? '' : numberOr(v.est_pnl_per_dollar, 0).toFixed(4),
     pricingStatus: v.pricing_status || '',
     pricingStatusLabel: v.pricing_status_label || pricingStatusLabel(v.pricing_status || ''),
+    externalProxySymbol: v.external_proxy_symbol || '',
+    externalProxyTitle: v.external_proxy_title || '',
+    externalProxyRole: v.external_proxy_role || '',
+    externalProxyLastPrice: v.external_proxy_last_price === undefined || v.external_proxy_last_price === '' ? null : numberOr(v.external_proxy_last_price, null),
+    externalProxySource: v.external_proxy_source || '',
+    externalProxyStatus: v.external_proxy_status || '',
+    externalProxyStatusLabel: v.external_proxy_status_label || '',
     directPairRole: v.direct_pair_role || '',
     inventory: Boolean(v.inventory),
     source: v.source || '',
@@ -255,6 +263,13 @@ const mapSnapshotToDashboardData = (snapshot) => {
     estPnl: v.estPnl,
     pricingStatus: v.pricingStatus,
     pricingStatusLabel: v.pricingStatusLabel,
+    externalProxySymbol: v.externalProxySymbol,
+    externalProxyTitle: v.externalProxyTitle,
+    externalProxyRole: v.externalProxyRole,
+    externalProxyLastPrice: v.externalProxyLastPrice,
+    externalProxySource: v.externalProxySource,
+    externalProxyStatus: v.externalProxyStatus,
+    externalProxyStatusLabel: v.externalProxyStatusLabel,
     directPairRole: v.directPairRole,
     inventory: v.inventory,
     source: v.source,
@@ -545,10 +560,24 @@ const PackageLegRow = ({ leg }) => (
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
         {leg.label && <Badge color={verdictColor(leg.label)}>{leg.label}</Badge>}
         <MonoText style={{ display: 'block', fontSize: '11px', marginTop: '4px', color: numberOr(leg.estPnl) < 0 ? THEME.red[400] : THEME.primary[400] }}>
-          {leg.estPnl ? `${leg.estPnl} $/$` : (leg.pricingStatusLabel || pricingStatusLabel(leg.pricingStatus) || 'watchlist')}
+          {leg.estPnl
+            ? `${leg.estPnl} $/$`
+            : (leg.externalProxyLastPrice
+              ? `proxy ${leg.externalProxySymbol} $${Number(leg.externalProxyLastPrice).toFixed(2)}`
+              : (leg.pricingStatusLabel || pricingStatusLabel(leg.pricingStatus) || 'watchlist'))}
         </MonoText>
+        {leg.externalProxyLastPrice && (
+          <MonoText style={{ display: 'block', fontSize: '10px', marginTop: '2px', color: THEME.text.faint }}>
+            {leg.externalProxySource || 'external proxy'}
+          </MonoText>
+        )}
       </div>
     </div>
+    {leg.externalProxyLastPrice && (
+      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginTop: '6px', lineHeight: 1.35 }}>
+        IBKR identified the event contract; external proxy mark is {leg.externalProxyTitle || leg.externalProxySymbol}.
+      </div>
+    )}
     {leg.reason && (
       <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, marginTop: '6px' }}>
         reason: {leg.reasonLabel || pricingStatusLabel(leg.reason)}

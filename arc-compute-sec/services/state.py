@@ -71,6 +71,33 @@ IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
         "leg_role": "macro_context_forecast",
     },
 }
+IBKR_FORECAST_PROXY_META: dict[str, dict[str, str]] = {
+    "RETXC": {
+        "symbol": "NRG",
+        "title": "NRG Energy",
+        "role": "merchant power external proxy",
+    },
+    "ITNVD": {
+        "symbol": "NVDA",
+        "title": "NVIDIA",
+        "role": "AI compute-demand external proxy",
+    },
+    "CRUDB": {
+        "symbol": "BZ=F",
+        "title": "Brent crude futures",
+        "role": "energy input-cost external proxy",
+    },
+    "NGP": {
+        "symbol": "NG=F",
+        "title": "Henry Hub natural gas futures",
+        "role": "power-stack fuel external proxy",
+    },
+    "FF": {
+        "symbol": "ZQ=F",
+        "title": "30-day Fed Funds futures",
+        "role": "macro-rate external proxy",
+    },
+}
 POLYMARKET_WATCHLIST_META: dict[str, dict[str, str]] = {
     "ai-data-center-moratorium-passed-before-2027": {
         "title": "AI data center moratorium passed before 2027?",
@@ -704,6 +731,56 @@ def _inventory_sizing(surface: str) -> str:
     return str(os.environ.get(env_name, "1.0"))
 
 
+def _ibkr_forecast_proxy_meta(symbol: str) -> dict[str, str]:
+    clean = str(symbol or "").strip().upper()
+    meta = dict(IBKR_FORECAST_PROXY_META.get(clean, {}))
+    raw = os.environ.get("IBKR_FORECAST_PROXY_SYMBOLS_JSON", "").strip()
+    if not raw:
+        return meta
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        return meta
+    if not isinstance(decoded, dict):
+        return meta
+    override = decoded.get(clean)
+    if isinstance(override, str):
+        meta["symbol"] = override.strip().upper()
+    elif isinstance(override, dict):
+        for key in ("symbol", "title", "role"):
+            if override.get(key):
+                meta[key] = str(override[key])
+    return meta
+
+
+def _ibkr_external_proxy_quote_fields(symbol: str, pricing_status: str) -> dict[str, Any]:
+    if not bool_env("IBKR_FORECAST_PROXY_QUOTE_FETCH", True):
+        return {}
+    if str(pricing_status or "").strip().lower() in {"priced", "priced_watchlist"}:
+        return {}
+    meta = _ibkr_forecast_proxy_meta(symbol)
+    proxy_symbol = str(meta.get("symbol") or "").strip().upper()
+    if not proxy_symbol:
+        return {}
+    quote = _fetch_public_quote(proxy_symbol)
+    price = quote.get("price") if isinstance(quote, dict) else None
+    base = {
+        "external_proxy_symbol": proxy_symbol,
+        "external_proxy_title": meta.get("title") or proxy_symbol,
+        "external_proxy_role": meta.get("role") or "external proxy quote",
+        "external_proxy_status": "priced_external_proxy" if price is not None else "external_proxy_price_unavailable",
+        "external_proxy_status_label": "External proxy price available" if price is not None else "External proxy price unavailable",
+    }
+    if isinstance(quote, dict):
+        base.update({
+            "external_proxy_last_price": float(price) if price is not None else "",
+            "external_proxy_currency": quote.get("currency", ""),
+            "external_proxy_exchange": quote.get("exchange", ""),
+            "external_proxy_source": quote.get("source", ""),
+        })
+    return base
+
+
 def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, Any]]:
     symbols = [s.upper() for s in _env_csv("IBKR_DIRECT_EVENT_SYMBOLS", DEFAULT_IBKR_DIRECT_EVENT_SYMBOLS)]
     live_events = _read_ibkr_forecast_inventory(logs=logs)
@@ -719,7 +796,11 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
             description = f"{description} {meta_description}".strip()
         role = str(meta.get("leg_role") or "direct_prediction_event")
         pricing_status = str(event.get("pricing_status") or "inventory_unpriced")
-        rows.append({
+        proxy_fields = _ibkr_external_proxy_quote_fields(symbol, pricing_status)
+        status_label = _pricing_status_label(pricing_status)
+        if proxy_fields.get("external_proxy_status") == "priced_external_proxy":
+            status_label = f"{status_label}; proxy price available"
+        row = {
             "ts": event.get("ts") or event.get("generated_at") or time.time(),
             "surface": "ibkr_prediction",
             "instrument": f"ibkr-prediction:{symbol}-EC",
@@ -734,7 +815,7 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
             "leg_role": role,
             "direct_pair_role": str(meta.get("pair_role") or "direct forecast leg"),
             "pricing_status": pricing_status,
-            "pricing_status_label": _pricing_status_label(pricing_status),
+            "pricing_status_label": status_label,
             "pricing_detail": str(event.get("pricing_detail") or ""),
             "venue": str(event.get("venue") or "IBKR ForecastTrader"),
             "exchange": str(event.get("exchange") or "FORECASTX"),
@@ -744,7 +825,9 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
             "yes_prices": event.get("yes_prices") or [],
             "inventory": True,
             "source": "ibkr_forecast_inventory",
-        })
+        }
+        row.update(proxy_fields)
+        rows.append(row)
     return rows
 
 

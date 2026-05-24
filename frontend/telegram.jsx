@@ -388,8 +388,8 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                 key={`${leg.slug || leg.instrument || 'inventory'}-${i}`}
                 icon={surfaceIcon(leg.surface)}
                 title={leg.displayName || leg.instrument || leg.slug || 'research leg'}
-                subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
-                trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.pricingStatusLabel || 'watchlist'}</span>}
+                subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.externalProxySymbol ? ` · proxy ${leg.externalProxySymbol}` : ''}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
+                trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.externalProxyLastPrice ? `$${Number(leg.externalProxyLastPrice).toFixed(2)}` : (leg.pricingStatusLabel || 'watchlist')}</span>}
               />
             ))}
           </>
@@ -441,8 +441,8 @@ const TgScouting = ({ setScreen, goBack, data }) => {
             key={`${leg.slug || leg.instrument || 'leg'}-${i}`}
             icon={surfaceIcon(leg.surface)}
             title={leg.displayName || leg.instrument || leg.slug || 'research leg'}
-            subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
-            trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.pricingStatusLabel || 'watchlist'}</span>}
+            subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.externalProxySymbol ? ` · proxy ${leg.externalProxySymbol}` : ''}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
+            trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.externalProxyLastPrice ? `$${Number(leg.externalProxyLastPrice).toFixed(2)}` : (leg.pricingStatusLabel || 'watchlist')}</span>}
           />
         )) : (
           <div style={{ padding: '12px 16px', fontSize: '12px', color: TG_THEME.secondary }}>

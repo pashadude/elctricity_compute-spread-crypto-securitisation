@@ -258,6 +258,7 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_FETCH", "1")
     monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "1")
     monkeypatch.setenv("PUBLIC_HEDGE_SYMBOLS", "NVDA")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
     monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol: {
         "symbol": symbol,
         "price": 180.25,
@@ -321,6 +322,7 @@ def test_snapshot_labels_ibkr_quote_unavailable(tmp_path, monkeypatch):
     monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "RETXC")
     monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "")
     monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
     (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
         "events": [{
             "symbol": "RETXC",
@@ -339,6 +341,38 @@ def test_snapshot_labels_ibkr_quote_unavailable(tmp_path, monkeypatch):
     gap = snap["synthetic_instrument"]["outputs"]["discovery_gaps"][0]
     assert gap["status_label"] == "IBKR quote unavailable"
     assert "ForecastTrader metadata" in gap["next_step"]
+
+
+def test_snapshot_adds_external_proxy_price_for_ibkr_forecast_gap(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "1")
+    monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "ITNVD")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol: {
+        "symbol": symbol,
+        "price": 181.25,
+        "currency": "USD",
+        "exchange": "NMS",
+        "source": "yahoo_finance_chart",
+    })
+    (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
+        "events": [{
+            "symbol": "ITNVD",
+            "slug": "itnvd-ec",
+            "title": "NVIDIA Inference vs. Training Revenue",
+            "pricing_status": "ibkr_quote_unavailable",
+        }],
+    }))
+
+    row = state.snapshot()["direct_inventory"][0]
+
+    assert row["pricing_status"] == "ibkr_quote_unavailable"
+    assert row["pricing_status_label"] == "IBKR quote unavailable; proxy price available"
+    assert row["external_proxy_symbol"] == "NVDA"
+    assert row["external_proxy_last_price"] == 181.25
+    assert row["external_proxy_status"] == "priced_external_proxy"
+    assert row["external_proxy_source"] == "yahoo_finance_chart"
 
 
 def test_snapshot_rolls_up_repeated_rejects_and_groups_package(tmp_path, monkeypatch):

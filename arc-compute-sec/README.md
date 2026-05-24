@@ -479,7 +479,11 @@ IBKR models ForecastEx products as option-like contracts whose conids must be
 resolved before quotes or orders. When Client Portal returns EC metadata
 without bid/ask/last fields, the adapter now attempts a read-only delayed TWS
 EC snapshot fallback through `IBKR_GATEWAY_PORT` and marks the row
-`ibkr_quote_unavailable` if both paths lack a usable price. Kalshi and live external venue execution
+`ibkr_quote_unavailable` if both paths lack a usable price. The dashboard can
+still attach a clearly labelled external proxy quote from Yahoo/Alpaca/IBKR
+public-market sources (`IBKR_FORECAST_PROXY_QUOTE_FETCH=1`, default on), for
+example ITNVD -> NVDA or CRUDB -> BZ=F. That proxy quote is not treated as the
+ForecastTrader EC price. Kalshi and live external venue execution
 remain deferred. Crypto proxy PnL is not counted as direct
 spread-securitization proof; it must be reconciled separately.
 
