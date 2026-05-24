@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.template
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+logs/*
+!logs/.gitkeep
+data/master_fills_v4.tsv
+upstream/*
+!upstream/PINNED_SHA.txt
+dist/
+build/
+.DS_Store
+npm-debug.log*

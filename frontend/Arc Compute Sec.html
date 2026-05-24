@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arc Compute Sec</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; }
+    body {
+      background: #060a08;
+      color: #fff;
+      font-family: 'DM Sans', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1E2D25; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #2a3d32; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes float { 0% { transform: translateY(0); } 100% { transform: translateY(-12px); } }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes railPulse { 0% { top: 0; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { top: calc(100% - 120px); opacity: 0; } }
+
+    .page-enter { animation: slideUp 0.4s ease forwards; }
+
+    /* selection */
+    ::selection { background: #00DC8240; color: #fff; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <script type="text/babel" src="theme.jsx"></script>
+  <script type="text/babel" src="icons.jsx"></script>
+  <script type="text/babel" src="illustrations.jsx"></script>
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="landing.jsx"></script>
+  <script type="text/babel" src="dashboard.jsx"></script>
+  <script type="text/babel" src="telegram.jsx"></script>
+  <script type="text/babel" src="account.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "refreshRate": 2000
+    }/*EDITMODE-END*/;
+
+    const pathToPage = () => {
+      const path = window.location.pathname.replace(/\/+$/, '') || '/';
+      if (path === '/dashboard') return 'dashboard';
+      if (path === '/telegram') return 'telegram';
+      if (path === '/tg') return 'telegramApp';
+      if (path === '/account') return 'account';
+      return 'landing';
+    };
+    const pageToPath = { landing: '/', dashboard: '/dashboard', telegram: '/telegram', telegramApp: '/tg', account: '/account' };
+    const scrollAppToTop = () => {
+      const run = () => {
+        const el = document.getElementById('app-scroll');
+        if (el) {
+          el.scrollTop = 0;
+          el.scrollLeft = 0;
+          if (typeof el.scrollTo === 'function') el.scrollTo(0, 0);
+        }
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+        window.scrollTo(0, 0);
+      };
+      run();
+      requestAnimationFrame(run);
+      setTimeout(run, 0);
+      setTimeout(run, 80);
+    };
+    window.scrollAppToTop = scrollAppToTop;
+
+    const App = () => {
+      const [page, setPageState] = React.useState(pathToPage);
+      const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const prevPage = React.useRef(page);
+
+      const setPage = React.useCallback((next) => {
+        scrollAppToTop();
+        setPageState(next);
+        const nextPath = pageToPath[next] || '/';
+        if (window.location.pathname !== nextPath) {
+          window.history.pushState({ page: next }, '', nextPath);
+        }
+        scrollAppToTop();
+      }, []);
+
+      React.useEffect(() => {
+        const onPopState = () => setPageState(pathToPage());
+        window.addEventListener('popstate', onPopState);
+        return () => window.removeEventListener('popstate', onPopState);
+      }, []);
+
+      React.useEffect(() => {
+        prevPage.current = page;
+      }, [page]);
+
+      React.useLayoutEffect(() => {
+        scrollAppToTop();
+      }, [page]);
+
+      const pageContent = React.useMemo(() => {
+        switch (page) {
+          case 'landing': return <LandingPage setPage={setPage} />;
+          case 'dashboard': return <DashboardPage refreshRate={tweaks.refreshRate} />;
+          case 'telegram': return <TelegramPage />;
+          case 'telegramApp': return <TelegramMiniApp />;
+          case 'account': return <AccountPage setPage={setPage} />;
+          default: return <LandingPage setPage={setPage} />;
+        }
+      }, [page, tweaks.refreshRate]);
+
+      if (page === 'telegramApp') {
+        return pageContent;
+      }
+
+      return (
+        <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: THEME.bg.deep, minWidth: 0 }}>
+          <Nav page={page} setPage={setPage} />
+          <div id="app-scroll" className="page-enter" key={page} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            {pageContent}
+          </div>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="Simulation">
+              <TweakSlider
+                label="Data Refresh Rate"
+                value={tweaks.refreshRate}
+                onChange={v => setTweak('refreshRate', v)}
+                min={500}
+                max={10000}
+                step={500}
+                format={v => `${(v / 1000).toFixed(1)}s`}
+              />
+            </TweakSection>
+          </TweaksPanel>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

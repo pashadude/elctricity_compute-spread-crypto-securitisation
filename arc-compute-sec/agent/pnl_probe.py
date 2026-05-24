@@ -7,10 +7,10 @@ in `logs/pnl_reconciliation.tsv`.
 
 PnL models per surface:
 
-  polymarket  →  sum(yes_prices) - 1                 (NO-overlay arb)
-  ibkr        →  |z| * basis_per_z_for_equity        (mean-reversion alpha
-                                                      from compute-elec spread)
-  crypto      →  |z| * basis_per_z_for_crypto
+  polymarket       →  sum(yes_prices) - 1                 (NO-overlay arb)
+  ibkr_prediction  →  sum(yes_prices) - 1                 (event contract overlay)
+  ibkr             →  |z| * basis_per_z_for_equity        (stock proxy)
+  crypto           →  |z| * basis_per_z_for_crypto
 
 Basis-per-z constants are deliberately conservative; the agent's realized
 PnL will trail or beat these and the reconciliation table will show drift.
@@ -37,11 +37,15 @@ class PnLEstimate:
     inputs: dict
 
 
-def polymarket_pnl_per_dollar(yes_prices: Sequence[float]) -> float:
+def event_contract_pnl_per_dollar(yes_prices: Sequence[float]) -> float:
     """sum(p_yes_i) − 1. Positive = NO-overlay profitable."""
     if not yes_prices:
-        raise ValueError("polymarket_pnl_per_dollar requires at least one yes_price")
+        raise ValueError("event_contract_pnl_per_dollar requires at least one yes_price")
     return sum(float(p) for p in yes_prices) - 1.0
+
+
+def polymarket_pnl_per_dollar(yes_prices: Sequence[float]) -> float:
+    return event_contract_pnl_per_dollar(yes_prices)
 
 
 def equity_pnl_per_dollar(
@@ -78,10 +82,10 @@ def estimate(
     z: float | None = None,
 ) -> PnLEstimate:
     """Dispatch on surface."""
-    if surface == "polymarket":
+    if surface in {"polymarket", "ibkr_prediction"}:
         if not yes_prices:
-            raise ValueError("polymarket surface requires yes_prices")
-        est = polymarket_pnl_per_dollar(yes_prices)
+            raise ValueError(f"{surface} surface requires yes_prices")
+        est = event_contract_pnl_per_dollar(yes_prices)
         return PnLEstimate(
             surface=surface,
             instrument=instrument,

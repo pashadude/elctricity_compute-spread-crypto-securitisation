@@ -27,6 +27,32 @@ def test_query_spec_maps_hormuz_to_core_context_terms():
     assert "Strait of Hormuz" in spec.core_terms
     assert "tankers" in spec.context_terms
     assert "header:" in spec.searchline
+    assert "120000256" in spec.opoint_topic_ids
+    assert "220000256" in spec.opoint_topic_ids
+    assert all("medtop:" not in topic_id for topic_id in spec.opoint_topic_ids)
+
+
+def test_opoint_search_payload_uses_verified_topic_filter_shape():
+    spec = oracle.query_spec_for_candidate(_candidate(
+        slug="openai-data-center-power-demand",
+        event_slug="openai-data-center-power-demand",
+        energy_template_id="energy_ai_infra",
+    ))
+    topic_id = spec.opoint_topic_ids[0]
+    payload = oracle._opoint_search_payload(
+        spec,
+        oldest=1770000000,
+        newest=1770003600,
+        topic_id=topic_id,
+    )
+
+    filters = payload["expressions"][0]["searchline"]["filters"]
+    assert {"type": "lang", "id": "en"} in filters
+    assert {"type": "topic", "id": topic_id} in filters
+    assert topic_id[0] in {"1", "2"}
+    assert topic_id[1:].isdigit()
+    assert payload["params"]["main"]["body"] == 1
+    assert payload["params"]["main"]["tags"] == 1
 
 
 def test_article_relevance_requires_core_and_context_terms():
@@ -56,6 +82,27 @@ def test_article_relevance_requires_core_and_context_terms():
         noisy,
         core_terms=["Strait of Hormuz", "Hormuz"],
         context_terms=["tankers", "shipping", "oil"],
+    )
+
+
+def test_opoint_parser_uses_body_excerpt_for_relevance():
+    parsed = oracle._parse_opoint_article({
+        "id_article": "body-1",
+        "position": 2,
+        "site_rank": {"rank_global": 25000},
+        "header": {"text": "AI infrastructure financing update"},
+        "summary": {"text": "The article covers investment plans."},
+        "body": {"text": "OpenAI data center operators cited power capacity and GPU supply constraints."},
+        "first_source": {"name": "wire"},
+        "local_time": {"text": "2026-05-23"},
+    })
+
+    assert "power capacity" in parsed.summary
+    assert parsed.rank_global == 2
+    assert oracle.is_relevant_article(
+        parsed,
+        core_terms=["OpenAI", "data center"],
+        context_terms=["power", "GPU"],
     )
 
 

@@ -1,10 +1,10 @@
 # arc-compute-sec
 
-Arc-settled outcome desk for the electricity-compute arb.
+Arc-wrapped compute/energy spread package desk.
 
-v0 is deliberately narrow. Arc is the settlement, escrow, identity,
-reputation, and audit rail. Arc is not the alpha source, prediction venue,
-scorer, or Polymarket executor.
+v1 is deliberately narrow. Arc is the settlement, escrow, identity,
+reputation, and audit rail. Arc is not the alpha source, crypto venue,
+prediction venue, scorer, or Polymarket executor.
 
 ## Thesis
 
@@ -14,22 +14,23 @@ cannot. GPU service flow is perishable, utilization is uncertain, hardware
 depreciates technologically before it depreciates physically, and there is no
 industry-standard futures unit for a fungible GPU-hour.
 
-That leaves one practical bridge for a hackathon v0: securitize **outcomes**
-that expose the same bottleneck. Larry Fink framed the destination at Milken:
+That leaves one practical bridge for a hackathon v1: wrap a **judged
+compute/energy spread package**. Larry Fink framed the destination at Milken:
 ["A new asset class will be buying futures of compute"](https://finance.yahoo.com/sectors/technology/articles/blackrock-reveals-surprising-asset-class-022000793.html).
 This repo implements the first auditable step toward that market: find
-electricity/compute dislocations, express them through prediction-market-style
-events or paper liquid proxies, and wrap the judged position as an ERC-8183 job
-on Arc.
+electricity/compute dislocations, canonicalize the signal and chosen legs into
+one package blob, and wrap the judge-approved package as an ERC-8183 job on
+Arc.
 
-Prediction markets are the viable first surface because they already solve the
-hardest problem that compute futures do not yet solve: they turn messy,
-bespoke infrastructure risks into discrete, externally resolvable claims. Grid
-approvals, energy shocks, chip delays, model-release timing, and AI-capacity
-milestones do not need a standardized GPU-hour to trade; they need a canonical
-event, a price, a resolution, and an audit trail. Arc supplies the escrow,
-identity, reputation, and settlement rail around that outcome. It does not
-source alpha.
+Prediction/event-contract legs are the cleanest explanation of the package:
+for example, when electricity is expensive, the direct pair is long an
+energy/grid-stress outcome and short an AI release/popularity/compute-demand
+outcome. Those direct legs can come from read-only Polymarket research rows or
+from IBKR ForecastTrader/ForecastEx event contracts when the operator supplies
+eligible contract metadata. BTC or ETH is not the securitized claim. Crypto is
+only a labelled miner-margin proxy: higher electricity costs compress
+proof-of-work mining economics, so a short BTC/USD or ETH/USD paper leg can
+express that stress when direct events are unavailable or too thin.
 
 ## How We Get Arbs
 
@@ -46,24 +47,45 @@ with the electricity term converted from MWh to GPU-hours in
 - `z(S_t) > threshold`: compute is expensive relative to electricity.
 - `z(S_t) < -threshold`: electricity is expensive relative to compute.
 
-The router then expresses that one signal on the surfaces where the
-mispricing should show up:
+The runtime implements the package in four steps:
 
-- **S-4 Polymarket energy outcomes:** oil, gas, electricity, grid, OPEC/EIA,
-  and AI-infra power events are filtered through the energy template universe.
-- **Prediction-market AI-infra outcomes:** model releases and capacity events
-  are the direct path to outcome securitization, but v0 keeps Polymarket
-  read-only.
-- **IBKR paper equities:** hyperscaler margin compression/relief is rehearsed
-  with paper orders only.
-- **Crypto paper:** BTC/ETH proxy mining-margin stress from electricity spikes;
-  no Hyperliquid execution in v0.
+1. **Compute the spread:** `S_t` and z-score define whether compute or
+   electricity is expensive.
+2. **Build the package:** `agent/spread_package.py` records the signal,
+   thesis, intended direct event pair, available expression legs, and a
+   canonical package hash.
+3. **Express the legs:** Polymarket, IBKR ForecastTrader/ForecastEx, and
+   Kalshi-style event legs are direct when they match the thesis; BTC/ETH and
+   IBKR stocks are labelled proxy legs only.
+4. **Judge then wrap:** `judge.classify()` runs before any Arc action; only
+   `EXECUTE` can become an ERC-8183 job.
+
+The router then expresses that package on available surfaces:
+
+- **Direct prediction/event-contract legs:** S-4 Polymarket energy outcomes,
+  AI-infra events, and configured IBKR ForecastTrader/ForecastEx contracts are
+  filtered through the energy template universe and kept read-only/paper in
+  v1. IBKR event contracts are a different surface from IBKR stocks.
+- **Direct-event inventory:** the dashboard and Telegram mini app also show a
+  sanitized `WATCHLIST` inventory from `IBKR_DIRECT_EVENT_SYMBOLS` and
+  `POLYMARKET_DIRECT_EVENT_SLUGS`. Set `POLYMARKET_DIRECT_EVENT_FETCH=1` to
+  refresh slug metadata from Gamma; otherwise the app uses the committed
+  watchlist labels. These rows explain the actual energy and compute-demand
+  legs being monitored. They are not judge candidates and cannot hit Arc until
+  the normal priced/gated route emits an `EXECUTE` candidate.
+- **Crypto miner-margin proxies:** BTC/USD and ETH/USD paper/live-read legs
+  are used only on `electricity_expensive` signals and are labelled as proxy
+  evidence, not the spread claim.
+- **IBKR stock paper proxies:** hyperscaler margin compression/relief is
+  rehearsed with stock paper orders only. These rows must display as stock
+  proxies, not as direct event legs.
 
 Every candidate must then pass the same capital gate: energy classifier,
-upstream premium scorer, four-way judge, and only then Arc wrapping. The core
-desk edge is not "call Arc"; it is the upstream premium gate plus a narrow
-energy classifier plus `judge.classify()` refusing to spend USDC unless the
-candidate returns `EXECUTE`.
+upstream premium scorer when the candidate is Polymarket, four-way judge, and
+only then Arc wrapping. The core desk edge is not "call Arc"; it is the
+electricity-compute signal, the preserved premium gate when prediction markets
+are used, and `judge.classify()` refusing to spend USDC unless the candidate
+returns `EXECUTE`.
 
 ## Evidence So Far
 
@@ -84,10 +106,16 @@ repo therefore treats `require_non_negative_premium=True` as a hard invariant,
 tests for absence of any `False` S-4 code path, and logs premium failures as
 auditable `REJECT` judgements.
 
-Phase 4 then proved the rail live on Arc Testnet: one live-feed multi-surface
-pass routed 11 candidates across crypto, IBKR, and Polymarket; the judge
-selected `crypto/BTC/USD`; and ERC-8183 job `19091` was created, funded,
-submitted, completed, and given ERC-8004 feedback.
+`npm run package:backtest` turns that into the package-level proof. It reports
+the direct prediction-event evidence and explicitly marks crypto as proxy-only:
+BTC/USD and ETH/USD are never counted as proof that the spread itself was
+securitized.
+
+Phase 4 then proved the rail live on Arc Testnet: one live-feed package pass
+routed 11 expression legs across direct event surfaces and proxy surfaces; the
+judge selected `crypto/BTC/USD` as a miner-margin proxy leg; and ERC-8183 job
+`19091` was created, funded, submitted, completed, and given ERC-8004
+feedback.
 
 Oracle backtesting is now offline-only: saved Opoint/Nebius analyst+critic
 receipts can be replayed against resolved outcomes to measure calibration,
@@ -120,7 +148,9 @@ Backtest saved receipts with `npm run oracle:energy-backtest --
 
 Implemented and tested:
 
-- One-shot S-4 runtime: `scan_once(max_positions=1)` exits after one pass.
+- One-shot spread-package runtime: `scan_once(max_positions=1)` exits after one pass.
+- Canonical package metadata is attached to each candidate and included in the
+  Arc deliverable hash.
 - Energy classifier drops off-template Polymarket events before scoring.
 - Scorer bridge preserves the upstream premium gate with
   `require_non_negative_premium=True`.
@@ -135,6 +165,11 @@ Implemented and tested:
 - Phase 0.6 / Block 2 IBKR paper Gateway smoke is complete: local Gateway
   socket `127.0.0.1:4002` was reachable outside sandbox and
   `npm run ibkr:smoke` returned a GOOGL quote.
+- IBKR ForecastTrader TWS discovery is read-only and can list account-visible
+  event underliers such as energy/electricity, macro, and NVIDIA compute
+  events. Priced YES/NO contract legs still require authenticated IBKR Client
+  Portal/Web API discovery because IBKR resolves event-contract conids through
+  those endpoints.
 - Phase 0.7 / Block 2 EIA + AWS feed smoke is complete: `npm run feeds:smoke`
   fetched one live ERCOT/TX EIA electricity proxy point and one AWS
   `p4d.24xlarge` `us-east-1` spot price.
@@ -148,10 +183,11 @@ Implemented and tested:
   `npm run s4:testnet:mock` produced one mock arb signal, one Polymarket S-4
   candidate, judge `EXECUTE`, ERC-8183 wrap, submit, `complete()` settlement,
   and ERC-8004 feedback.
-- Phase 4 / Block 5 live multi-surface one-shot is complete: `npm run
+- Phase 4 / Block 5 live package one-shot is complete: `npm run
   phase4:live` fetched live feeds, routed 11 candidates across crypto, IBKR,
-  and Polymarket, selected `crypto/BTC/USD`, judge returned `EXECUTE`, and one
-  ERC-8183 job was wrapped, submitted, completed, and given feedback.
+  and read-only Polymarket, selected `crypto/BTC/USD` as a miner-margin proxy,
+  judge returned `EXECUTE`, and one ERC-8183 job was wrapped, submitted,
+  completed, and given feedback.
 - Offline oracle backtest harness exists at `agent/oracle_backtest.py`; it
   evaluates saved oracle JSONL only and makes no live Opoint/Nebius calls.
 - Phase 3 energy premium-gate verifier exists at `agent/energy_oracle_backtest.py`;
@@ -184,7 +220,7 @@ reason hash `0x5c806b9388d86c7620b20373d03eced18f37022b6b0385f06684f0e7a7a41a7a`
 - complete: `https://testnet.arcscan.app/tx/0x6a0796757192dd5670c069e8093198495708271ad5b3d209cab29ceeb393cb76`
 - feedback: `https://testnet.arcscan.app/tx/0xd10ebc83f34be7b71de95d821d14429913ee648c71ce4e217b70d5c562ab6b40`
 
-Latest Phase 4 live multi-surface proof: job `19091`, surface `crypto`,
+Latest Phase 4 live package proof: job `19091`, surface `crypto`,
 instrument `BTC/USD`, deliverable hash
 `0x8b16ce661f18e0e3283f1a70b48550a9f34c18f157ead03f7c3b2b29cfdfa221`,
 reason hash `0x5c806b9388d86c7620b20373d03eced18f37022b6b0385f06684f0e7a7a41a7a`.
@@ -204,25 +240,134 @@ Authoritative context:
 - `../docs/agent-context/CODEX_PLAN.md`
 - `GATE_A.md`
 
-## What v0 Does
+## Local Backend, Frontend, Worker, And Telegram
+
+The operator app is served by a small Python HTTP API. It reads sanitized
+runtime logs from `logs/`, serves the static frontend from `../frontend`, and
+queues scan requests for the worker. Frontend and Telegram never call Arc
+directly; scan requests still run through `agent.runtime` and the
+`judge.classify()` gate.
+
+Local API:
+
+```bash
+npm run api
+```
+
+Open `http://localhost:8080/`. The dashboard calls `/api/snapshot`; dry-run
+scan buttons enqueue `/api/scans`. Python service entrypoints load
+`arc-compute-sec/.env` automatically when it exists; values already exported in
+the shell take precedence.
+
+24/7 local worker:
+
+```bash
+npm run worker
+```
+
+The worker defaults to dry-run mode. Live Arc Testnet submission requires
+`ENABLE_LIVE_CHAIN=1` and the existing Circle/Arc `.env` credentials.
+
+Docker Desktop stage:
+
+```bash
+npm run docker:up
+```
+
+This starts `api` and `worker` with `restart: unless-stopped`, persists
+`./logs`, and mounts `../frontend` read-only. Telegram is a separate profile:
+
+```bash
+npm run docker:telegram
+```
+
+Telegram uses the Bot API via `TELEGRAM_BOT_TOKEN`, posts channel updates to
+`TELEGRAM_CHANNEL_ID`, and only lets `TELEGRAM_ADMIN_USER_IDS` trigger scans.
+Channel posts are intentionally sparse: runtime errors, Arc positions, and
+one grouped `EXECUTE` spread-package brief. `REJECT` verdicts are muted in the
+channel so repeated premium-gate failures do not spam users; ask the bot for
+`/latest` or `/status` when debugging rejects. Each notification pass is capped
+by `TELEGRAM_NOTIFY_MAX_PER_PASS` (default `3`) to avoid Telegram rate limits.
+Polling mode works locally without ngrok. Use `ngrok http 8080` and set
+`PUBLIC_BASE_URL` when configuring a Telegram Mini App URL or webhook.
+
+IBKR Client Portal reminders are operator-only. With
+`IBKR_REAUTH_REMINDER_ENABLED=1`, the bot sends the first
+`TELEGRAM_ADMIN_USER_IDS` entry, or `IBKR_REAUTH_REMINDER_CHAT_ID` if set, a
+reauth checklist every `IBKR_REAUTH_REMINDER_INTERVAL_HOURS` hours. This keeps
+the public channel clean while reminding the operator to reopen
+`https://localhost:5055`, complete paper login/2FA, run
+`npm run ibkr:cp-watchdog-once`, and then keep `npm run ibkr:cp-watchdog`
+running.
+
+Webhook/ngrok mode:
+
+```bash
+ngrok http 8080
+# paste the ngrok HTTPS URL into .env as PUBLIC_BASE_URL
+npm run telegram:webhook:set
+```
+
+The webhook receiver is `POST /api/telegram/webhook`. If
+`TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send the matching
+`X-Telegram-Bot-Api-Secret-Token` header. Return to polling mode with:
+
+```bash
+npm run telegram:webhook:delete
+npm run telegram
+```
+
+Operator accounts:
+
+The frontend no longer grants paid access from browser `localStorage`. Operator
+access is server-owned: `POST /api/account/operator/demo-payment` creates an
+account only when `ALLOW_DEMO_OPERATOR_PAYMENT=1`, stores it in
+`logs/accounts.json`, and returns a signed HttpOnly `botozen_session` cookie.
+`GET /api/account` restores the user account from that cookie; `POST
+/api/account/logout` clears it.
+
+For public HTTPS deployment set:
+
+```bash
+ACCOUNT_SESSION_SECRET=<long random secret>
+ACCOUNT_COOKIE_SECURE=1
+ALLOW_DEMO_OPERATOR_PAYMENT=0
+CIRCLE_WEBHOOK_REQUIRE_SIGNATURE=1
+PUBLIC_BASE_URL=https://power.botozen.com
+```
+
+Circle webhook activation uses `POST /api/circle/webhook`. Circle Wallets
+webhooks send `X-Circle-Signature` and `X-Circle-Key-Id`; the backend fetches
+the public key from Circle's `/v2/notifications/publicKey/{keyId}` endpoint,
+verifies the ECDSA-SHA256 signature over the raw JSON body, and only then
+activates an Operator account for a completed >= 5 USDC transaction. The
+endpoint also answers `HEAD /api/circle/webhook` for subscriber checks.
+
+## What v1 Does
 
 Runtime path:
 
 ```text
 energy signal
-  -> read-only Polymarket event scan or mock S-4 candidate
-  -> energy classifier
-  -> upstream premium scorer
+  -> canonical spread package
+  -> direct prediction-event legs when available
+  -> optional IBKR ForecastTrader/ForecastEx event legs
+  -> optional IBKR stock paper proxies
+  -> optional BTC/ETH miner-margin proxy on electricity-expensive signals
+  -> energy classifier + upstream premium scorer for Polymarket only
   -> judge.classify()
   -> Arc ERC-8183 wrap only if verdict == EXECUTE
   -> optional submit/complete/feedback settlement pass
 ```
 
-Phase 4 adds an explicit `--multi-surface` one-shot mode for live paper
-surfaces. It still exits after one pass and defaults to `max_positions=1`.
+The default scan path is package multi-surface and still exits after one pass
+with `max_positions=1`. Use `--polymarket-only` for legacy S-4 isolation.
 
 The Polymarket adapter is read-only. It snapshots event prices and canonical
 candidate data for the Arc audit trail. It does not place Polymarket orders.
+The default Polymarket watchlist uses live slugs for AI data-center power
+siting and AI-industry stress; replace `POLYMARKET_DIRECT_EVENT_SLUGS` when
+those contracts expire.
 
 Premium-gate failures become auditable `REJECT` judgements. Off-template
 non-energy events are dropped before scorer and judge. No fallback scorer path
@@ -235,9 +380,9 @@ Live wraps preflight the client wallet's USDC balance and top it up from the
 desk wallet when local client state is stale or underfunded. This funding
 preflight runs after the judge returns `EXECUTE` and before ERC-8183 job calls.
 
-## What v0 Does Not Do
+## What v1 Does Not Do
 
-Deferred out of v0:
+Deferred out of v1:
 
 - S-1 electricity execution
 - S-2 hashrate factor
@@ -251,9 +396,15 @@ Deferred out of v0:
 - legal securitization or tranching
 - Arc Mainnet deployment
 
-IBKR and crypto are paper-only surfaces in the explicit Phase 4
-`--multi-surface` one-shot path. Kalshi and live external venue execution remain
-deferred.
+Crypto and IBKR stocks remain paper/live-read proxy surfaces; no live external
+venue execution happens in v1. IBKR ForecastTrader/ForecastEx contracts are
+modelled separately as `ibkr_prediction` direct event legs when the operator's
+IBKR demo account exposes priced eligible contract metadata. TWS can discover
+event underliers, but priced YES/NO legs require Client Portal/Web API because
+IBKR models ForecastEx products as option-like contracts whose conids must be
+resolved before quotes or orders. Kalshi and live external venue execution
+remain deferred. Crypto proxy PnL is not counted as direct
+spread-securitization proof; it must be reconciled separately.
 
 The current EIA adapter uses EIA's public electricity data as an ERCOT/TX
 electricity price proxy. A true ERCOT real-time LMP adapter is still deferred
@@ -269,13 +420,23 @@ Safe offline checks:
 | `npm run typecheck` | Type-check TypeScript scripts |
 | `npm run feeds:smoke` | Fetch one live EIA ERCOT/TX electricity proxy point and one AWS p4d us-east-1 spot price |
 | `npm run ibkr:smoke` | Quote one symbol through local IBKR paper Gateway |
+| `npm run ibkr:forecast-smoke` | List account-visible ForecastTrader/Event Contract underliers through local TWS |
+| `npm run ibkr:forecast-priced-smoke` | Try to resolve priced ForecastTrader YES/NO contracts through Client Portal/Web API |
+| `npm run ibkr:cp-watchdog-once` | Tickle Client Portal and attempt a soft `/iserver/reauthenticate`; browser/2FA login is still required after a hard `401 Unauthorized` |
+| `npm run ibkr:cp-watchdog` | Keep Client Portal warm in a local loop after browser login succeeds |
+| `IBKR_CP_BASE_URL=https://localhost:5055/v1/api .venv/bin/python scripts/ibkr_forecast_smoke.py --priced --symbols RETXC,ITNVD,CRUDB,NGP` | Resolve known ForecastTrader symbols and write sanitized `logs/ibkr_forecast_inventory.json` for the dashboard/TG watchlist |
 | `python tests/backward_check_energy_templates.py` | Re-run energy classifier against historical fills |
+| `npm run package:backtest` | Backtest the canonical package story and explicitly exclude crypto proxies from direct proof |
 | `npm run oracle:backtest -- --oracle-jsonl <file> [--outcomes-jsonl <file>]` | Replay saved oracle receipts against resolved outcomes; no live API calls |
 | `npm run oracle:backtest -- --oracle-jsonl <file> --missing-outcomes-out <file>` | Generate fillable outcome stubs for unresolved oracle receipts; no live API calls |
 | `npm run gate:energy-backtest` | Verify Phase 3 energy historical fills under the S-4 premium gate; no live API calls |
 | `npm run oracle:energy-backtest -- --llm-receipts-jsonl <file>` | Score saved Opoint+Nebius energy oracle receipts against historical fills |
-| `npm run s4:mock` | Offline mock S-4 dry run |
-| `npm run s4:scan` | One read-only live-feed S-4 scan in dry-run mode |
+| `npm run package:mock` | Offline spread-package dry run |
+| `npm run package:scan` | One spread-package live-feed scan in dry-run mode |
+| `npm run crypto:mock` | Alias for the package mock path; crypto remains a proxy leg |
+| `npm run crypto:scan` | Alias for the package scan path; crypto remains a proxy leg |
+| `npm run s4:mock` | Offline mock S-4 dry run with `--polymarket-only` |
+| `npm run s4:scan` | One read-only live-feed S-4 scan in dry-run mode with `--polymarket-only` |
 
 Arc Testnet commands that require `.env` credentials and funded testnet wallets:
 
@@ -287,7 +448,7 @@ Arc Testnet commands that require `.env` credentials and funded testnet wallets:
 | `npm run submit-outcome -- --job <id> --outcome-blob-path <file>` | Submit a canonical outcome blob hash |
 | `npm run settle-position -- --job <id> --verdict-blob-path <file> --action complete` | Complete and give feedback |
 | `npm run s4:testnet:mock` | One mock S-4 Arc Testnet wrap and settle after judge `EXECUTE` |
-| `npm run phase4:live` | One live-feed multi-surface pass; wraps and settles one judge-approved paper candidate |
+| `npm run phase4:live` | One live-feed package pass; wraps and settles one judge-approved paper candidate |
 
 ## Safety Invariants
 
@@ -331,7 +492,7 @@ npm run feeds:smoke   -> EIA ERCOT/TX proxy + AWS p4d us-east-1 spot returned
 npm run smoke         -> 0.01 USDC self-transfer completed on Arc Testnet
 npm run register-agent -> desk_agent_id 9931 confirmed; logs/identity.tsv present
 npm run s4:testnet:mock -> job 17884 wrapped, submitted, completed, feedback sent
-npm run phase4:live   -> job 19091 wrapped/settled from live multi-surface pass
+npm run phase4:live   -> job 19091 wrapped/settled from live package pass
 npm run oracle:backtest -- --oracle-jsonl <fixture> -> offline harness covered by tests
 npm run gate:energy-backtest -> 122 baseline fills; 99 kept; WR 100.0%; PnL +152.026
 npm run s4:mock       -> 1 S-4 candidate, EXECUTE, dry-run only

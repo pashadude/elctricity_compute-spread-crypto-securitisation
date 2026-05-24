@@ -29,6 +29,15 @@ from pathlib import Path
 from typing import Any
 
 _JUDGEMENTS_PATH = Path(__file__).resolve().parent.parent / "logs" / "judgements.tsv"
+_JUDGEMENT_HEADERS = [
+    "ts", "arb_signal_id", "surface", "instrument", "direction",
+    "sizing_usdc", "est_pnl_per_dollar", "action_kind",
+    "action_payload_hash", "energy_template_id",
+    "label", "reason_code", "confidence",
+    "scorer_premium", "scorer_passes_gate",
+    "leg_title", "leg_slug", "leg_description", "leg_end_date",
+    "leg_role", "package_id",
+]
 
 LABEL_EXECUTE = "EXECUTE"
 LABEL_REJECT = "REJECT"
@@ -50,7 +59,12 @@ def default_state() -> dict[str, Any]:
         "positions_open": 0,
         "max_concurrent_positions": 6,
         "max_data_age_seconds": 60 * 30,        # 30 min
-        "surface_resolutions_30d": {"polymarket": 1, "ibkr": 1, "crypto": 1},
+        "surface_resolutions_30d": {
+            "polymarket": 1,
+            "ibkr_prediction": 1,
+            "ibkr": 1,
+            "crypto": 1,
+        },
         "min_resolutions_for_execute": 0,        # v0: don't gate on this
     }
 
@@ -100,19 +114,54 @@ def _action_hash(candidate: dict[str, Any]) -> str:
     return h[:16]
 
 
+def _public_leg_fields(candidate: dict[str, Any]) -> dict[str, str]:
+    metadata = candidate.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    spread_leg = metadata.get("spread_leg") or {}
+    spread_package = metadata.get("spread_package") or {}
+    if not isinstance(spread_leg, dict):
+        spread_leg = {}
+    if not isinstance(spread_package, dict):
+        spread_package = {}
+    return {
+        "leg_title": str(metadata.get("title") or spread_leg.get("title") or candidate.get("instrument", "")),
+        "leg_slug": str(metadata.get("slug") or spread_leg.get("slug") or ""),
+        "leg_description": str(metadata.get("description") or spread_leg.get("description") or ""),
+        "leg_end_date": str(metadata.get("end_date") or spread_leg.get("end_date") or ""),
+        "leg_role": str(spread_leg.get("role") or ""),
+        "package_id": str(spread_package.get("package_id") or ""),
+    }
+
+
+def _ensure_judgement_schema() -> None:
+    if not _JUDGEMENTS_PATH.exists():
+        return
+    with _JUDGEMENTS_PATH.open("r", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        old_headers = reader.fieldnames or []
+        if old_headers == _JUDGEMENT_HEADERS:
+            return
+        rows = list(reader)
+    backup = _JUDGEMENTS_PATH.with_suffix(".legacy.tsv")
+    if not backup.exists():
+        backup.write_text(_JUDGEMENTS_PATH.read_text())
+    migrated = [{h: row.get(h, "") for h in _JUDGEMENT_HEADERS} for row in rows]
+    with _JUDGEMENTS_PATH.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=_JUDGEMENT_HEADERS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(migrated)
+
+
 def log(verdict: Verdict, candidate: dict[str, Any], scorer_result: dict[str, Any] | None = None) -> None:
     _JUDGEMENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_judgement_schema()
     new = not _JUDGEMENTS_PATH.exists()
     with _JUDGEMENTS_PATH.open("a", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
         if new:
-            writer.writerow([
-                "ts", "arb_signal_id", "surface", "instrument", "direction",
-                "sizing_usdc", "est_pnl_per_dollar", "action_kind",
-                "action_payload_hash", "energy_template_id",
-                "label", "reason_code", "confidence",
-                "scorer_premium", "scorer_passes_gate",
-            ])
+            writer.writerow(_JUDGEMENT_HEADERS)
+        leg_fields = _public_leg_fields(candidate)
         writer.writerow([
             f"{time.time():.0f}",
             candidate.get("arb_signal_id", ""),
@@ -129,4 +178,10 @@ def log(verdict: Verdict, candidate: dict[str, Any], scorer_result: dict[str, An
             f"{verdict.confidence:.3f}",
             f"{(scorer_result or {}).get('premium', '')}",
             f"{(scorer_result or {}).get('passes_gate', '')}",
+            leg_fields["leg_title"],
+            leg_fields["leg_slug"],
+            leg_fields["leg_description"],
+            leg_fields["leg_end_date"],
+            leg_fields["leg_role"],
+            leg_fields["package_id"],
         ])

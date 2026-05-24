@@ -19,3 +19,18 @@ def test_clear_namespace():
     cache.clear("ns1")
     assert cache.get("ns1", "k") is None
     assert cache.get("ns2", "k") == {"a": 2}
+
+
+def test_corrupt_cache_db_is_quarantined(tmp_path, monkeypatch):
+    db = tmp_path / "_feed_cache.sqlite"
+    db.write_text("not sqlite")
+    monkeypatch.setattr(cache, "_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(cache, "_CACHE_DB", db)
+    monkeypatch.setattr(cache, "_db_init_done", False)
+    cache._mem.clear()
+
+    assert cache.get("ns", "k") is None
+    cache.put("ns", "k", {"ok": True}, ttl_seconds=60)
+
+    assert cache.get("ns", "k") == {"ok": True}
+    assert list(tmp_path.glob("_feed_cache.sqlite.corrupt.*"))

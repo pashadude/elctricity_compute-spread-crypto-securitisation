@@ -56,6 +56,12 @@ def test_estimate_dispatch_polymarket():
     assert math.isclose(est.est_pnl_per_dollar, 0.05, abs_tol=1e-9)
 
 
+def test_estimate_dispatch_ibkr_prediction():
+    est = estimate(surface="ibkr_prediction", instrument="IBKR-FX:ercot", direction="short",
+                   yes_prices=[0.51, 0.52])
+    assert math.isclose(est.est_pnl_per_dollar, 0.03, abs_tol=1e-9)
+
+
 def test_estimate_dispatch_ibkr():
     est = estimate(surface="ibkr", instrument="GOOGL", direction="short", z=2.0)
     assert est.est_pnl_per_dollar > 0

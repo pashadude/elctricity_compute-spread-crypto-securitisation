@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arc Compute — Promo Posts & Channel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; }
+    body { background: #060a08; color: #fff; font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1E2D25; border-radius: 3px; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="icons.jsx"></script>
+
+  <script type="text/babel">
+    const T = {
+      bg: { deep: '#060a08', base: '#0B0F0E', surface: '#111916', elevated: '#172119' },
+      border: { subtle: '#1a2a21', default: '#1E2D25' },
+      primary: { 300: '#75EDAE', 400: '#00DC82', 500: '#00C16A', 700: '#007F45', 900: '#0A5331' },
+      amber: { 400: '#F59E0B' }, red: { 400: '#EF4444' }, blue: { 400: '#60A5FA' }, purple: { 400: '#A78BFA' },
+      text: { primary: '#FFFFFF', secondary: '#A1B5AB', muted: '#6B8578', faint: '#3D5548' },
+      font: { heading: "'Space Grotesk', sans-serif", body: "'DM Sans', sans-serif", mono: "'JetBrains Mono', monospace" },
+    };
+
+    /* ── Channel Identity ── */
+    const ChannelAvatar = ({ size = 120 }) => (
+      <svg width={size} height={size} viewBox="0 0 120 120">
+        <defs>
+          <linearGradient id="avBg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#0a0c08" />
+            <stop offset="100%" stopColor="#12170e" />
+          </linearGradient>
+        </defs>
+        <rect width="120" height="120" rx="28" fill="url(#avBg)" />
+        <rect x="1" y="1" width="118" height="118" rx="27" fill="none" stroke="#F59E0B" strokeWidth="1" strokeOpacity="0.15" />
+
+        {/* A-frame lattice tower */}
+        <g stroke="#F59E0B" strokeLinecap="round" strokeLinejoin="round" fill="none">
+          {/* Two main A-legs */}
+          <line x1="60" y1="14" x2="30" y2="98" strokeWidth="2.5" />
+          <line x1="60" y1="14" x2="90" y2="98" strokeWidth="2.5" />
+
+          {/* Lattice cross-braces (X pattern between legs) */}
+          <line x1="48" y1="38" x2="66" y2="52" strokeWidth="1" opacity="0.45" />
+          <line x1="66" y1="38" x2="48" y2="52" strokeWidth="1" opacity="0.45" />
+          <line x1="44" y1="52" x2="68" y2="66" strokeWidth="1" opacity="0.4" />
+          <line x1="68" y1="52" x2="44" y2="66" strokeWidth="1" opacity="0.4" />
+          <line x1="40" y1="66" x2="72" y2="80" strokeWidth="1" opacity="0.35" />
+          <line x1="72" y1="66" x2="40" y2="80" strokeWidth="1" opacity="0.35" />
+          <line x1="36" y1="80" x2="76" y2="94" strokeWidth="1" opacity="0.3" />
+          <line x1="76" y1="80" x2="36" y2="94" strokeWidth="1" opacity="0.3" />
+
+          {/* Horizontal rungs */}
+          <line x1="48" y1="38" x2="72" y2="38" strokeWidth="1.5" opacity="0.5" />
+          <line x1="44" y1="52" x2="76" y2="52" strokeWidth="1.5" opacity="0.45" />
+          <line x1="40" y1="66" x2="80" y2="66" strokeWidth="1.5" opacity="0.4" />
+          <line x1="36" y1="80" x2="84" y2="80" strokeWidth="1.5" opacity="0.35" />
+
+          {/* Top cross arm (widest, with bracket arms) */}
+          <line x1="24" y1="32" x2="96" y2="32" strokeWidth="2.5" />
+          <line x1="24" y1="32" x2="28" y2="28" strokeWidth="1.5" opacity="0.6" />
+          <line x1="96" y1="32" x2="92" y2="28" strokeWidth="1.5" opacity="0.6" />
+          {/* Arm supports to main body */}
+          <line x1="48" y1="38" x2="30" y2="32" strokeWidth="1" opacity="0.4" />
+          <line x1="72" y1="38" x2="90" y2="32" strokeWidth="1" opacity="0.4" />
+
+          {/* Middle cross arm (shorter) */}
+          <line x1="32" y1="52" x2="88" y2="52" strokeWidth="2" opacity="0.7" />
+          <line x1="32" y1="52" x2="35" y2="48" strokeWidth="1.5" opacity="0.5" />
+          <line x1="88" y1="52" x2="85" y2="48" strokeWidth="1.5" opacity="0.5" />
+
+          {/* Hanging insulator chains (green) */}
+          <line x1="26" y1="32" x2="24" y2="44" stroke="#00DC82" strokeWidth="1.5" opacity="0.7" />
+          <circle cx="24" cy="45" r="2" fill="#00DC82" fillOpacity="0.6" stroke="none" />
+          <line x1="94" y1="32" x2="96" y2="44" stroke="#00DC82" strokeWidth="1.5" opacity="0.7" />
+          <circle cx="96" cy="45" r="2" fill="#00DC82" fillOpacity="0.6" stroke="none" />
+
+          <line x1="34" y1="52" x2="32" y2="62" stroke="#00DC82" strokeWidth="1.5" opacity="0.5" />
+          <circle cx="32" cy="63" r="1.5" fill="#00DC82" fillOpacity="0.5" stroke="none" />
+          <line x1="86" y1="52" x2="88" y2="62" stroke="#00DC82" strokeWidth="1.5" opacity="0.5" />
+          <circle cx="88" cy="63" r="1.5" fill="#00DC82" fillOpacity="0.5" stroke="none" />
+
+          {/* Power lines curving away */}
+          <path d="M24 45 Q12 50 6 46" stroke="#00DC82" strokeWidth="1.2" opacity="0.4" />
+          <path d="M96 45 Q108 50 114 46" stroke="#00DC82" strokeWidth="1.2" opacity="0.4" />
+          <path d="M32 63 Q20 67 10 63" stroke="#00DC82" strokeWidth="1" opacity="0.3" />
+          <path d="M88 63 Q100 67 110 63" stroke="#00DC82" strokeWidth="1" opacity="0.3" />
+        </g>
+
+        {/* Top beacon */}
+        <circle cx="60" cy="14" r="3.5" fill="#F59E0B" stroke="none" />
+        <circle cx="60" cy="14" r="6" fill="none" stroke="#F59E0B" strokeWidth="0.8" opacity="0.25" />
+
+        {/* Ground */}
+        <line x1="24" y1="98" x2="96" y2="98" stroke="#F59E0B" strokeWidth="1" opacity="0.15" />
+      </svg>
+    );
+
+    const ChannelIdentity = () => (
+      <section style={{ marginBottom: '48px' }}>
+        <div style={{ fontFamily: T.font.mono, fontSize: '11px', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.primary[400], marginBottom: '12px' }}>
+          Channel Identity
+        </div>
+        <h2 style={{ fontFamily: T.font.heading, fontSize: '32px', fontWeight: 800, letterSpacing: '-0.03em', color: T.text.primary, marginBottom: '32px' }}>
+          Your Telegram Channel
+        </h2>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          {/* Avatar + Name */}
+          <div style={{ background: T.bg.surface, border: `1px solid ${T.border.subtle}`, borderRadius: '16px', padding: '32px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <ChannelAvatar size={100} />
+            <h3 style={{ fontFamily: T.font.heading, fontSize: '22px', fontWeight: 700, color: T.text.primary, marginTop: '16px' }}>Arc Compute</h3>
+            <div style={{ fontFamily: T.font.mono, fontSize: '14px', color: T.primary[400], marginTop: '4px' }}>@arc_compute</div>
+            <div style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.secondary, marginTop: '12px', lineHeight: 1.6, maxWidth: '300px' }}>
+              Electricity–compute spread arbitrage settled on Arc. Live signals, frontier model verdicts, USDC settlement.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+              {['Crypto', 'Energy', 'AI-Infra', 'DeFi'].map((tag, ti) => {
+                const tagColors = ['#00DC82', '#F59E0B', '#60A5FA', '#00DC82'];
+                const c = tagColors[ti];
+                return (
+                  <span key={tag} style={{ padding: '4px 10px', borderRadius: '100px', fontSize: '11px', fontFamily: T.font.mono, fontWeight: 600, background: c + '15', color: c, border: `1px solid ${c}25` }}>{tag}</span>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Channel details */}
+          <div style={{ background: T.bg.surface, border: `1px solid ${T.border.subtle}`, borderRadius: '16px', padding: '32px' }}>
+            <h4 style={{ fontFamily: T.font.heading, fontSize: '16px', fontWeight: 700, color: T.text.primary, marginBottom: '20px' }}>Channel Details</h4>
+            {[
+              { label: 'Name', value: 'Arc Compute' },
+              { label: 'Handle', value: '@arc_compute' },
+              { label: 'Type', value: 'Public channel + Bot' },
+              { label: 'Bot handle', value: '@arc_compute_bot' },
+              { label: 'Website', value: 'arccompute.io' },
+            ].map((d, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: i < 4 ? `1px solid ${T.border.subtle}` : 'none' }}>
+                <span style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.muted }}>{d.label}</span>
+                <span style={{ fontFamily: T.font.mono, fontSize: '14px', color: T.text.primary, fontWeight: 500 }}>{d.value}</span>
+              </div>
+            ))}
+            <div style={{ marginTop: '20px' }}>
+              <div style={{ fontFamily: T.font.body, fontSize: '13px', color: T.text.muted, marginBottom: '8px' }}>Bio / Description</div>
+              <div style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.secondary, lineHeight: 1.6, padding: '12px', background: T.bg.elevated, borderRadius: '8px', border: `1px solid ${T.border.subtle}` }}>
+                ⚡ Electricity–compute spread arb desk<br />
+                📊 97.1% WR on AI-infra · +$152 PnL<br />
+                🔗 Arc Testnet ERC-8183 settlement<br />
+                🧠 280K news sources · Frontier model verdicts<br />
+                💳 Pay with Circle test USDC<br />
+                💡 "Futures of compute" — Larry Fink
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+
+    /* ── Shareable Graphic ── */
+    const PromoGraphic = ({ variant = 'A' }) => {
+      const variants = {
+        A: { headline: 'Securitize the\nelectricity–compute\nspread', accent: 'Signal-first', stat: '97.1% WR', statLabel: 'AI-Infra Win Rate', bg: `linear-gradient(145deg, #060a08 0%, #0d1a12 50%, #0a1510 100%)` },
+        B: { headline: '+$152 PnL from\n99 gate-kept fills', accent: 'Proven edge', stat: '280K', statLabel: 'News Sources Analysed', bg: `linear-gradient(145deg, #060a08 0%, #111916 50%, #0a0f0c 100%)` },
+        C: { headline: 'From signal to\nArc settlement\nin one pass', accent: 'Multi-surface', stat: 'Phase 4', statLabel: 'Live on Arc Testnet', bg: `linear-gradient(145deg, #060a08 0%, #0f1a15 50%, #081210 100%)` },
+      };
+      const v = variants[variant];
+
+      return (
+        <div style={{
+          width: '540px', height: '540px', borderRadius: '16px', overflow: 'hidden',
+          background: v.bg, position: 'relative', border: `1px solid ${T.border.subtle}`,
+          display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '40px',
+        }}>
+          {/* Grid overlay */}
+          <div style={{
+            position: 'absolute', inset: 0, opacity: 0.04,
+            backgroundImage: `linear-gradient(${T.primary[400]} 1px, transparent 1px), linear-gradient(90deg, ${T.primary[400]} 1px, transparent 1px)`,
+            backgroundSize: '40px 40px',
+          }}></div>
+          {/* Glow */}
+          <div style={{ position: 'absolute', top: '-60px', right: '-60px', width: '300px', height: '300px', borderRadius: '50%', background: `radial-gradient(circle, ${T.primary[400]}12, transparent 70%)` }}></div>
+
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            {/* Logo + badge */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ChannelAvatar size={36} />
+                <span style={{ fontFamily: T.font.heading, fontWeight: 700, fontSize: '16px', color: T.text.primary }}>
+                  arc<span style={{ color: T.primary[400] }}>·</span>compute
+                </span>
+              </div>
+              <span style={{ padding: '4px 12px', borderRadius: '100px', fontSize: '11px', fontFamily: T.font.mono, fontWeight: 600, background: T.primary[400] + '18', color: T.primary[400], border: `1px solid ${T.primary[400]}30` }}>
+                {v.accent}
+              </span>
+            </div>
+
+            {/* Headline */}
+            <h2 style={{
+              fontFamily: T.font.heading, fontSize: '36px', fontWeight: 800,
+              lineHeight: 1.15, letterSpacing: '-0.03em', color: T.text.primary,
+              whiteSpace: 'pre-line',
+            }}>{v.headline}</h2>
+          </div>
+
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            {/* Stats row */}
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
+              {[
+                { val: v.stat, label: v.statLabel, highlight: true },
+                ...(variant === 'A' ? [{ val: '+$152', label: 'Gate-Kept PnL' }, { val: '200', label: 'Languages' }] : []),
+                ...(variant === 'B' ? [{ val: '97.1%', label: 'Win Rate' }, { val: '200', label: 'Languages' }] : []),
+                ...(variant === 'C' ? [{ val: '3', label: 'Surfaces' }, { val: 'USDC', label: 'Circle Settlement' }] : []),
+              ].map((s, i) => (
+                <div key={i} style={{
+                  flex: 1, padding: '12px', borderRadius: '10px',
+                  background: s.highlight ? T.primary[400] + '12' : T.bg.elevated,
+                  border: `1px solid ${s.highlight ? T.primary[400] + '25' : T.border.subtle}`,
+                }}>
+                  <div style={{ fontFamily: T.font.mono, fontSize: '20px', fontWeight: 700, color: s.highlight ? T.primary[400] : T.text.primary }}>{s.val}</div>
+                  <div style={{ fontFamily: T.font.body, fontSize: '11px', color: T.text.muted, marginTop: '2px' }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* CTA bar */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ flex: 1, padding: '12px 16px', borderRadius: '10px', background: T.primary[400], color: '#000', fontFamily: T.font.body, fontSize: '14px', fontWeight: 700, textAlign: 'center' }}>
+                Open Dashboard →
+              </div>
+              <div style={{ flex: 1, padding: '12px 16px', borderRadius: '10px', background: T.bg.elevated, border: `1px solid ${T.border.default}`, color: T.text.primary, fontFamily: T.font.body, fontSize: '14px', fontWeight: 600, textAlign: 'center' }}>
+                🤖 Telegram Bot
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    /* ── Post Text Variants ── */
+    const postTexts = {
+      A: {
+        title: 'Variant A — Signal-First Technical',
+        text: `⚡ Arc Compute — Securitize the electricity–compute spread
+
+As Larry Fink said: "A new asset class will be buying futures of compute."
+
+We measure the real-time spread between GPU compute and electricity costs, detect dislocations via z-score signals, and wrap judged positions as ERC-8183 jobs on Arc.
+
+📊 The numbers:
+→ 97.1% win rate on AI-infra outcomes
+→ +$152 PnL from 99 gate-kept fills
+→ 280,000 news sources in 200 languages
+→ Frontier models do the judgement
+
+🔗 Live on Arc Testnet — Phase 4 multi-surface routing across crypto, equities, and prediction markets.
+
+💳 Free trial → Pay with Circle test USDC (free from faucet.circle.com)
+
+🌐 arccompute.io
+🤖 @arc_compute_bot`,
+      },
+      B: {
+        title: 'Variant B — Results-Led Accessible',
+        text: `"A new asset class will be buying futures of compute" — Larry Fink, BlackRock
+
+What if you could trade the gap between electricity and compute?
+
+That's what Arc Compute does.
+
++$152 PnL. 97.1% win rate. 99 trades.
+
+Every position goes through a 4-way judge (EXECUTE / REJECT / DEFER / CHALLENGE) backed by 280K news sources in 200 languages analysed by frontier models.
+
+Only EXECUTE verdicts hit the chain. Everything settled on Arc with test USDC via Circle.
+
+⚠️ Uses test tokens only (free from faucet.circle.com) — not real money.
+
+Try it free:
+🌐 arccompute.io
+🤖 @arc_compute_bot`,
+      },
+      C: {
+        title: 'Variant C — Launch Announcement',
+        text: `🚀 Arc Compute is live on Arc Testnet
+
+The first auditable outcome desk for the electricity–compute spread.
+
+"A new asset class will be buying futures of compute" — Larry Fink
+
+What's inside:
+⚡ Real-time spread signal (S_t z-score)
+◎ Multi-surface routing — crypto, IBKR, Polymarket
+⚖️ 4-way judge gate — no chain action without EXECUTE
+🔗 ERC-8183 settlement with full audit trail
+🧠 280K news sources · 200 languages · Frontier model verdicts
+💳 Circle test USDC payments (free tokens from faucet.circle.com)
+
+Phase 4 proof: Job #19091 wrapped, settled, feedback sent.
+
+⚠️ All tokens are testnet only — zero real value.
+
+Dashboard → arccompute.io
+Bot → @arc_compute_bot
+
+Free trial on all plans.`,
+      },
+    };
+
+    /* ── Copy Button ── */
+    const CopyButton = ({ text }) => {
+      const [copied, setCopied] = React.useState(false);
+      return (
+        <button onClick={() => {
+          navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+        }} style={{
+          display: 'inline-flex', alignItems: 'center', gap: '6px',
+          padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+          background: copied ? T.primary[400] + '20' : T.bg.elevated,
+          color: copied ? T.primary[400] : T.text.secondary,
+          fontFamily: T.font.body, fontSize: '13px', fontWeight: 600,
+          transition: 'all 0.2s',
+        }}>
+          {copied ? '✓ Copied' : '📋 Copy Text'}
+        </button>
+      );
+    };
+
+    /* ── Post Preview ── */
+    const PostPreview = ({ variant }) => {
+      const post = postTexts[variant];
+      return (
+        <div style={{ marginBottom: '48px', animation: 'fadeIn 0.4s ease' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h3 style={{ fontFamily: T.font.heading, fontSize: '18px', fontWeight: 700, color: T.text.primary }}>{post.title}</h3>
+            <CopyButton text={post.text} />
+          </div>
+
+          <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+            {/* Graphic */}
+            <PromoGraphic variant={variant} />
+
+            {/* Telegram post mockup */}
+            <div style={{ flex: 1 }}>
+              <div style={{
+                background: '#1C1C1E', borderRadius: '12px', overflow: 'hidden',
+                border: `1px solid ${T.border.subtle}`, maxWidth: '400px',
+              }}>
+                {/* TG channel header */}
+                <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '0.5px solid #38383A' }}>
+                  <ChannelAvatar size={36} />
+                  <div>
+                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>Arc Compute</div>
+                    <div style={{ fontSize: '12px', color: '#8E8E93' }}>@arc_compute</div>
+                  </div>
+                </div>
+                {/* Message */}
+                <div style={{ padding: '16px' }}>
+                  <pre style={{
+                    fontFamily: T.font.body, fontSize: '14px', lineHeight: 1.6,
+                    color: '#E5E5E7', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    margin: 0, background: 'none',
+                  }}>{post.text}</pre>
+                  <div style={{ marginTop: '12px', display: 'flex', gap: '16px', color: '#8E8E93', fontSize: '12px' }}>
+                    <span>👁 2.4K</span>
+                    <span>💬 47</span>
+                    <span>↗ 128</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    /* ── Main App ── */
+    const App = () => {
+      const [activeTab, setActiveTab] = React.useState('channel');
+      const tabs = [
+        { id: 'channel', label: 'Channel Identity' },
+        { id: 'posts', label: 'Promo Posts' },
+      ];
+
+      return (
+        <div style={{ minHeight: '100vh', background: T.bg.deep }}>
+          {/* Header */}
+          <div style={{
+            position: 'sticky', top: 0, zIndex: 10,
+            padding: '16px 40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: T.bg.deep + 'ee', backdropFilter: 'blur(12px)',
+            borderBottom: `1px solid ${T.border.subtle}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <ChannelAvatar size={28} />
+              <span style={{ fontFamily: T.font.heading, fontWeight: 700, fontSize: '16px', color: T.text.primary }}>
+                arc<span style={{ color: T.primary[400] }}>·</span>compute
+              </span>
+              <span style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.muted, marginLeft: '8px' }}>Promo Kit</span>
+            </div>
+            <div style={{ display: 'flex', gap: '4px', background: T.bg.surface, borderRadius: '10px', padding: '3px' }}>
+              {tabs.map(t => (
+                <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+                  padding: '8px 20px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                  fontFamily: T.font.body, fontSize: '14px', fontWeight: 500,
+                  background: activeTab === t.id ? T.primary[400] + '15' : 'transparent',
+                  color: activeTab === t.id ? T.primary[400] : T.text.secondary,
+                  transition: 'all 0.2s',
+                }}>{t.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Content */}
+          <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto' }}>
+            {activeTab === 'channel' && <ChannelIdentity />}
+            {activeTab === 'posts' && (
+              <div>
+                <div style={{ fontFamily: T.font.mono, fontSize: '11px', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.primary[400], marginBottom: '12px' }}>
+                  Promo Posts
+                </div>
+                <h2 style={{ fontFamily: T.font.heading, fontSize: '32px', fontWeight: 800, letterSpacing: '-0.03em', color: T.text.primary, marginBottom: '8px' }}>
+                  3 Variations to A/B Test
+                </h2>
+                <p style={{ fontFamily: T.font.body, fontSize: '16px', color: T.text.secondary, marginBottom: '40px' }}>
+                  Each includes a shareable graphic + copy-ready post text. Click "Copy Text" to grab the message.
+                </p>
+                <PostPreview variant="A" />
+                <div style={{ height: '1px', background: T.border.subtle, margin: '32px 0' }}></div>
+                <PostPreview variant="B" />
+                <div style={{ height: '1px', background: T.border.subtle, margin: '32px 0' }}></div>
+                <PostPreview variant="C" />
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

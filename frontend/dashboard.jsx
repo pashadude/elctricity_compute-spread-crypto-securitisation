@@ -1,0 +1,948 @@
+/* Arc Compute Sec — Dashboard */
+
+/* ── Backend Data Engine ── */
+const numberOr = (value, fallback = 0) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const tsMs = (value) => {
+  const n = numberOr(value, Date.now() / 1000);
+  return n < 10_000_000_000 ? n * 1000 : n;
+};
+
+const surfaceRank = (surface) => ({ polymarket: 0, ibkr_prediction: 1, kalshi: 2, crypto: 3, ibkr: 4 }[surface] ?? 9);
+const isPredictionSurface = (surface) => ['polymarket', 'ibkr_prediction', 'kalshi'].includes(surface);
+const sortByPrimarySurface = (rows) => [...rows].sort((a, b) => (
+  surfaceRank(a.surface) - surfaceRank(b.surface)
+));
+
+const roleLabel = (role, surface) => ({
+  direct_prediction_event: 'direct event leg',
+  miner_margin_proxy: 'miner-margin proxy',
+  liquid_equity_proxy: 'liquid equity proxy',
+  macro_context_forecast: 'macro context forecast',
+}[role] || ({
+  polymarket: 'direct event leg',
+  ibkr_prediction: 'direct forecast leg',
+  crypto: 'miner-margin proxy',
+  ibkr: 'liquid equity proxy',
+  kalshi: 'direct event leg',
+}[surface] || 'expression leg'));
+
+const formatEventDate = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+const isMockRow = (row = {}) => {
+  const text = [row.instrument, row.displayName, row.slug, row.description]
+    .filter(Boolean).join(' ').toLowerCase();
+  return Boolean(row.isMock) || text.includes('mock');
+};
+
+const isHiddenAuditRow = (row = {}) => (
+  isMockRow(row) || Boolean(row.isThesisMismatch) || Boolean(row.isLegacyArtifact)
+);
+
+const isRejectedRow = (row = {}) => String(row.label || '').toUpperCase() === 'REJECT';
+const isActionableRow = (row = {}) => !isHiddenAuditRow(row) && !isRejectedRow(row);
+
+const dedupeRows = (rows, keyFn) => {
+  const seen = new Map();
+  rows.forEach(row => {
+    const key = keyFn(row);
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, { ...row, repeatCount: row.repeatCount || 1 });
+      return;
+    }
+    existing.repeatCount = (existing.repeatCount || 1) + (row.repeatCount || 1);
+  });
+  return [...seen.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+};
+
+const legKey = (row = {}) => [
+  row.surface, row.instrument, row.direction || row.dir, row.role, row.label, row.reason,
+].join('|');
+
+const derivePrimaryExposure = ({ positions = [], verdicts = [], candidates = [] }) => {
+  const latestPosition = positions[0];
+  if (latestPosition) {
+    const matchingVerdict = verdicts.find(v => (
+      v.surface === latestPosition.surface && v.instrument === latestPosition.instrument
+    ));
+    return {
+      surface: latestPosition.surface,
+      instrument: latestPosition.instrument || 'selected leg',
+      displayName: latestPosition.displayName || latestPosition.instrument || 'selected leg',
+      slug: latestPosition.slug || '',
+      description: latestPosition.description || '',
+      endDate: latestPosition.endDate || '',
+      connection: latestPosition.connection || '',
+      direction: latestPosition.direction || matchingVerdict?.direction || 'pending',
+      sizing: latestPosition.sizing || matchingVerdict?.sizing || 0,
+      verdict: matchingVerdict?.label || 'EXECUTE',
+      jobStatus: latestPosition.status || 'wrapped',
+      jobId: latestPosition.jobId,
+      estPnl: matchingVerdict?.estPnl || '',
+      role: latestPosition.role || roleLabel('', latestPosition.surface),
+    };
+  }
+  const topVerdict = sortByPrimarySurface(verdicts)[0];
+  if (topVerdict) {
+    return {
+      surface: topVerdict.surface,
+      instrument: topVerdict.instrument || 'candidate leg',
+      displayName: topVerdict.displayName || topVerdict.instrument || 'candidate leg',
+      slug: topVerdict.slug || '',
+      description: topVerdict.description || '',
+      endDate: topVerdict.endDate || '',
+      connection: topVerdict.connection || '',
+      direction: topVerdict.direction || 'pending',
+      sizing: topVerdict.sizing || 0,
+      verdict: topVerdict.label || 'DEFER',
+      jobStatus: topVerdict.label === 'EXECUTE' ? 'ready' : 'not wrapped',
+      jobId: '',
+      estPnl: topVerdict.estPnl || '',
+      role: topVerdict.role || roleLabel('', topVerdict.surface),
+    };
+  }
+  const topCandidate = candidates[0];
+  if (topCandidate) {
+    return {
+      surface: topCandidate.surface,
+      instrument: topCandidate.instrument || 'candidate leg',
+      displayName: topCandidate.displayName || topCandidate.instrument || 'candidate leg',
+      slug: topCandidate.slug || '',
+      description: topCandidate.description || '',
+      endDate: topCandidate.endDate || '',
+      connection: topCandidate.connection || '',
+      direction: topCandidate.dir || topCandidate.direction || 'pending',
+      sizing: topCandidate.sizing || 0,
+      verdict: topCandidate.label || 'pending',
+      jobStatus: topCandidate.inventory ? 'watchlist' : 'not wrapped',
+      jobId: '',
+      estPnl: topCandidate.estPnl || '',
+      role: topCandidate.role || roleLabel('', topCandidate.surface),
+    };
+  }
+  return null;
+};
+
+const emptyDashboardData = (status = 'loading', error = '') => ({
+  spread: { elec: '0.00', compute: '0.0000', st: '0.0000', k: 0.5, kwh: 0.7 },
+  history: [],
+  z: 0,
+  mean: 0,
+  std: 0,
+  direction: 'no_signal',
+  primaryExposure: null,
+  candidates: [],
+  verdicts: [],
+  positions: [],
+  directInventory: [],
+  packages: [],
+  currentPackage: null,
+  pnl: {
+    total: 0, totalDisplay: 'Pending', winRate: 0, trades: 0,
+    tradesDisplay: 'Pending', wrappedJobs: 0, executes: 0, hasReconciled: false,
+  },
+  oracleResults: genOracleResults(),
+  connection: { status, error, updatedAt: Date.now() },
+});
+
+const mapSnapshotToDashboardData = (snapshot) => {
+  const spreadLatest = snapshot?.spread?.latest || {};
+  const signal = snapshot?.signal?.latest || {};
+  const history = (snapshot?.spread?.history || []).map(v => numberOr(v)).filter(Number.isFinite);
+  const mean = history.length ? history.reduce((a, b) => a + b, 0) / history.length : 0;
+  const std = history.length > 1
+    ? Math.sqrt(history.reduce((a, b) => a + (b - mean) ** 2, 0) / (history.length - 1))
+    : 0;
+  const mapLeg = (v, i, prefix = 'v') => ({
+    ts: tsMs(v.ts || snapshot.generated_at),
+    label: v.label || (v.inventory ? 'WATCHLIST' : 'DEFER'),
+    reason: v.reason_code || '',
+    instrument: v.instrument || '',
+    displayName: v.display_label || v.leg_title || v.instrument || '',
+    slug: v.leg_slug || '',
+    description: v.leg_description || '',
+    endDate: v.leg_end_date || '',
+    role: roleLabel(v.leg_role, v.surface),
+    connection: v.leg_connection || '',
+    isMock: Boolean(v.is_mock),
+    isThesisMismatch: Boolean(v.is_thesis_mismatch),
+    isLegacyArtifact: Boolean(v.is_legacy_artifact),
+    surface: v.surface || '',
+    direction: v.direction || '',
+    confidence: numberOr(v.confidence, 0).toFixed(3),
+    sizing: numberOr(v.sizing_usdc, 0),
+    estPnl: (v.est_pnl_per_dollar === undefined || v.est_pnl_per_dollar === '') ? '' : numberOr(v.est_pnl_per_dollar, 0).toFixed(4),
+    pricingStatus: v.pricing_status || '',
+    directPairRole: v.direct_pair_role || '',
+    inventory: Boolean(v.inventory),
+    source: v.source || '',
+    packageId: v.package_id || v.arb_signal_id || '',
+    repeatCount: numberOr(v.repeat_count, 1),
+    id: v.action_payload_hash || `${prefix}-${i}`,
+  });
+  const rawVerdicts = ((snapshot?.verdict_rollups || []).length ? snapshot.verdict_rollups : (snapshot?.verdicts || []))
+    .map((v, i) => mapLeg(v, i, 'v'));
+  const rawPositions = (snapshot?.positions || []).map((p, i) => ({
+    ts: tsMs(p.ts || snapshot.generated_at),
+    jobId: p.job_id || `local-${i}`,
+    surface: p.surface || '',
+    instrument: p.instrument || '',
+    displayName: p.display_label || p.leg_title || p.instrument || '',
+    slug: p.leg_slug || '',
+    description: p.leg_description || '',
+    endDate: p.leg_end_date || '',
+    role: roleLabel(p.leg_role, p.surface),
+    connection: p.leg_connection || '',
+    isMock: Boolean(p.is_mock),
+    isThesisMismatch: Boolean(p.is_thesis_mismatch),
+    isLegacyArtifact: Boolean(p.is_legacy_artifact),
+    direction: p.direction || '',
+    status: p.status || p.stage || 'unknown',
+    sizing: numberOr(p.notional_usdc, 0),
+    pnl: p.actual_pnl_usd !== undefined ? `${numberOr(p.actual_pnl_usd).toFixed(2)}` : '-',
+    txHash: p.tx_hash ? `${String(p.tx_hash).slice(0, 10)}...` : '',
+    arcscanUrl: p.arcscan_url || '',
+    packageId: p.package_id || p.arb_signal_id || '',
+    repeatCount: numberOr(p.repeat_count, 1),
+  }));
+  const verdicts = dedupeRows(rawVerdicts.filter(isActionableRow), legKey);
+  const positions = dedupeRows(rawPositions.filter(p => !isHiddenAuditRow(p)), legKey);
+  const directInventory = dedupeRows(
+    (snapshot?.direct_inventory || []).map((leg, i) => mapLeg(leg, i, 'inv')).filter(row => !isHiddenAuditRow(row)),
+    legKey,
+  );
+  const repeatByLeg = new Map(verdicts.map(v => [legKey(v), numberOr(v.repeatCount, 1)]));
+  const withRollupRepeat = (leg) => ({
+    ...leg,
+    repeatCount: Math.max(numberOr(leg.repeatCount, 1), numberOr(repeatByLeg.get(legKey(leg)), 1)),
+  });
+  const candidates = verdicts.map(v => ({
+    id: v.id,
+    surface: v.surface,
+    instrument: v.instrument,
+    displayName: v.displayName,
+    slug: v.slug,
+    description: v.description,
+    endDate: v.endDate,
+    role: v.role,
+    connection: v.connection,
+    dir: v.direction,
+    sizing: v.sizing,
+    conviction: Math.abs(numberOr(signal.z, 0)).toFixed(2),
+    estPnl: v.estPnl,
+    pricingStatus: v.pricingStatus,
+    directPairRole: v.directPairRole,
+    inventory: v.inventory,
+    source: v.source,
+    label: v.label,
+    reason: v.reason,
+    repeatCount: v.repeatCount,
+  }));
+  const sortedCandidates = sortByPrimarySurface(candidates);
+  const packages = (snapshot?.packages || []).map((pkg, i) => {
+    const directLegs = (pkg.direct_legs || []).map((leg, j) => mapLeg(leg, j, `pkg-${i}-d`)).filter(isActionableRow);
+    const proxyLegs = (pkg.proxy_legs || []).map((leg, j) => mapLeg(leg, j, `pkg-${i}-p`)).filter(isActionableRow);
+    const positionLegs = (pkg.positions || []).map((leg, j) => ({
+      ...mapLeg(leg, j, `pkg-${i}-pos`),
+      status: leg.status || leg.stage || '',
+      jobId: leg.job_id || '',
+    })).filter(leg => !isHiddenAuditRow(leg));
+    const direct = dedupeRows(directLegs, legKey).map(withRollupRepeat);
+    const proxy = dedupeRows(proxyLegs, legKey).map(withRollupRepeat);
+    const visibleDirect = direct.length ? direct : directInventory.filter(leg => isPredictionSurface(leg.surface));
+    const packageDirection = ['long', 'short'].includes(String(pkg.direction || ''))
+      ? (signal.direction || pkg.direction)
+      : (pkg.direction || signal.direction || 'no_signal');
+    return {
+      id: pkg.id || pkg.package_id || pkg.arb_signal_id || `pkg-${i}`,
+      packageId: pkg.package_id || '',
+      signalId: pkg.arb_signal_id || '',
+      ts: tsMs(pkg.ts || snapshot.generated_at),
+      direction: packageDirection,
+      label: pkg.label || 'PENDING',
+      reason: pkg.reason_code || '',
+      repeatCount: [...visibleDirect, ...proxy].reduce((sum, leg) => sum + numberOr(leg.repeatCount, 1), 0) || numberOr(pkg.repeat_count, 1),
+      directBlockedSummary: pkg.direct_blocked_summary || '',
+      proxyBlockedSummary: pkg.proxy_blocked_summary || '',
+      rejectedDirectRepeatCount: numberOr(pkg.rejected_direct_repeat_count, 0),
+      rejectedProxyRepeatCount: numberOr(pkg.rejected_proxy_repeat_count, 0),
+      actionableDirectLegCount: numberOr(pkg.actionable_direct_leg_count, direct.length),
+      actionableProxyLegCount: numberOr(pkg.actionable_proxy_leg_count, proxy.length),
+      directLegs: visibleDirect,
+      proxyLegs: proxy,
+      positions: dedupeRows(positionLegs, legKey),
+    };
+  }).filter(pkg => pkg.label !== 'REJECT' && (pkg.directLegs.length || pkg.proxyLegs.length || pkg.positions.length))
+    .sort((a, b) => b.ts - a.ts);
+  const fallbackDirectLegs = dedupeRows(
+    [...sortedCandidates.filter(c => isPredictionSurface(c.surface)), ...directInventory.filter(c => isPredictionSurface(c.surface))],
+    legKey,
+  );
+  const fallbackProxyLegs = sortedCandidates.filter(c => !isPredictionSurface(c.surface));
+  const fallbackPackage = (sortedCandidates.length || directInventory.length) ? {
+    id: signal.signal_id || 'current-package',
+    packageId: '',
+    signalId: signal.signal_id || '',
+    ts: tsMs(signal.ts || snapshot?.generated_at),
+    direction: signal.direction || 'no_signal',
+    label: sortedCandidates[0]?.label || 'WATCHLIST',
+    reason: sortedCandidates[0]?.reason || (directInventory.length ? 'direct_event_inventory' : ''),
+    repeatCount: [...fallbackDirectLegs, ...fallbackProxyLegs].reduce((sum, leg) => sum + numberOr(leg.repeatCount, 1), 0),
+    directLegs: fallbackDirectLegs,
+    proxyLegs: fallbackProxyLegs,
+    positions: [],
+  } : null;
+  const currentPackage = packages[0] || fallbackPackage;
+  const primaryExposure = derivePrimaryExposure({ positions, verdicts, candidates: sortedCandidates.length ? sortedCandidates : directInventory });
+  const pnl = snapshot?.pnl || {};
+  const hasReconciled = Boolean(pnl.has_reconciled) || numberOr(pnl.trades, 0) > 0;
+  const reconciledTrades = numberOr(pnl.reconciled_trades, numberOr(pnl.trades, 0));
+  const wrappedJobs = numberOr(pnl.wrapped_jobs, positions.filter(p => !String(p.jobId).startsWith('local-')).length);
+  const executes = numberOr(pnl.executed_verdicts, verdicts.filter(v => v.label === 'EXECUTE').length);
+  return {
+    spread: {
+      elec: numberOr(spreadLatest.electricity_per_mwh).toFixed(2),
+      compute: numberOr(spreadLatest.compute_per_gpu_hr).toFixed(4),
+      st: numberOr(spreadLatest.S_t).toFixed(4),
+      k: numberOr(spreadLatest.k, 0.5),
+      kwh: numberOr(spreadLatest.kwh_per_gpu_hr, 0.7),
+    },
+    history,
+    z: numberOr(signal.z),
+    mean,
+    std,
+    direction: signal.direction || 'no_signal',
+    primaryExposure,
+    candidates: sortedCandidates,
+    verdicts,
+    positions,
+    directInventory,
+    packages,
+    currentPackage,
+    pnl: {
+      total: numberOr(pnl.total),
+      totalDisplay: hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'Pending',
+      winRate: numberOr(pnl.win_rate),
+      trades: reconciledTrades,
+      tradesDisplay: hasReconciled ? String(reconciledTrades) : 'Pending',
+      wrappedJobs,
+      executes,
+      hasReconciled,
+    },
+    oracleResults: genOracleResults(),
+    connection: {
+      status: 'live',
+      error: '',
+      updatedAt: tsMs(snapshot?.generated_at),
+      runtime: snapshot?.runtime || {},
+      mode: snapshot?.mode || {},
+    },
+  };
+};
+
+const useLiveData = (refreshRate) => {
+  const [data, setData] = React.useState(() => emptyDashboardData());
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const resp = await fetch('/api/snapshot', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const snapshot = await resp.json();
+        if (!cancelled) setData(mapSnapshotToDashboardData(snapshot));
+      } catch (err) {
+        if (!cancelled) setData(prev => ({
+          ...prev,
+          connection: { status: 'offline', error: String(err.message || err), updatedAt: Date.now() },
+        }));
+      }
+    };
+    load();
+    const interval = setInterval(load, refreshRate);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [refreshRate]);
+
+  return data;
+};
+
+function genCandidates(z) {
+  const surfaces = [
+    { surface: 'crypto', instrument: 'BTC/USD', dir: 'short', sizing: 5.0 },
+    { surface: 'crypto', instrument: 'ETH/USD', dir: 'short', sizing: 3.0 },
+    { surface: 'ibkr', instrument: 'GOOGL', dir: 'short', sizing: 1.0 },
+    { surface: 'ibkr', instrument: 'AMZN', dir: 'short', sizing: 1.0 },
+    { surface: 'ibkr', instrument: 'MSFT', dir: 'short', sizing: 1.0 },
+    { surface: 'polymarket', instrument: 'ERCOT grid event', dir: 'short', sizing: 2.0 },
+    { surface: 'polymarket', instrument: 'AI infra milestone', dir: 'short', sizing: 2.0 },
+  ];
+  return surfaces.map((s, i) => ({
+    id: `c-${(Math.random() * 99999).toFixed(0)}`,
+    ...s,
+    conviction: Math.abs(z).toFixed(2),
+    estPnl: (Math.random() * 0.15 + 0.02).toFixed(4),
+  }));
+}
+
+function genVerdicts() {
+  const labels = ['EXECUTE', 'REJECT', 'REJECT', 'EXECUTE', 'DEFER', 'EXECUTE', 'REJECT', 'EXECUTE', 'CHALLENGE', 'EXECUTE'];
+  const reasons = { EXECUTE: 'all_gates_passed', REJECT: 'premium_gate_fail', DEFER: 'stale_data', CHALLENGE: 'size_above_challenge_threshold_v0_defer' };
+  const instruments = ['BTC/USD', 'ETH/USD', 'GOOGL', 'AMZN', 'MSFT', 'ERCOT grid', 'AI milestone'];
+  return labels.map((l, i) => ({
+    ts: Date.now() - i * 180000 - Math.random() * 60000,
+    label: l, reason: reasons[l],
+    instrument: instruments[i % instruments.length],
+    surface: ['crypto', 'ibkr', 'polymarket'][i % 3],
+    confidence: (0.8 + Math.random() * 0.2).toFixed(3),
+  }));
+}
+
+function genPositions() {
+  return [
+    { jobId: '19091', surface: 'crypto', instrument: 'BTC/USD', status: 'completed', sizing: 5.0, pnl: '+12.44', txHash: '0xee545e...' },
+    { jobId: '17884', surface: 'polymarket', instrument: 'ERCOT grid', status: 'completed', sizing: 2.0, pnl: '+3.21', txHash: '0x05bc9a...' },
+    { jobId: '19102', surface: 'crypto', instrument: 'ETH/USD', status: 'submitted', sizing: 3.0, pnl: '-', txHash: '0xab12cd...' },
+  ];
+}
+
+function genOracleResults() {
+  return { scanned: 1301, energyClassified: 122, aiInfra: { n: 70, wr: 97.1, pnl: 68.654 }, geopolitics: { n: 52, wr: 92.3, pnl: -12.224 }, gateKept: 99, gatePnl: 152.026 };
+}
+
+/* ── Dashboard Components ── */
+
+const StatCard = ({ label, value, suffix, prefix, change, sparkData, color }) => (
+  <Card style={{ padding: '20px' }}>
+    <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted, marginBottom: '8px' }}>{label}</div>
+    <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+      <div>
+        <span style={{ fontFamily: THEME.font.heading, fontSize: '28px', fontWeight: 800, color: THEME.text.primary, letterSpacing: 0 }}>
+          {prefix}{typeof value === 'number' ? <AnimatedNumber value={value} decimals={value > 10 ? 2 : 4} /> : value}{suffix}
+        </span>
+        {change !== undefined && (
+          <span style={{ fontFamily: THEME.font.mono, fontSize: '12px', marginLeft: '8px', color: change >= 0 ? THEME.primary[400] : THEME.red[400] }}>
+            {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(2)}%
+          </span>
+        )}
+      </div>
+      {sparkData && <Sparkline data={sparkData} width={80} height={28} color={color || THEME.primary[400]} />}
+    </div>
+  </Card>
+);
+
+const SignalPanel = ({ data }) => {
+  const zColor = Math.abs(data.z) > 2 ? THEME.red[400] : Math.abs(data.z) > 1 ? THEME.amber[400] : THEME.primary[400];
+  return (
+    <Card glow>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+        <div>
+          <SectionLabel>Spread Signal</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '14px', color: THEME.text.secondary }}>
+            S_t = compute − k × (elec/1000) × kWh
+          </div>
+        </div>
+        <Badge color={data.direction === 'compute_expensive' ? 'blue' : 'amber'}>
+          {data.direction.replace('_', ' ')}
+        </Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+        <div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Electricity</div>
+          <MonoText style={{ fontSize: '18px', fontWeight: 700, color: THEME.amber[400] }}>${data.spread.elec}/MWh</MonoText>
+        </div>
+        <div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Compute</div>
+          <MonoText style={{ fontSize: '18px', fontWeight: 700, color: THEME.blue[400] }}>${data.spread.compute}/GPU-hr</MonoText>
+        </div>
+        <div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Spread S_t</div>
+          <MonoText style={{ fontSize: '18px', fontWeight: 700 }}>${data.spread.st}</MonoText>
+        </div>
+        <div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Z-Score</div>
+          <MonoText style={{ fontSize: '18px', fontWeight: 700, color: zColor }}>
+            {data.z.toFixed(3)}
+          </MonoText>
+        </div>
+      </div>
+      <div style={{ height: '80px', position: 'relative' }}>
+        <Sparkline data={data.history} width={600} height={80} color={THEME.primary[400]} style={{ width: '100%' }} />
+        {/* threshold lines */}
+        <div style={{ position: 'absolute', top: '20%', left: 0, right: 0, borderTop: `1px dashed ${THEME.red[400]}40`, pointerEvents: 'none' }}>
+          <span style={{ position: 'absolute', right: 0, top: '-14px', fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.red[400] }}>+σ</span>
+        </div>
+        <div style={{ position: 'absolute', top: '80%', left: 0, right: 0, borderTop: `1px dashed ${THEME.red[400]}40`, pointerEvents: 'none' }}>
+          <span style={{ position: 'absolute', right: 0, top: '-14px', fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.red[400] }}>-σ</span>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+const verdictColor = (label) => ({ EXECUTE: 'primary', REJECT: 'red', DEFER: 'amber', CHALLENGE: 'purple', WATCHLIST: 'blue' }[label] || 'muted');
+const surfaceIcon = (s) => ({ crypto: '₿', ibkr: '📊', ibkr_prediction: '◈', polymarket: '◎' }[s] || '·');
+
+const PackageLegRow = ({ leg }) => (
+  <div style={{
+    padding: '10px', borderRadius: '6px', background: THEME.bg.elevated,
+    border: `1px solid ${THEME.border.subtle}`,
+  }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {surfaceIcon(leg.surface)} {leg.displayName || leg.instrument}
+        </div>
+        <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginTop: '2px' }}>
+          {leg.surface} · {leg.directPairRole || leg.role || roleLabel('', leg.surface)} · {leg.direction || leg.dir || 'pending'}
+          {leg.repeatCount > 1 ? ` · seen ${leg.repeatCount} scans` : ''}
+        </div>
+        {(leg.slug || leg.endDate) && (
+          <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {leg.slug || leg.instrument}{leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}
+          </div>
+        )}
+      </div>
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        {leg.label && <Badge color={verdictColor(leg.label)}>{leg.label}</Badge>}
+        <MonoText style={{ display: 'block', fontSize: '11px', marginTop: '4px', color: numberOr(leg.estPnl) < 0 ? THEME.red[400] : THEME.primary[400] }}>
+          {leg.estPnl ? `${leg.estPnl} $/$` : (leg.pricingStatus || 'watchlist')}
+        </MonoText>
+      </div>
+    </div>
+    {leg.description && (
+      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+        {leg.description}
+      </div>
+    )}
+    {leg.connection && (
+      <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '4px' }}>
+        {leg.connection}
+      </div>
+    )}
+    {leg.reason && (
+      <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, marginTop: '6px' }}>
+        reason: {leg.reason}
+      </div>
+    )}
+  </div>
+);
+
+const PackageBundlePanel = ({ bundle, direction }) => {
+  const directLegs = bundle?.directLegs || [];
+  const proxyLegs = bundle?.proxyLegs || [];
+  const status = bundle?.label || 'PENDING';
+  return (
+    <Card glow>
+      <SectionLabel>Current Spread Package</SectionLabel>
+      {bundle ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontFamily: THEME.font.heading, fontSize: '22px', fontWeight: 800, color: THEME.text.primary }}>
+                {String(bundle.direction || direction || 'no_signal').replace('_', ' ')}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '3px' }}>
+                One judged package · direct legs first, proxies labelled separately
+              </div>
+            </div>
+            <Badge color={verdictColor(status)}>{status}</Badge>
+          </div>
+          {bundle.reason && (
+            <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted, padding: '8px 10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              package verdict: {bundle.reason}{bundle.repeatCount > 1 ? ` · ${bundle.repeatCount} scan rows collapsed` : ''}
+            </div>
+          )}
+          <div>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, fontWeight: 700, marginBottom: '6px' }}>
+              Direct event / forecast legs
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {directLegs.length ? directLegs.map((leg, i) => <PackageLegRow key={`${leg.id || leg.instrument}-d-${i}`} leg={leg} />) : (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, padding: '9px 10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+                  {bundle.directBlockedSummary || 'No thesis-matched Polymarket or IBKR forecast leg is currently passing discovery.'}
+                </div>
+              )}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, fontWeight: 700, marginBottom: '6px' }}>
+              Proxy legs
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {proxyLegs.length ? proxyLegs.map((leg, i) => <PackageLegRow key={`${leg.id || leg.instrument}-p-${i}`} leg={leg} />) : (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, padding: '9px 10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+                  No proxy leg routed for this signal. BTC/ETH are only miner-margin proxies on electricity-expensive signals; IBKR stocks are equity proxies, not direct claims.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted, marginTop: '12px' }}>
+          No package legs have reached the judge yet.
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const PrimaryExposurePanel = ({ exposure }) => (
+  <Card glow>
+    <SectionLabel>Spread Exposure Package</SectionLabel>
+    {exposure ? (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+          <div>
+            <div style={{ fontFamily: THEME.font.heading, fontSize: '26px', fontWeight: 800, color: THEME.text.primary }}>
+              {exposure.displayName || exposure.instrument}
+            </div>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '2px' }}>
+              {surfaceIcon(exposure.surface)} {exposure.surface} · {exposure.role}
+            </div>
+            {(exposure.slug || exposure.endDate) && (
+              <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.faint, marginTop: '4px' }}>
+                {exposure.slug || exposure.instrument}{exposure.endDate ? ` · resolves ${formatEventDate(exposure.endDate)}` : ''}
+              </div>
+            )}
+          </div>
+          <Badge color={exposure.direction === 'short' ? 'amber' : exposure.direction === 'long' ? 'primary' : 'muted'}>
+            {exposure.direction}
+          </Badge>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
+          {['1 Score electricity minus compute', '2 Build canonical package', '3 Select direct/proxy legs', '4 Judge then Arc wrap'].map((step, i) => (
+            <div key={i} style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, padding: '6px 8px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              {step}
+            </div>
+          ))}
+        </div>
+        {exposure.description && (
+          <div style={{
+            fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary,
+            lineHeight: 1.45, maxHeight: '52px', overflow: 'hidden',
+          }}>
+            {exposure.description}
+          </div>
+        )}
+        {exposure.connection && (
+          <div style={{
+            fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted,
+            lineHeight: 1.45, padding: '10px', borderRadius: '6px', background: THEME.bg.elevated,
+          }}>
+            {exposure.connection}
+          </div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+          {[
+            { label: 'Notional', value: `${Number(exposure.sizing || 0).toFixed(2)} USDC`, color: THEME.text.primary },
+            { label: 'Judge', value: exposure.verdict || 'pending', color: verdictColor(exposure.verdict) === 'red' ? THEME.red[400] : THEME.primary[400] },
+            { label: 'Arc job', value: exposure.jobId ? `#${exposure.jobId}` : exposure.jobStatus || 'not wrapped', color: THEME.amber[400] },
+            { label: 'Est. edge', value: exposure.estPnl ? `${exposure.estPnl} $/$` : '-', color: THEME.primary[400] },
+          ].map((item, i) => (
+            <div key={i} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>{item.label}</div>
+              <MonoText style={{ fontSize: '15px', fontWeight: 700, color: item.color }}>{item.value}</MonoText>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '2px' }}>
+          <span style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Arc status</span>
+          <Badge color={exposure.jobStatus === 'completed' || exposure.jobStatus === 'wrapped' ? 'primary' : 'amber'}>
+            {exposure.jobStatus || 'pending'}
+          </Badge>
+        </div>
+      </div>
+    ) : (
+      <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted, marginTop: '12px' }}>
+        No package leg has passed through the judge yet.
+      </div>
+    )}
+  </Card>
+);
+
+const VerdictTable = ({ verdicts }) => (
+  <Card style={{ gridColumn: 'span 2' }}>
+    <SectionLabel>Actionable Judge Decisions</SectionLabel>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '12px' }}>
+      <div style={{
+        display: 'grid', gridTemplateColumns: '100px 80px minmax(180px, 1fr) minmax(160px, 1fr) 60px 80px',
+        gap: '12px', padding: '8px 12px',
+        fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted,
+        textTransform: 'uppercase', letterSpacing: '0.08em',
+      }}>
+        <span>Last</span><span>Surface</span><span>Leg</span><span>Reason</span><span>Scans</span><span>Verdict</span>
+      </div>
+      {verdicts.length === 0 && (
+        <div style={{ padding: '12px', fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted }}>
+          No actionable judge decisions in this snapshot.
+        </div>
+      )}
+      {verdicts.slice(0, 8).map((v, i) => (
+        <div key={i} style={{
+          display: 'grid', gridTemplateColumns: '100px 80px minmax(180px, 1fr) minmax(160px, 1fr) 60px 80px',
+          gap: '12px', padding: '10px 12px', borderRadius: '6px',
+          background: i % 2 === 0 ? THEME.bg.elevated + '60' : 'transparent',
+          fontFamily: THEME.font.mono, fontSize: '12px',
+          animation: i === 0 ? 'fadeIn 0.5s ease' : 'none',
+        }}>
+          <span style={{ color: THEME.text.muted }}>{new Date(v.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+          <span style={{ color: THEME.text.secondary }}>{surfaceIcon(v.surface)} {v.surface}</span>
+          <span style={{ color: THEME.text.primary, minWidth: 0 }}>
+            <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {v.displayName || v.instrument}
+            </span>
+            {(v.slug || v.endDate) && (
+              <span style={{ display: 'block', color: THEME.text.faint, fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {v.slug || v.instrument}{v.endDate ? ` · ${formatEventDate(v.endDate)}` : ''}
+              </span>
+            )}
+          </span>
+          <span style={{ color: THEME.text.muted }}>{v.reason}</span>
+          <span style={{ color: v.repeatCount > 1 ? THEME.amber[400] : THEME.text.muted }}>
+            {v.repeatCount > 1 ? `${v.repeatCount}x` : '1x'}
+          </span>
+          <Badge color={verdictColor(v.label)}>{v.label}</Badge>
+        </div>
+      ))}
+    </div>
+  </Card>
+);
+
+const CandidatesPanel = ({ candidates, title = 'Liquid Proxy Legs', emptyText = 'No active liquid proxy legs.' }) => (
+  <Card>
+    <SectionLabel>{title}</SectionLabel>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+      {candidates.length === 0 && (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted }}>
+          {emptyText}
+        </div>
+      )}
+      {candidates.slice(0, 5).map((c, i) => (
+        <div key={i} style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px',
+          padding: '10px 12px', borderRadius: '8px', background: THEME.bg.elevated,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', minWidth: 0 }}>
+            <span style={{ fontSize: '16px' }}>{surfaceIcon(c.surface)}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {c.displayName || c.instrument}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>
+                {c.surface} · {c.directPairRole || c.role || roleLabel('', c.surface)} · {c.dir || c.direction || 'pending'}
+                {c.repeatCount > 1 ? ` · seen ${c.repeatCount} scans` : ''}
+              </div>
+              {(c.slug || c.endDate) && (
+                <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {c.slug || c.instrument}{c.endDate ? ` · resolves ${formatEventDate(c.endDate)}` : ''}
+                </div>
+              )}
+              {c.description && (
+                <div style={{
+                  fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted,
+                  lineHeight: 1.35, marginTop: '4px', display: '-webkit-box',
+                  WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                }}>
+                  {c.description}
+                </div>
+              )}
+              {c.connection && (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '4px' }}>
+                  {c.connection}
+                </div>
+              )}
+              {c.reason && (
+                <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, marginTop: '4px' }}>
+                  reason: {c.reason}
+                </div>
+              )}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+            {c.label && <Badge color={verdictColor(c.label)}>{c.label}</Badge>}
+            <MonoText style={{ fontSize: '12px' }}>{c.estPnl ? `${c.estPnl} $/$` : (c.pricingStatus || 'watchlist')}</MonoText>
+            <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted }}>{c.sizing} USDC</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  </Card>
+);
+
+const PredictionLegsPanel = ({ candidates }) => (
+  <CandidatesPanel
+    title="Direct Event / Forecast Legs"
+    candidates={candidates}
+    emptyText="No direct prediction or IBKR forecast legs in this snapshot."
+  />
+);
+
+const PositionsPanel = ({ positions }) => (
+  <Card>
+    <SectionLabel>Arc ERC-8183 Positions</SectionLabel>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+      {positions.length === 0 && (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted }}>
+          No real Arc positions in this snapshot.
+        </div>
+      )}
+      {positions.map((p, i) => (
+        <div key={i} style={{
+          padding: '12px', borderRadius: '8px', background: THEME.bg.elevated,
+          border: `1px solid ${THEME.border.subtle}`,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <MonoText style={{ fontWeight: 700 }}>Job #{p.jobId}</MonoText>
+              <Badge color={p.status === 'completed' ? 'primary' : 'amber'}>{p.status}</Badge>
+            </div>
+            <span style={{
+              fontFamily: THEME.font.mono, fontSize: '14px', fontWeight: 700,
+              color: p.pnl.startsWith('+') ? THEME.primary[400] : p.pnl === '-' ? THEME.text.muted : THEME.red[400],
+            }}>{p.pnl === '-' ? '—' : p.pnl}</span>
+          </div>
+          <div style={{ display: 'flex', gap: '16px', fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted }}>
+            <span>{surfaceIcon(p.surface)} {p.surface}</span>
+            <span>{p.role || roleLabel('', p.surface)}</span>
+            <span>{p.sizing} USDC</span>
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, marginTop: '8px', fontWeight: 700 }}>
+            {p.displayName || p.instrument}
+          </div>
+          {(p.slug || p.endDate) && (
+            <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '3px' }}>
+              {p.slug || p.instrument}{p.endDate ? ` · resolves ${formatEventDate(p.endDate)}` : ''}
+            </div>
+          )}
+          {p.description && (
+            <div style={{
+              fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted,
+              lineHeight: 1.35, marginTop: '6px', display: '-webkit-box',
+              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+            }}>
+              {p.description}
+            </div>
+          )}
+          {p.connection && (
+            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+              {p.connection}
+            </div>
+          )}
+          <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '6px' }}>
+            tx: {p.txHash}
+          </div>
+        </div>
+      ))}
+    </div>
+  </Card>
+);
+
+const OraclePanel = ({ oracle }) => (
+  <Card>
+    <SectionLabel>Oracle Backtest — 280K Sources · 200 Languages</SectionLabel>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+      {[
+        { label: 'News Sources', value: '280,000', color: THEME.text.primary },
+        { label: 'Languages', value: '200', color: THEME.amber[400] },
+        { label: 'AI-Infra WR', value: `${oracle.aiInfra.wr}%`, color: THEME.primary[400] },
+        { label: 'AI-Infra PnL', value: `+${oracle.aiInfra.pnl.toFixed(3)}`, color: THEME.primary[400] },
+        { label: 'Frontier Model WR', value: `${oracle.geopolitics.wr}%`, color: THEME.amber[400] },
+        { label: 'Gate-Kept PnL', value: `+${oracle.gatePnl.toFixed(3)}`, color: THEME.primary[400] },
+      ].map((item, i) => (
+        <div key={i} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '4px' }}>{item.label}</div>
+          <MonoText style={{ fontSize: '16px', fontWeight: 700, color: item.color }}>{item.value}</MonoText>
+        </div>
+      ))}
+    </div>
+  </Card>
+);
+
+const DashboardPage = ({ refreshRate }) => {
+  const data = useLiveData(refreshRate);
+  const isMobile = useIsMobile(820);
+  const isNarrow = useIsMobile(520);
+  const pnlHistory = React.useRef(Array.from({ length: 30 }, (_, i) => 100 + i * 1.5 + Math.random() * 5));
+  const primaryCandidates = data.candidates.filter(c => !isPredictionSurface(c.surface));
+  const predictionCandidates = dedupeRows(
+    [...data.candidates.filter(c => isPredictionSurface(c.surface)), ...(data.directInventory || [])],
+    legKey,
+  );
+  React.useEffect(() => {
+    if (data.pnl.hasReconciled) {
+      pnlHistory.current = [...pnlHistory.current.slice(1), data.pnl.total];
+    }
+  }, [data.pnl.total, data.pnl.hasReconciled]);
+
+  return (
+    <div style={{ padding: isMobile ? '18px 14px 32px' : '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center',
+        flexDirection: isMobile ? 'column' : 'row', gap: '12px', marginBottom: '24px',
+      }}>
+        <div>
+          <h1 style={{ fontFamily: THEME.font.heading, fontSize: '28px', fontWeight: 800, color: THEME.text.primary, margin: 0, letterSpacing: 0 }}>
+            Dashboard
+          </h1>
+          <p style={{ fontFamily: THEME.font.body, fontSize: '14px', color: THEME.text.muted, margin: '4px 0 0' }}>
+            Canonical compute/energy spread packages · Arc Testnet
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '100%' }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: '50%', background: data.connection.status === 'live' ? THEME.primary[400] : THEME.amber[400],
+            animation: 'pulse 2s ease infinite',
+          }}></div>
+          <MonoText style={{ fontSize: '12px', color: THEME.text.muted }}>
+            {data.connection.status === 'live' ? 'Backend live' : 'Backend offline'} · Refresh: {(refreshRate / 1000).toFixed(1)}s
+          </MonoText>
+        </div>
+      </div>
+
+      {/* Top stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? (isNarrow ? '1fr' : 'repeat(2, minmax(0, 1fr))') : 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
+        <StatCard label="Reconciled PnL" value={data.pnl.totalDisplay} sparkData={data.pnl.hasReconciled ? pnlHistory.current : null} />
+        <StatCard label="Wrapped Jobs" value={data.pnl.wrappedJobs} color={THEME.primary[400]} />
+        <StatCard label="Judge EXECUTEs" value={data.pnl.executes} color={THEME.primary[400]} />
+        <StatCard label="Reconciled Trades" value={data.pnl.tradesDisplay} />
+      </div>
+
+      {/* Signal + Candidates */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        <SignalPanel data={data} />
+        <PackageBundlePanel bundle={data.currentPackage} direction={data.direction} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        <CandidatesPanel
+          title="Liquid Proxy Legs"
+          emptyText="No crypto or IBKR stock proxy legs in this snapshot."
+          candidates={primaryCandidates}
+        />
+        <PredictionLegsPanel candidates={predictionCandidates} />
+      </div>
+
+      {/* Verdicts */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        <VerdictTable verdicts={data.verdicts} />
+        <PositionsPanel positions={data.positions} />
+      </div>
+
+      {/* Oracle */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
+        <OraclePanel oracle={data.oracleResults} />
+      </div>
+    </div>
+  );
+};
+
+Object.assign(window, { DashboardPage, mapSnapshotToDashboardData, emptyDashboardData, derivePrimaryExposure, formatEventDate, roleLabel });

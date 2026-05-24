@@ -26,6 +26,10 @@ def test_non_energy_returns_none():
     assert classify_energy("Taylor Swift Q4 album release?", "") is None
 
 
+def test_short_acronyms_need_token_boundary():
+    assert classify_energy("Which party controls the Senate in 2026?", "Does the party win?") is None
+
+
 def test_keyword_in_description():
     assert classify_energy("Q3 outcome", "Brent crude collapse below $50") == "energy_oil_price"
 

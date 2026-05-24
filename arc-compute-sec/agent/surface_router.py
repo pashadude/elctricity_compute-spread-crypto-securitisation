@@ -1,20 +1,21 @@
 """Surface router.
 
-Given an ArbSignal, enumerate candidate positions across the four surfaces
-the agent knows about. Each candidate carries enough info for the judge
-and the appropriate adapter to act on it.
+Given an ArbSignal, enumerate candidate positions across the surfaces the
+agent knows about. The product object is a canonical spread package; venues
+are expression legs. Prediction/event-contract legs are direct when they
+match the thesis, while crypto and equities are labelled as liquid proxies.
 
 Direction semantics:
     direction = "compute_expensive"      → mean-reversion means compute
                                              will get cheaper / electricity
                                              will move up. Equity-positive
                                              for hyperscalers (their cost
-                                             eased); BTC short on mining
-                                             stress; Polymarket-AI: faster
+                                             eased); Polymarket-AI: faster
                                              releases more likely.
     direction = "electricity_expensive"  → mining margin compression;
                                              hyperscaler margins compress;
-                                             BTC short; AI releases slow.
+                                             miner-margin proxy shorts; AI
+                                             releases slow.
 
 Per-surface routing rules are deliberately simple. The judge layer
 applies the 4-way classifier on top.
@@ -27,17 +28,17 @@ from typing import Sequence
 
 from agent.arb_identifier import (
     ArbSignal,
-    DIRECTION_COMPUTE_EXPENSIVE,
     DIRECTION_ELEC_EXPENSIVE,
 )
-from agent.pnl_probe import estimate as pnl_estimate, DIRECTION_LONG, DIRECTION_SHORT
+from agent.pnl_probe import estimate as pnl_estimate, DIRECTION_SHORT
+from agent.spread_package import annotate_candidates
 
 
 @dataclass(frozen=True, slots=True)
 class Candidate:
     candidate_id: str
     arb_signal_id: str
-    surface: str          # "polymarket" | "ibkr" | "crypto" | "kalshi"
+    surface: str          # "polymarket" | "ibkr_prediction" | "ibkr" | "crypto" | "kalshi"
     instrument: str       # e.g. "GOOGL", "BTC/USD", "polymarket:<event_id>:<token_id>"
     direction: str        # "long" | "short" — for predictive markets this maps to YES/NO via adapter
     sizing_usdc: float    # notional in USDC for the on-chain wrap
@@ -51,6 +52,13 @@ class Candidate:
 _EQUITY_INSTRUMENTS = ("GOOGL", "AMZN", "MSFT", "BABA")
 _MINER_INSTRUMENTS = ("MARA", "RIOT", "CLSK")
 _CRYPTO_INSTRUMENTS = ("BTC/USD", "ETH/USD")
+_SURFACE_PRIORITY = {
+    "polymarket": 0,
+    "ibkr_prediction": 1,
+    "kalshi": 2,
+    "crypto": 3,
+    "ibkr": 4,
+}
 
 
 def _equity_candidates(
@@ -89,17 +97,17 @@ def _equity_candidates(
 
 
 def _crypto_candidates(signal: ArbSignal, sizing_usdc: float) -> list[Candidate]:
-    # Crypto rule: short BTC on either direction's compression of mining
-    # margin; v0 simplifies to short BTC on `electricity_expensive`, skip
-    # on `compute_expensive`.
+    # Crypto is not the securitized spread. It is only a miner-margin proxy
+    # when electricity is expensive enough to pressure proof-of-work economics.
     if signal.direction != DIRECTION_ELEC_EXPENSIVE:
         return []
+    direction = DIRECTION_SHORT
     out: list[Candidate] = []
     for sym in _CRYPTO_INSTRUMENTS:
         est = pnl_estimate(
             surface="crypto",
             instrument=sym,
-            direction=DIRECTION_SHORT,
+            direction=direction,
             z=signal.z,
         )
         out.append(
@@ -108,12 +116,16 @@ def _crypto_candidates(signal: ArbSignal, sizing_usdc: float) -> list[Candidate]
                 arb_signal_id=signal.signal_id,
                 surface="crypto",
                 instrument=sym,
-                direction=DIRECTION_SHORT,
+                direction=direction,
                 sizing_usdc=sizing_usdc,
                 conviction=signal.conviction,
                 est_pnl_per_dollar=est.est_pnl_per_dollar,
                 ttl_hours=signal.ttl_hours,
-                metadata={},
+                metadata={
+                    "expected_driver": signal.direction,
+                    "venue_mode": "paper_live_read",
+                    "proxy_only": True,
+                },
             )
         )
     return out
@@ -159,6 +171,11 @@ def _polymarket_candidates(
                     "event_id": ev.get("id"),
                     "slug": ev.get("slug"),
                     "title": ev.get("title"),
+                    "description": ev.get("description"),
+                    "start_date": ev.get("start_date") or ev.get("startDate"),
+                    "end_date": ev.get("end_date") or ev.get("endDate"),
+                    "volume": ev.get("volume"),
+                    "liquidity": ev.get("liquidity"),
                     "yes_prices": list(ypx),
                     "energy_template_id": ev.get("energy_template_id"),
                     "premium": ev.get("premium"),
@@ -169,17 +186,80 @@ def _polymarket_candidates(
     return out
 
 
+def _ibkr_prediction_candidates(
+    signal: ArbSignal,
+    events: Sequence[dict],
+    sizing_usdc: float,
+) -> list[Candidate]:
+    """Build candidates from curated IBKR ForecastTrader/ForecastEx events.
+
+    IBKR event contracts are modeled as option-like instruments. This router
+    consumes already-discovered event metadata so the runtime can keep
+    discovery read-only and testable.
+    """
+    out: list[Candidate] = []
+    for ev in events:
+        ypx = ev.get("yes_prices") or []
+        if not ypx:
+            continue
+        event_id = ev.get("id") or ev.get("conid") or ev.get("symbol") or ev.get("slug") or "unknown"
+        instrument = f"ibkr-prediction:{event_id}"
+        try:
+            est = pnl_estimate(
+                surface="ibkr_prediction",
+                instrument=instrument,
+                direction=DIRECTION_SHORT,
+                yes_prices=ypx,
+            )
+        except ValueError:
+            continue
+        out.append(
+            Candidate(
+                candidate_id=str(uuid.uuid4())[:12],
+                arb_signal_id=signal.signal_id,
+                surface="ibkr_prediction",
+                instrument=instrument,
+                direction=DIRECTION_SHORT,
+                sizing_usdc=sizing_usdc,
+                conviction=signal.conviction,
+                est_pnl_per_dollar=est.est_pnl_per_dollar,
+                ttl_hours=signal.ttl_hours,
+                metadata={
+                    "event_id": ev.get("id") or ev.get("conid"),
+                    "slug": ev.get("slug") or ev.get("symbol"),
+                    "title": ev.get("title") or ev.get("question") or ev.get("name"),
+                    "description": ev.get("description") or "",
+                    "start_date": ev.get("start_date") or ev.get("startDate"),
+                    "end_date": ev.get("end_date") or ev.get("endDate") or ev.get("last_trade_date"),
+                    "yes_prices": list(ypx),
+                    "energy_template_id": ev.get("energy_template_id"),
+                    "venue": ev.get("venue") or "IBKR ForecastTrader",
+                    "exchange": ev.get("exchange") or "FORECASTX",
+                    "sec_type": ev.get("sec_type") or "OPT",
+                    "underlier_conid": ev.get("underlier_conid"),
+                    "contract_month": ev.get("contract_month"),
+                    "strike": ev.get("strike"),
+                    "proxy_only": False,
+                },
+            )
+        )
+    return out
+
+
 def route(
     signal: ArbSignal,
     polymarket_events: Sequence[dict] = (),
+    ibkr_prediction_events: Sequence[dict] = (),
     sizing_per_equity_usdc: float = 1.0,
     sizing_crypto_usdc: float = 1.0,
     sizing_polymarket_usdc: float = 1.0,
+    sizing_ibkr_prediction_usdc: float = 1.0,
 ) -> list[Candidate]:
-    """Top-level routing. Returns a flat list of candidates ranked by est_pnl_per_dollar desc."""
+    """Top-level routing. Returns package expression legs ranked by directness, then PnL."""
     cands: list[Candidate] = []
     cands.extend(_equity_candidates(signal, sizing_per_equity_usdc))
     cands.extend(_crypto_candidates(signal, sizing_crypto_usdc))
     cands.extend(_polymarket_candidates(signal, polymarket_events, sizing_polymarket_usdc))
-    cands.sort(key=lambda c: c.est_pnl_per_dollar, reverse=True)
-    return cands
+    cands.extend(_ibkr_prediction_candidates(signal, ibkr_prediction_events, sizing_ibkr_prediction_usdc))
+    cands.sort(key=lambda c: (_SURFACE_PRIORITY.get(c.surface, 99), -c.est_pnl_per_dollar))
+    return annotate_candidates(signal, cands)

@@ -19,11 +19,18 @@ import yaml
 
 _KW_PATH = Path(__file__).parent / "keywords.yaml"
 _REGEX_META = re.compile(r"[.\\*+?\[\]()|^$]")
+_SHORT_TOKEN = re.compile(r"^[a-z0-9]{2,4}$", re.IGNORECASE)
 
 
 @lru_cache(maxsize=1)
 def _load_keywords() -> dict[str, list[str]]:
     return yaml.safe_load(_KW_PATH.read_text())
+
+
+def _plain_pattern_matches(pattern: str, blob: str) -> bool:
+    if _SHORT_TOKEN.fullmatch(pattern):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(pattern)}(?![a-z0-9])", blob, re.IGNORECASE))
+    return pattern.lower() in blob
 
 
 def classify_energy(
@@ -44,6 +51,6 @@ def classify_energy(
                 if re.search(p, blob, re.IGNORECASE):
                     return template_id
             else:
-                if p.lower() in blob:
+                if _plain_pattern_matches(p, blob):
                     return template_id
     return None

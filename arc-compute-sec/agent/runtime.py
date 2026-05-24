@@ -5,7 +5,7 @@
 
 Modes (signal source, mutually exclusive):
     --scan          one live pass: fetch EIA + AWS, compute spread, then
-                    read Polymarket energy events and exit
+                    route canonical spread-package expression legs and exit
     --once          one mock pass: synthesize signal from --mock-elec /
                     --mock-compute / --force-signal flags
 
@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from agent import arb_identifier, judge, surface_router
+from agent.spread_package import package_summary_for_candidate
 
 _POSITIONS_PATH = Path(__file__).resolve().parent.parent / "logs" / "positions.tsv"
 _ARC_TXS_PATH = Path(__file__).resolve().parent.parent / "logs" / "arc_txs.tsv"
@@ -39,6 +40,8 @@ _POSITIONS_HEADERS = [
     "ts", "stage", "job_id", "arb_signal_id", "surface", "instrument",
     "direction", "notional_usdc", "deliverable_hash", "reason_hash",
     "tx_hash", "fill_report_path", "action_key",
+    "leg_title", "leg_slug", "leg_description", "leg_end_date",
+    "leg_role", "package_id",
 ]
 
 
@@ -67,6 +70,7 @@ def _canonical_outcome_blob(candidate_dict: dict[str, Any], fill_report: dict[st
         "candidate": candidate_dict,
         "fill_report": fill_report or {},
         "arb_signal": asdict(signal) if signal is not None else {},
+        "spread_package": package_summary_for_candidate(candidate_dict) or {},
     }
     return json.dumps(blob, sort_keys=True, default=str).encode()
 
@@ -74,6 +78,26 @@ def _canonical_outcome_blob(candidate_dict: dict[str, Any], fill_report: dict[st
 def _action_key(candidate_dict: dict[str, Any]) -> str:
     stable = {k: v for k, v in candidate_dict.items() if k != "candidate_id"}
     return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _public_leg_fields(candidate_dict: dict[str, Any]) -> dict[str, str]:
+    metadata = candidate_dict.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    spread_leg = metadata.get("spread_leg") if isinstance(metadata, dict) else {}
+    spread_package = metadata.get("spread_package") if isinstance(metadata, dict) else {}
+    if not isinstance(spread_leg, dict):
+        spread_leg = {}
+    if not isinstance(spread_package, dict):
+        spread_package = {}
+    return {
+        "leg_title": str(metadata.get("title") or spread_leg.get("title") or candidate_dict.get("instrument", "")),
+        "leg_slug": str(metadata.get("slug") or spread_leg.get("slug") or ""),
+        "leg_description": str(metadata.get("description") or spread_leg.get("description") or ""),
+        "leg_end_date": str(metadata.get("end_date") or spread_leg.get("end_date") or ""),
+        "leg_role": str(spread_leg.get("role") or ""),
+        "package_id": str(spread_package.get("package_id") or ""),
+    }
 
 
 def _position_already_recorded(action_key: str) -> bool:
@@ -215,19 +239,45 @@ def _polymarket_events_for_signal(signal: arb_identifier.ArbSignal, *, live_scan
     return polymarket.classify_and_gate(polymarket.fetch_events(), include_rejected=True)
 
 
+def _optional_polymarket_events_for_signal(
+    signal: arb_identifier.ArbSignal,
+    *,
+    live_scan: bool,
+    allow_failure: bool,
+) -> list[dict]:
+    try:
+        return _polymarket_events_for_signal(signal, live_scan=live_scan)
+    except Exception as exc:
+        if not allow_failure:
+            raise
+        print(f"[runtime] Polymarket research surface unavailable; continuing with proxy legs: {exc}")
+        return []
+
+
+def _ibkr_prediction_events_for_signal(signal: arb_identifier.ArbSignal) -> list[dict]:
+    from adapters.ibkr import fetch_prediction_events
+    return fetch_prediction_events()
+
+
 def _polymarket_candidates(
     signal: arb_identifier.ArbSignal,
     *,
     live_scan: bool,
     sizing_usdc: float,
 ) -> list[surface_router.Candidate]:
-    events = _polymarket_events_for_signal(signal, live_scan=live_scan)
+    events = _optional_polymarket_events_for_signal(
+        signal,
+        live_scan=live_scan,
+        allow_failure=False,
+    )
     candidates = surface_router.route(
         signal,
         polymarket_events=events,
+        ibkr_prediction_events=(),
         sizing_per_equity_usdc=0.0,
         sizing_crypto_usdc=0.0,
         sizing_polymarket_usdc=sizing_usdc,
+        sizing_ibkr_prediction_usdc=0.0,
     )
     return [c for c in candidates if c.surface == "polymarket"]
 
@@ -240,14 +290,22 @@ def _candidates_for_signal(
     sizing_equity: float,
     sizing_crypto: float,
     sizing_polymarket: float,
+    sizing_ibkr_prediction: float,
 ) -> list[surface_router.Candidate]:
-    events = _polymarket_events_for_signal(signal, live_scan=live_scan)
+    events = _optional_polymarket_events_for_signal(
+        signal,
+        live_scan=live_scan,
+        allow_failure=multi_surface,
+    )
+    ibkr_prediction_events = _ibkr_prediction_events_for_signal(signal) if multi_surface else []
     candidates = surface_router.route(
         signal,
         polymarket_events=events,
+        ibkr_prediction_events=ibkr_prediction_events,
         sizing_per_equity_usdc=sizing_equity if multi_surface else 0.0,
         sizing_crypto_usdc=sizing_crypto if multi_surface else 0.0,
         sizing_polymarket_usdc=sizing_polymarket,
+        sizing_ibkr_prediction_usdc=sizing_ibkr_prediction if multi_surface else 0.0,
     )
     if multi_surface:
         return candidates
@@ -291,6 +349,15 @@ def execute_candidate(
         from adapters.ibkr import place_paper_order
         fr = place_paper_order(candidate.instrument, candidate.direction,
                                qty=int(md.get("qty_hint", 1)), dry_run=dry_run)
+    elif surf == "ibkr_prediction":
+        from adapters.ibkr import simulate_prediction_fill
+        fr = simulate_prediction_fill(
+            candidate.instrument,
+            candidate.direction,
+            md.get("yes_prices") or [],
+            notional_usdc=candidate.sizing_usdc,
+            metadata=md,
+        )
     elif surf == "crypto":
         from adapters.crypto import paper_fill
         fr = paper_fill(candidate.instrument, candidate.direction,
@@ -514,6 +581,7 @@ def process_candidates(
             "tx_hash": wrap.get("create_tx", ""),
             "fill_report_path": "",
             "action_key": action_key,
+            **_public_leg_fields(cand_dict),
         })
     return results
 
@@ -559,8 +627,9 @@ def run_once(args: argparse.Namespace) -> int:
     assert signal is not None
     print(f"[runtime] signal {signal.signal_id}: direction={signal.direction} z={signal.z:.3f}")
 
-    # 2. Route candidates. Default v0 remains S-4 Polymarket only. Phase 4
-    # uses --multi-surface for one-shot live paper surfaces; no daemon loop.
+    # 2. Route candidates. Default v1 is a canonical spread package: direct
+    # prediction-event legs when available, then labelled liquid proxy legs.
+    # `--polymarket-only` isolates the legacy S-4 path.
     candidates = _candidates_for_signal(
         signal,
         live_scan=bool(args.scan),
@@ -568,12 +637,13 @@ def run_once(args: argparse.Namespace) -> int:
         sizing_equity=args.sizing_equity,
         sizing_crypto=args.sizing_crypto,
         sizing_polymarket=args.sizing_polymarket,
+        sizing_ibkr_prediction=args.sizing_ibkr_prediction,
     )
     if args.multi_surface:
         surfaces = ", ".join(sorted({c.surface for c in candidates})) or "none"
-        print(f"[runtime] {len(candidates)} multi-surface candidates ({surfaces})")
+        print(f"[runtime] {len(candidates)} spread-package legs ({surfaces})")
     else:
-        print(f"[runtime] {len(candidates)} S-4 Polymarket candidates")
+        print(f"[runtime] {len(candidates)} experimental Polymarket candidates")
     if not candidates:
         return 0
 
@@ -621,6 +691,8 @@ def run_once(args: argparse.Namespace) -> int:
                 "reason_hash": settle.get("reason_hash", ""),
                 "tx_hash": settle.get("settle_tx", ""),
                 "fill_report_path": "",
+                "action_key": r.get("action_key", ""),
+                **_public_leg_fields(cand_dict),
             })
 
     print(f"[runtime] complete. {sum(1 for r in executed if r.get('executed'))} executed, "
@@ -634,10 +706,14 @@ def scan_once(
     dry_run: bool = True,
     settle: bool = False,
     no_persist: bool = False,
+    sizing_equity: float = 1.0,
+    sizing_crypto: float = 1.0,
     sizing_polymarket: float = 1.0,
+    sizing_ibkr_prediction: float = 1.0,
     z_threshold: float = arb_identifier.DEFAULT_Z_THRESHOLD,
+    multi_surface: bool = True,
 ) -> int:
-    """Run the v0 stateless scan exactly once and exit."""
+    """Run the spread-package stateless scan exactly once and exit."""
     args = argparse.Namespace(
         scan=True,
         once=False,
@@ -645,10 +721,11 @@ def scan_once(
         mock_elec=None,
         mock_compute=None,
         z_threshold=z_threshold,
-        sizing_equity=0.0,
-        sizing_crypto=0.0,
+        sizing_equity=sizing_equity if multi_surface else 0.0,
+        sizing_crypto=sizing_crypto if multi_surface else 0.0,
         sizing_polymarket=sizing_polymarket,
-        multi_surface=False,
+        sizing_ibkr_prediction=sizing_ibkr_prediction if multi_surface else 0.0,
+        multi_surface=multi_surface,
         max_actions=max_positions,
         expires=600,
         dry_run=dry_run,
@@ -675,8 +752,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sizing-equity", type=float, default=1.0)
     parser.add_argument("--sizing-crypto", type=float, default=1.0)
     parser.add_argument("--sizing-polymarket", type=float, default=1.0)
-    parser.add_argument("--multi-surface", action="store_true",
-                        help="One-shot Phase 4 route across Polymarket, IBKR paper, and crypto paper")
+    parser.add_argument("--sizing-ibkr-prediction", type=float, default=1.0)
+    parser.set_defaults(multi_surface=True)
+    parser.add_argument("--multi-surface", dest="multi_surface", action="store_true",
+                        help="Route the canonical spread package across direct and proxy legs (default)")
+    parser.add_argument("--polymarket-only", dest="multi_surface", action="store_false",
+                        help="Route only the experimental S-4 Polymarket surface")
     parser.add_argument("--max-positions", "--max-actions", dest="max_actions", type=int, default=1,
                         help="Maximum wrapped positions for this one-shot run (default: 1)")
     parser.add_argument("--expires", type=int, default=600,

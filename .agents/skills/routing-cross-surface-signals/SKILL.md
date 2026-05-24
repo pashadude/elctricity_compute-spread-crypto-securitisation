@@ -14,17 +14,17 @@ do not change PnL basis constants
 do not bypass the energy classifier or scorer bridge
 
 
-The router takes one `ArbSignal` and decides which surfaces to express it on. It does NOT decide whether to take a position — that's the judge. The router's only job is to enumerate *plausible* candidates and rank them so the judge sees the strongest opportunity first.
+The router takes one `ArbSignal` and decides which surfaces to express it on. It does NOT decide whether to take a position — that's the judge. The router's first job is to build a canonical spread package: signal, thesis, intended direct event pair, available expression legs, and package hash. Venue candidates are legs of that package, not the package itself.
 
 Numeric mappings (direction → instruments, sizing per surface) live in `arc-compute-sec/policy.yaml`. The principles below explain why those mappings exist.
 
 ## Core principles
 
-**One signal can hit many surfaces — but the surfaces are not equally informative.**
-A `compute_expensive` z-score implies several economic effects: hyperscaler cost relief, miner margin support, AI-release acceleration. Each effect manifests on a different surface with a different latency and edge magnitude. The router's job is to rank them, not to express all four mechanically.
+**One signal can hit many surfaces — but the surfaces are not equally direct.**
+A `compute_expensive` z-score implies several economic effects: hyperscaler cost relief, miner margin support, AI-release acceleration. Each effect manifests on a different surface with a different latency and edge magnitude. Prediction-market or event-contract pairs are the clearest direct package legs when they match the thesis. BTC/ETH and equities are liquid proxy legs and must be labelled as such. IBKR ForecastTrader/ForecastEx event contracts are direct-event candidates; IBKR stocks are proxy candidates.
 
-**Liquidity beats edge.**
-A high-edge candidate on a thin surface (Polymarket niche event, $50 total volume) is dominated by a lower-edge candidate on a deep surface (NVDA short on IBKR paper, billions of daily volume). The arb is only realizable to the extent we can size into it without moving the market.
+**Directness beats liquidity for the story; liquidity matters for expression.**
+A high-edge direct event candidate on a thin surface may be hard to size, but it explains the spread package better than a generic BTC/USD leg. A lower-edge proxy leg on a deep surface can be useful for live-read execution, but it must not be described as securitizing the spread.
 
 **Tenor must match signal TTL.**
 A 24-hour `electricity_expensive` signal does not survive a 30-day Polymarket event resolution. Match surface TTL to signal `ttl_hours` ± 50%. If no surface fits, the signal goes through the judge alone (Polymarket-only) rather than padding the candidate list with mismatched horizons.
@@ -35,18 +35,17 @@ The desk has a fixed concurrency cap (see `judging-arb-candidates`). Two candida
 ## Direction → surface mapping (the principle, not the table)
 
 **`electricity_expensive` (electricity spike, compute unchanged):**
-- Hyperscaler equities short — most direct: cloud margin compresses on power cost
-- Miner equities short — they pay for power at spot; mining margin = block_reward × BTC − power_cost × hashrate
-- BTC short on week-over-week — mining capitulation eventually feeds supply
-- Polymarket AI-release events short ("Will OpenAI ship X by Y?") — slower releases on tight compute
-- Direct energy Polymarket events long — straightforward delta-one on the underlying
+- Direct event pair: long energy/grid stress outcome and short AI release/popularity/compute-demand outcome, sourced from Polymarket, IBKR ForecastTrader/ForecastEx, or other approved event-contract venues
+- BTC/ETH short only as a miner-margin proxy: mining margin = block_reward × BTC − power_cost × hashrate
+- Hyperscaler equities short as a secondary paper proxy: cloud margin compresses on power cost
+- Miner equities short as a secondary paper proxy when available
 
 **`compute_expensive` (compute spot spike, electricity unchanged):**
-- Polymarket AI-release events long ("Will model X ship?") — if compute is expensive *because* of demand surge, releases pull forward
+- Direct event pair: long AI release/popularity/compute-demand outcome and short energy/grid stress outcome, sourced from Polymarket, IBKR ForecastTrader/ForecastEx, or other approved event-contract venues
 - Hyperscaler equities long *only* if the compute spike is supply-driven (e.g., NVIDIA constraint) AND the hyperscaler is a beneficiary; skip in ambiguous cases
-- Crypto and miners are not a clean fit for this direction in v0 — skip
+- Do not auto-route BTC/ETH here. Without explicit miner-margin evidence, generic crypto is too noisy to explain the spread package.
 
-The v0 implementation routes only `electricity_expensive` aggressively; `compute_expensive` routes to Polymarket only. Widening to equities on `compute_expensive` is a future skill-edit subject after Phase 6 calibration.
+The v1 implementation attaches `spread_package` metadata to every candidate. Crypto is allowed only as a labelled miner-margin proxy on `electricity_expensive` signals; it is not direct securitization evidence. `ibkr_prediction` means IBKR event/forecast contract metadata and can be direct; `ibkr` means stock paper orders and remains proxy-only.
 
 ## When to skip a surface entirely
 
@@ -56,7 +55,10 @@ The v0 implementation routes only `electricity_expensive` aggressively; `compute
 
 ## Ranking principles
 
-Rank candidates by `est_pnl_per_dollar × conviction × surface_health_factor`:
+Rank candidates by directness first, then `est_pnl_per_dollar × conviction × surface_health_factor`:
+- direct prediction-event legs first when available and thesis-matched
+- miner-margin crypto proxies second
+- equity paper proxies after crypto
 - `est_pnl_per_dollar` comes from `pnl_probe`
 - `conviction` is the signal's `|z|`
 - `surface_health_factor` ∈ [0, 1] — start at 1.0; downweight surfaces with recent loss runs
@@ -66,6 +68,7 @@ Rank candidates by `est_pnl_per_dollar × conviction × surface_health_factor`:
 ## Anti-patterns
 
 - **Don't route to every surface on every signal.** The router is a filter, not a fan-out. If a signal doesn't fit a surface, the right answer is to omit it, not to size it small.
+- **Don't present BTC/USD as the package.** It is a miner-margin proxy leg. The package is the canonical spread blob and direct/proxy leg map.
 - **Don't conflate "surface produces no candidate" with "router failed".** Polymarket's Gamma API may simply have no energy or AI-release event open right now. That's not a routing bug; it's a market state.
 - **Don't hardcode tickers as a list.** Use the principle (hyperscaler set, miner set) so additions/removals are skill edits, not Python edits.
 

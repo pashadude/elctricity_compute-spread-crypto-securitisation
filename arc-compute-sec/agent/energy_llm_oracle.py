@@ -58,6 +58,7 @@ class QuerySpec:
     searchline: str
     core_terms: list[str]
     context_terms: list[str]
+    opoint_topic_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +156,35 @@ Return strict JSON:
 Fail if JSON fields are inconsistent, evidence is not used, or a KEEP verdict is unsupported by the articles.
 """
 
+OPOINT_TOPIC_PREFIXES = ("1", "2")
+
+# Closed topic profile. These are IPTC MediaTopic numeric IDs represented in
+# Opoint's working filter shape: topic id = "<1-or-2><numeric mediatopic id>".
+# Do not pass medtop: URIs or scrape the whole web taxonomy into runtime.
+MEDIATOPIC_SCIENCE_TECH = "13000000"
+MEDIATOPIC_ECONOMY_BUSINESS = "04000000"
+MEDIATOPIC_ENERGY_RESOURCE = "20000256"
+MEDIATOPIC_ENERGY_MARKET = "20000387"
+MEDIATOPIC_SCIENTIFIC_INNOVATION = "20000736"
+MEDIATOPIC_SEMICONDUCTOR = "20000230"
+MEDIATOPIC_SOFTWARE = "20000231"
+MEDIATOPIC_INTERNATIONAL_TRADE = "20000373"
+
+
+def _opoint_topic_ids(*mediatopic_ids: str) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_id in mediatopic_ids:
+        numeric = str(raw_id).replace("medtop:", "").strip()
+        if not numeric:
+            continue
+        for prefix in OPOINT_TOPIC_PREFIXES:
+            opoint_id = f"{prefix}{numeric}"
+            if opoint_id not in seen:
+                seen.add(opoint_id)
+                out.append(opoint_id)
+    return tuple(out)
+
 
 def _as_float(value: Any) -> float | None:
     try:
@@ -223,56 +253,130 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
     if template == "energy_geopolitics" or "hormuz" in slug_blob:
         core = ["Strait of Hormuz", "Hormuz transit"]
         context = ["ships", "tankers", "transit", "Iran", "shipping", "oil"]
-        return QuerySpec("hormuz_transit", _build_searchline(core), core, context)
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_ENERGY_RESOURCE,
+            MEDIATOPIC_ENERGY_MARKET,
+            MEDIATOPIC_INTERNATIONAL_TRADE,
+        )
+        return QuerySpec("hormuz_transit", _build_searchline(core), core, context, topics)
 
     if "gpt-5" in slug_blob or "gpt-5pt5" in slug_blob:
         core = ["GPT-5", "GPT-5.5", "OpenAI"]
         context = ["release", "launched", "available", "model", "Sam Altman"]
-        return QuerySpec("gpt_release", _build_searchline(core), core, context)
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_SCIENTIFIC_INNOVATION,
+            MEDIATOPIC_SOFTWARE,
+        )
+        return QuerySpec("gpt_release", _build_searchline(core), core, context, topics)
 
     if "best-math-ai" in slug_blob or "best-coding-ai" in slug_blob or "best-ai-model" in slug_blob:
         core = ["OpenAI", "Anthropic", "Claude", "GPT", "Gemini", "DeepSeek"]
         context = ["benchmark", "Chatbot Arena", "coding", "math", "model", "release"]
-        return QuerySpec("ai_leaderboard", _build_searchline(core), core, context)
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_SCIENTIFIC_INNOVATION,
+            MEDIATOPIC_SOFTWARE,
+        )
+        return QuerySpec("ai_leaderboard", _build_searchline(core), core, context, topics)
 
     if "nvda" in slug_blob or "nvidia" in slug_blob:
         core = ["NVIDIA", "NVDA"]
         context = ["AI chip", "GPU", "earnings", "data center", "Blackwell", "stock"]
-        return QuerySpec("nvidia_ai_infra", _build_searchline(core), core, context)
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_SEMICONDUCTOR,
+            MEDIATOPIC_ECONOMY_BUSINESS,
+        )
+        return QuerySpec("nvidia_ai_infra", _build_searchline(core), core, context, topics)
 
     if "app-store" in slug_blob or "free-app" in slug_blob:
         core = ["ChatGPT", "OpenAI", "Apple App Store"]
         context = ["app", "ranking", "download", "AI", "iOS"]
-        return QuerySpec("ai_app_store", _build_searchline(core), core, context)
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SOFTWARE,
+            MEDIATOPIC_SCIENCE_TECH,
+        )
+        return QuerySpec("ai_app_store", _build_searchline(core), core, context, topics)
 
     if template == "energy_ai_infra":
         core = ["OpenAI", "Anthropic", "NVIDIA", "data center", "AI compute"]
         context = ["power", "GPU", "capacity", "benchmark", "release", "infrastructure"]
-        return QuerySpec("ai_infra", _build_searchline(core), core, context)
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_ENERGY_RESOURCE,
+        )
+        return QuerySpec("ai_infra", _build_searchline(core), core, context, topics)
 
     core = ["energy", "power", "oil", "gas"]
     context = ["price", "supply", "demand", "outage", "policy"]
-    return QuerySpec(template or "energy", _build_searchline(core), core, context)
+    topics = _opoint_topic_ids(
+        MEDIATOPIC_ENERGY_RESOURCE,
+        MEDIATOPIC_ENERGY_MARKET,
+        MEDIATOPIC_ECONOMY_BUSINESS,
+    )
+    return QuerySpec(template or "energy", _build_searchline(core), core, context, topics)
+
+
+def _opoint_search_payload(
+    query: QuerySpec,
+    *,
+    oldest: int,
+    newest: int,
+    topic_id: str | None,
+    requestedarticles: int = 25,
+) -> dict[str, Any]:
+    filters: list[dict[str, str]] = [{"type": "lang", "id": "en"}]
+    if topic_id:
+        filters.append({"type": "topic", "id": topic_id})
+    return {
+        "expressions": [{
+            "linemode": "R",
+            "searchline": {
+                "searchterm": query.searchline,
+                "filters": filters,
+            },
+        }],
+        "params": {
+            "requestedarticles": requestedarticles,
+            "oldest": oldest,
+            "newest": newest,
+            "main": {
+                "header": 1,
+                "summary": 1,
+                "body": 1,
+                "tags": 1,
+                "first_source": 1,
+                "site_rank": 1,
+                "equalgroup": 1,
+            },
+        },
+    }
 
 
 def _parse_opoint_article(raw: dict[str, Any]) -> ArticleSnippet:
     article_id = str(raw.get("id_article") or raw.get("id") or "")
     title = _strip_html((raw.get("header") or {}).get("text", "") if isinstance(raw.get("header"), dict) else raw.get("title", ""))
     summary = _strip_html((raw.get("summary") or {}).get("text", "") if isinstance(raw.get("summary"), dict) else raw.get("summary", ""))
+    body = _strip_html((raw.get("body") or {}).get("text", "") if isinstance(raw.get("body"), dict) else raw.get("body", ""))
+    evidence_text = summary
+    if body and body.lower() not in summary.lower():
+        evidence_text = f"{summary} {body[:1200]}".strip()
     source = ((raw.get("first_source") or {}).get("name") if isinstance(raw.get("first_source"), dict) else None) or raw.get("source") or "unknown"
     date_text = (raw.get("local_time") or {}).get("text", "") if isinstance(raw.get("local_time"), dict) else raw.get("published_at", "")
     rank = None
-    site_rank = raw.get("site_rank")
-    if isinstance(site_rank, dict):
-        maybe_rank = _as_float(site_rank.get("rank_global"))
-        rank = int(maybe_rank) if maybe_rank is not None else None
+    maybe_rank = _as_float(raw.get("position"))
+    if maybe_rank is not None:
+        # Opoint's site_rank.rank_global is publisher-level reach, not the
+        # article's result rank. Use result position for the relevance cap.
+        rank = int(maybe_rank)
     equalgroup = raw.get("equalgroup")
     if isinstance(equalgroup, dict):
         equalgroup = equalgroup.get("id")
     return ArticleSnippet(
         article_id=article_id,
         title=title,
-        summary=summary[:800],
+        summary=evidence_text[:1000],
         source=str(source),
         published_at=str(date_text),
         url=str(raw.get("orig_url") or raw.get("url") or ""),
@@ -296,50 +400,32 @@ def fetch_opoint_articles(
         raise RuntimeError("OPOINT_API_KEY is not set")
     newest = _fill_timestamp(candidate.fill_ts) or int(time.time())
     oldest = newest - days_back * 86400
-    payload: dict[str, Any] = {
-        "expressions": [{
-            "linemode": "R",
-            "searchline": {
-                "searchterm": query.searchline,
-                "filters": [{"type": "lang", "id": "en"}],
-            },
-        }],
-        "params": {
-            "requestedarticles": 25,
-            "oldest": oldest,
-            "newest": newest,
-            "main": {
-                "header": 1,
-                "summary": 1,
-                "first_source": 1,
-                "site_rank": 1,
-                "equalgroup": 1,
-            },
-        },
-    }
     headers = {
         "Authorization": f"Token {key}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
     raw_articles: list[ArticleSnippet] = []
-    prev_context: str | None = None
     pages = 0
-    for _ in range(max_pages):
-        resp = requests.post(OPOINT_SEARCH_URL, headers=headers, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        body = resp.json()
-        result = body.get("searchresult") or {}
-        docs = result.get("document") or []
-        pages += 1
-        for raw in docs:
-            if isinstance(raw, dict):
-                raw_articles.append(_parse_opoint_article(raw))
-        context = result.get("context")
-        if not context or context == prev_context:
-            break
-        payload["params"]["context"] = context
-        prev_context = context
+    topic_profiles = list(query.opoint_topic_ids) or [None]
+    for topic_id in topic_profiles:
+        payload = _opoint_search_payload(query, oldest=oldest, newest=newest, topic_id=topic_id)
+        prev_context: str | None = None
+        for _ in range(max_pages):
+            resp = requests.post(OPOINT_SEARCH_URL, headers=headers, json=payload, timeout=timeout)
+            resp.raise_for_status()
+            body = resp.json()
+            result = body.get("searchresult") or {}
+            docs = result.get("document") or []
+            pages += 1
+            for raw in docs:
+                if isinstance(raw, dict):
+                    raw_articles.append(_parse_opoint_article(raw))
+            context = result.get("context")
+            if not context or context == prev_context:
+                break
+            payload["params"]["context"] = context
+            prev_context = context
 
     deduped = _dedupe_articles(raw_articles)
     filtered = [
@@ -351,6 +437,7 @@ def fetch_opoint_articles(
         "after_dedup": len(deduped),
         "after_filter": len(filtered),
         "pages": pages,
+        "topic_profiles": len(topic_profiles) if query.opoint_topic_ids else 0,
     }
 
 
@@ -595,6 +682,7 @@ def _receipt(
         "searchline": query.searchline,
         "core_terms": query.core_terms,
         "context_terms": query.context_terms,
+        "opoint_topic_ids": list(query.opoint_topic_ids),
     }
     evidence_blob = [asdict(a) for a in articles]
     analysis_blob = {

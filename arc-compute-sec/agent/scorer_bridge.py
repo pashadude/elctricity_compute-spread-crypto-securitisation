@@ -12,15 +12,23 @@ repo; this build is the energy/AI-event S-4 leg only.
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_UPSTREAM_DIR = (
-    Path(__file__).resolve().parent.parent / "upstream" / "py-builder-relayer-client"
-).resolve()
+def _resolve_upstream_dir() -> Path:
+    configured = os.environ.get("UPSTREAM_RELAYER_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (
+        Path(__file__).resolve().parent.parent / "upstream" / "py-builder-relayer-client"
+    ).resolve()
+
+
+_UPSTREAM_DIR = _resolve_upstream_dir()
 if str(_UPSTREAM_DIR) not in sys.path:
     sys.path.insert(0, str(_UPSTREAM_DIR))
 

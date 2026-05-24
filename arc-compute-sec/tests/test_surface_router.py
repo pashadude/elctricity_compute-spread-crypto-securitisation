@@ -51,6 +51,7 @@ def test_runtime_multi_surface_keeps_all_surfaces(monkeypatch):
         sizing_equity=1.0,
         sizing_crypto=1.0,
         sizing_polymarket=1.0,
+        sizing_ibkr_prediction=1.0,
     )
     surfaces = {c.surface for c in cands}
     assert {"polymarket", "ibkr", "crypto"} <= surfaces
@@ -79,8 +80,26 @@ def test_runtime_default_scan_remains_polymarket_only(monkeypatch):
         sizing_equity=1.0,
         sizing_crypto=1.0,
         sizing_polymarket=1.0,
+        sizing_ibkr_prediction=1.0,
     )
     assert {c.surface for c in cands} == {"polymarket"}
+
+
+def test_scan_once_defaults_to_spread_package(monkeypatch):
+    from agent import runtime
+
+    calls = {}
+
+    def fake_run_once(args):
+        calls["args"] = args
+        return 0
+
+    monkeypatch.setattr(runtime, "run_once", fake_run_once)
+
+    assert runtime.scan_once(no_persist=True) == 0
+    assert calls["args"].multi_surface is True
+    assert calls["args"].sizing_crypto > 0
+    assert calls["args"].sizing_equity > 0
 
 
 def test_polymarket_uses_yes_prices_for_pnl():
@@ -93,6 +112,37 @@ def test_polymarket_uses_yes_prices_for_pnl():
     assert len(pm) == 1
     # sum-1 = 0.03
     assert round(pm[0].est_pnl_per_dollar, 4) == 0.03
+
+
+def test_ibkr_prediction_market_is_direct_event_leg():
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE)
+    events = [{
+        "id": "fx-ercot",
+        "slug": "ercot-conservation-appeal",
+        "title": "Will ERCOT issue a conservation appeal?",
+        "description": "ForecastEx event contract available through IBKR ForecastTrader.",
+        "yes_prices": [0.52, 0.51],
+        "exchange": "FORECASTX",
+        "sec_type": "OPT",
+        "energy_template_id": "energy_electricity",
+    }]
+    cands = sr.route(sig, polymarket_events=[], ibkr_prediction_events=events)
+    ibkr_pred = next(c for c in cands if c.surface == "ibkr_prediction")
+
+    assert cands[0].surface == "ibkr_prediction"
+    assert round(ibkr_pred.est_pnl_per_dollar, 4) == 0.03
+    assert ibkr_pred.metadata["spread_leg"]["role"] == "direct_prediction_event"
+    assert ibkr_pred.metadata["spread_leg"]["venue"] == "IBKR ForecastTrader"
+    assert ibkr_pred.metadata["exchange"] == "FORECASTX"
+
+
+def test_ibkr_stock_remains_proxy_leg():
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE)
+    cands = sr.route(sig, polymarket_events=[], ibkr_prediction_events=[])
+    stock = next(c for c in cands if c.surface == "ibkr")
+
+    assert stock.metadata["spread_leg"]["role"] == "liquid_equity_proxy"
+    assert stock.metadata["spread_leg"]["directness"] == "proxy"
 
 
 def test_polymarket_skips_event_without_prices():
