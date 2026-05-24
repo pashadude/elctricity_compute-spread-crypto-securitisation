@@ -535,16 +535,6 @@ const PackageLegRow = ({ leg }) => (
         </MonoText>
       </div>
     </div>
-    {leg.description && (
-      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
-        {leg.description}
-      </div>
-    )}
-    {leg.connection && (
-      <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '4px' }}>
-        {leg.connection}
-      </div>
-    )}
     {leg.reason && (
       <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted, marginTop: '6px' }}>
         reason: {leg.reasonLabel || pricingStatusLabel(leg.reason)}
@@ -1093,14 +1083,14 @@ const DashboardPage = ({ refreshRate }) => {
       </div>
 
       {/* Signal + Candidates */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
         <SignalPanel data={data} />
         <PackageBundlePanel bundle={data.currentPackage} direction={data.direction} />
       </div>
 
       <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
         <CandidatesPanel
           title="Liquid Proxy Legs"
           emptyText="No crypto or IBKR stock proxy legs in this snapshot."
@@ -1110,7 +1100,7 @@ const DashboardPage = ({ refreshRate }) => {
       </div>
 
       {/* Verdicts */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
         <VerdictTable verdicts={data.verdicts} />
         <PositionsPanel positions={data.positions} />
       </div>
