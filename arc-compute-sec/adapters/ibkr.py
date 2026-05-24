@@ -15,6 +15,7 @@ import asyncio
 import calendar
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -30,6 +31,7 @@ _DEFAULT_HOST = os.environ.get("IBKR_HOST", "127.0.0.1")
 _DEFAULT_PORT = int(os.environ.get("IBKR_GATEWAY_PORT", "4002"))
 _DEFAULT_CLIENT_ID = int(os.environ.get("IBKR_CLIENT_ID", "42"))
 _ib_singleton: Any = None
+_forecast_tws_unavailable_reason: str | None = None
 _FORECAST_KEYWORDS = (
     "ai", "artificial intelligence", "compute", "data center", "datacenter",
     "electric", "electricity", "energy", "ercot", "grid", "industrial production",
@@ -234,6 +236,8 @@ def _parse_float(value: Any) -> float | None:
         out = float(str(value).replace(",", ""))
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(out):
+        return None
     if out < 0:
         return None
     # IBKR sometimes returns event prices as cents. Normalise to payout dollars.
@@ -249,6 +253,67 @@ def _snapshot_price(row: dict[str, Any]) -> float | None:
     if bid is not None and ask is not None and bid <= ask:
         return (bid + ask) / 2.0
     return last
+
+
+def _forecast_tws_wait_seconds() -> float:
+    try:
+        return max(0.5, float(os.environ.get("IBKR_FORECAST_TWS_WAIT_SECONDS", "3")))
+    except ValueError:
+        return 3.0
+
+
+def _forecast_tws_event_price(conid: Any) -> tuple[float | None, str]:
+    """Try a delayed TWS snapshot for a ForecastTrader EC contract.
+
+    Client Portal sometimes exposes ForecastTrader EC metadata but returns no
+    bid/ask/last fields for `/iserver/marketdata/snapshot`. This fallback is
+    still read-only and uses the paper TWS/Gateway socket if it is available.
+    """
+    global _forecast_tws_unavailable_reason
+    if not conid:
+        return None, "missing_conid"
+    if _forecast_tws_unavailable_reason:
+        return None, _forecast_tws_unavailable_reason
+    try:
+        from ib_insync import Contract
+
+        ib = _connect()
+        contract = Contract(conId=int(conid), secType="EC", exchange="FORECASTX", currency="USD")
+        try:
+            qualified = ib.qualifyContracts(contract)
+            if qualified:
+                contract = qualified[0]
+        except Exception:
+            pass
+        ticker = ib.reqMktData(contract, "", False, False)
+        ib.sleep(_forecast_tws_wait_seconds())
+        bid = _parse_float(getattr(ticker, "bid", None))
+        ask = _parse_float(getattr(ticker, "ask", None))
+        last = _parse_float(getattr(ticker, "last", None))
+        close = _parse_float(getattr(ticker, "close", None))
+        try:
+            market_price = _parse_float(ticker.marketPrice())
+        except Exception:
+            market_price = None
+        try:
+            ib.cancelMktData(contract)
+        except Exception:
+            pass
+    except Exception as exc:
+        reason = exc.__class__.__name__
+        if "Gateway not reachable" in str(exc) or "Connect call failed" in str(exc):
+            _forecast_tws_unavailable_reason = reason
+        return None, reason
+    if bid is not None and ask is not None and bid <= ask:
+        return (bid + ask) / 2.0, "ibkr_tws_bid_ask"
+    for price, source in (
+        (last, "ibkr_tws_last"),
+        (market_price, "ibkr_tws_market_price"),
+        (close, "ibkr_tws_close"),
+    ):
+        if price is not None:
+            return price, source
+    return None, "tws_no_bid_ask_last"
 
 
 def _flatten_forecast_markets(tree: dict[str, Any]) -> list[dict[str, Any]]:
@@ -475,6 +540,18 @@ def _forecast_ec_event_for_market(market: dict[str, Any], search: dict[str, Any]
     snapshots = _forecast_snapshots([underlier_conid])
     snapshot = snapshots.get(str(underlier_conid), {})
     price = _snapshot_price(snapshot)
+    price_source = "ibkr_client_portal_snapshot"
+    pricing_detail = ""
+    if price is None:
+        tws_price, tws_status = _forecast_tws_event_price(underlier_conid)
+        if tws_price is not None:
+            price = tws_price
+            price_source = tws_status
+        else:
+            pricing_detail = (
+                "IBKR returned EC metadata, but Client Portal snapshot had no "
+                f"bid/ask/last fields and TWS fallback returned {tws_status}."
+            )
     yes_prices = [price, max(0.0, 1.0 - price)] if price is not None else []
     event = {
         "id": f"{symbol or underlier_conid}-EC",
@@ -493,8 +570,9 @@ def _forecast_ec_event_for_market(market: dict[str, Any], search: dict[str, Any]
         "underlier_conid": underlier_conid,
         "yes_conid": underlier_conid,
         "no_conid": None,
-        "source": "ibkr_client_portal",
-        "pricing_status": "priced" if yes_prices else "unpriced_snapshot",
+        "source": price_source if yes_prices else "ibkr_client_portal",
+        "pricing_status": "priced" if yes_prices else "ibkr_quote_unavailable",
+        "pricing_detail": pricing_detail,
         "raw_response_hash": hashlib.sha256(
             json.dumps({"market": market, "search": search, "snapshot": snapshot}, sort_keys=True, default=str).encode()
         ).hexdigest(),

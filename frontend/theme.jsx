@@ -218,7 +218,13 @@ const Sparkline = ({ data, width = 120, height = 32, color = THEME.primary[400],
   }).join(' ');
   const areaPoints = points + ` ${width},${height} 0,${height}`;
   return (
-    <svg width={width} height={height} style={style}>
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      style={{ display: 'block', maxWidth: '100%', ...style }}
+    >
       <defs>
         <linearGradient id={`sg-${color.replace('#','')}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.3" />

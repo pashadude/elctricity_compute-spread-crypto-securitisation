@@ -315,6 +315,32 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert "No Arc action unless verdict is EXECUTE." in proposal["outputs"]["guardrails"]
 
 
+def test_snapshot_labels_ibkr_quote_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "1")
+    monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "RETXC")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
+        "events": [{
+            "symbol": "RETXC",
+            "slug": "retxc-ec",
+            "title": "Texas Commercial Electricity Generation Sales Revenue",
+            "pricing_status": "ibkr_quote_unavailable",
+            "pricing_detail": "IBKR returned metadata but no bid/ask/last.",
+        }],
+    }))
+
+    snap = state.snapshot()
+    row = snap["direct_inventory"][0]
+
+    assert row["pricing_status"] == "ibkr_quote_unavailable"
+    assert row["pricing_status_label"] == "IBKR quote unavailable"
+    gap = snap["synthetic_instrument"]["outputs"]["discovery_gaps"][0]
+    assert gap["status_label"] == "IBKR quote unavailable"
+    assert "ForecastTrader metadata" in gap["next_step"]
+
+
 def test_snapshot_rolls_up_repeated_rejects_and_groups_package(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     _write_tsv(tmp_path / "judgements.tsv", [

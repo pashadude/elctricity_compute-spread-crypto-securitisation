@@ -476,7 +476,10 @@ modelled separately as `ibkr_prediction` direct event legs when the operator's
 IBKR demo account exposes priced eligible contract metadata. TWS can discover
 event underliers, but priced YES/NO legs require Client Portal/Web API because
 IBKR models ForecastEx products as option-like contracts whose conids must be
-resolved before quotes or orders. Kalshi and live external venue execution
+resolved before quotes or orders. When Client Portal returns EC metadata
+without bid/ask/last fields, the adapter now attempts a read-only delayed TWS
+EC snapshot fallback through `IBKR_GATEWAY_PORT` and marks the row
+`ibkr_quote_unavailable` if both paths lack a usable price. Kalshi and live external venue execution
 remain deferred. Crypto proxy PnL is not counted as direct
 spread-securitization proof; it must be reconciled separately.
 

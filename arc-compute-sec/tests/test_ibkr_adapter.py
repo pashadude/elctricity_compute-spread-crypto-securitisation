@@ -57,6 +57,7 @@ def test_parse_float_normalizes_forecast_cents():
     assert ibkr._parse_float("42") == 0.42
     assert ibkr._parse_float("0.42") == 0.42
     assert ibkr._parse_float("105") is None
+    assert ibkr._parse_float("nan") is None
 
 
 def test_flatten_forecast_markets_filters_thesis():
@@ -155,6 +156,32 @@ def test_forecast_contract_events_builds_yes_no_prices(monkeypatch):
     assert events[0]["exchange"] == "FORECASTX"
 
 
+def test_forecast_ec_event_uses_tws_fallback_when_client_portal_snapshot_is_empty(monkeypatch):
+    market = {"symbol": "RETXC", "name": "Texas power", "category_path": "operator supplied"}
+    search = {"conid": 793085619, "symbol": "RETXC", "companyName": "Texas power"}
+    monkeypatch.setattr(ibkr, "_forecast_snapshots", lambda conids: {"793085619": {"conid": 793085619}})
+    monkeypatch.setattr(ibkr, "_forecast_tws_event_price", lambda conid: (0.37, "ibkr_tws_bid_ask"))
+
+    event = ibkr._forecast_ec_event_for_market(market, search)
+
+    assert event["pricing_status"] == "priced"
+    assert event["source"] == "ibkr_tws_bid_ask"
+    assert event["yes_prices"] == [0.37, 0.63]
+
+
+def test_forecast_ec_event_marks_quote_unavailable_with_detail(monkeypatch):
+    market = {"symbol": "RETXC", "name": "Texas power", "category_path": "operator supplied"}
+    search = {"conid": 793085619, "symbol": "RETXC", "companyName": "Texas power"}
+    monkeypatch.setattr(ibkr, "_forecast_snapshots", lambda conids: {"793085619": {"conid": 793085619}})
+    monkeypatch.setattr(ibkr, "_forecast_tws_event_price", lambda conid: (None, "ConnectionRefusedError"))
+
+    event = ibkr._forecast_ec_event_for_market(market, search)
+
+    assert event["pricing_status"] == "ibkr_quote_unavailable"
+    assert event["yes_prices"] == []
+    assert "no bid/ask/last" in event["pricing_detail"]
+
+
 def test_fetch_prediction_events_for_symbols(monkeypatch):
     seen = []
     monkeypatch.setattr(ibkr, "client_portal_ensure_ready", lambda: {"authenticated": True, "connected": True})
@@ -221,11 +248,12 @@ def test_forecast_ec_event_can_be_unpriced(monkeypatch):
         "sections": [{"secType": "EC"}],
     }
     monkeypatch.setattr(ibkr, "_forecast_snapshots", lambda conids: {"793085619": {"conid": 793085619}})
+    monkeypatch.setattr(ibkr, "_forecast_tws_event_price", lambda conid: (None, "tws_no_bid_ask_last"))
 
     event = ibkr._forecast_ec_event_for_market(market, search)
 
     assert event["sec_type"] == "EC"
-    assert event["pricing_status"] == "unpriced_snapshot"
+    assert event["pricing_status"] == "ibkr_quote_unavailable"
     assert event["yes_prices"] == []
     assert event["yes_conid"] == "793085619"
 

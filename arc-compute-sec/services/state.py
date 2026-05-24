@@ -504,6 +504,8 @@ def _pricing_status_label(status: Any) -> str:
     low = str(status or "").strip().lower()
     if low == "unpriced_snapshot":
         return "Needs live venue price"
+    if low == "ibkr_quote_unavailable":
+        return "IBKR quote unavailable"
     if low == "metadata_watchlist":
         return "Metadata only"
     if low == "priced_watchlist":
@@ -733,6 +735,7 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
             "direct_pair_role": str(meta.get("pair_role") or "direct forecast leg"),
             "pricing_status": pricing_status,
             "pricing_status_label": _pricing_status_label(pricing_status),
+            "pricing_detail": str(event.get("pricing_detail") or ""),
             "venue": str(event.get("venue") or "IBKR ForecastTrader"),
             "exchange": str(event.get("exchange") or "FORECASTX"),
             "sec_type": str(event.get("sec_type") or "EC"),

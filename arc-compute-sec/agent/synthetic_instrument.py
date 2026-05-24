@@ -247,6 +247,8 @@ def _status_label(status: Any) -> str:
     low = _text(status).lower()
     if low == "unpriced_snapshot":
         return "Needs live venue price"
+    if low == "ibkr_quote_unavailable":
+        return "IBKR quote unavailable"
     if low == "metadata_watchlist":
         return "Metadata only"
     if low == "priced_watchlist":
@@ -263,6 +265,8 @@ def _status_label(status: Any) -> str:
 def _gap_next_step(row: dict[str, Any]) -> str:
     surface = _text(row.get("surface"))
     pricing = _text(row.get("pricing_status")).lower()
+    if surface == "ibkr_prediction" and pricing == "ibkr_quote_unavailable":
+        return "IBKR returned ForecastTrader metadata but no bid/ask/last. Keep Client Portal authenticated, enable TWS/Gateway API market data, check ForecastTrader entitlement/trading hours, then rerun priced discovery."
     if surface == "ibkr_prediction" and "unpriced" in pricing:
         return "Reconnect IBKR Client Portal, fetch EC bid/ask or yes/no contracts, then rerun priced discovery."
     if surface == "polymarket" and pricing == "metadata_watchlist":
@@ -278,7 +282,7 @@ def _discovery_gap(row: dict[str, Any]) -> dict[str, Any] | None:
     pricing = _text(row.get("pricing_status")).lower()
     label = _text(row.get("label")).upper()
     reason = _first_nonempty(row.get("reason_code"), row.get("pricing_status"), row.get("label"), default="not priced")
-    if label == "REJECT" or "unpriced" in pricing or pricing in {"metadata_watchlist", "price_unavailable"}:
+    if label == "REJECT" or "unpriced" in pricing or pricing in {"metadata_watchlist", "price_unavailable", "ibkr_quote_unavailable"}:
         return {
             "surface": _text(row.get("surface")),
             "title": _leg_title(row),

@@ -121,6 +121,7 @@ def _public_inventory_event(event: dict[str, Any]) -> dict[str, Any]:
         "strike",
         "source",
         "pricing_status",
+        "pricing_detail",
         "raw_response_hash",
     }
     return {key: event.get(key) for key in allowed if key in event}

@@ -458,9 +458,17 @@ const StatCard = ({ label, value, suffix, prefix, change, sparkData, color }) =>
 
 const SignalPanel = ({ data }) => {
   const zColor = Math.abs(data.z) > 2 ? THEME.red[400] : Math.abs(data.z) > 1 ? THEME.amber[400] : THEME.primary[400];
+  const isNarrow = useIsMobile(560);
   return (
     <Card glow>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: isNarrow ? 'stretch' : 'flex-start',
+        gap: '10px',
+        flexDirection: isNarrow ? 'column' : 'row',
+        marginBottom: '16px',
+      }}>
         <div>
           <SectionLabel>Spread Signal</SectionLabel>
           <div style={{ fontFamily: THEME.font.heading, fontSize: '14px', color: THEME.text.secondary }}>
@@ -471,7 +479,13 @@ const SignalPanel = ({ data }) => {
           {data.direction.replace('_', ' ')}
         </Badge>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isNarrow ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+        gap: isNarrow ? '10px' : '16px',
+        marginBottom: '20px',
+        minWidth: 0,
+      }}>
         <div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Electricity</div>
           <MonoText style={{ fontSize: '18px', fontWeight: 700, color: THEME.amber[400] }}>${data.spread.elec}/MWh</MonoText>
@@ -491,8 +505,8 @@ const SignalPanel = ({ data }) => {
           </MonoText>
         </div>
       </div>
-      <div style={{ height: '80px', position: 'relative' }}>
-        <Sparkline data={data.history} width={600} height={80} color={THEME.primary[400]} style={{ width: '100%' }} />
+      <div style={{ height: '80px', position: 'relative', width: '100%', maxWidth: '100%', overflow: 'hidden', minWidth: 0 }}>
+        <Sparkline data={data.history} width={600} height={80} color={THEME.primary[400]} style={{ width: '100%', height: '80px' }} />
         {/* threshold lines */}
         <div style={{ position: 'absolute', top: '20%', left: 0, right: 0, borderTop: `1px dashed ${THEME.red[400]}40`, pointerEvents: 'none' }}>
           <span style={{ position: 'absolute', right: 0, top: '-14px', fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.red[400] }}>+σ</span>
