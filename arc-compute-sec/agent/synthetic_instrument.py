@@ -19,7 +19,6 @@ DIRECT_SURFACES = {"polymarket", "ibkr_prediction", "kalshi"}
 DEFAULT_DEMO_GPU_HOURS = 5_000.0
 DEFAULT_GPU_KWH = 0.7
 DEFAULT_HEDGE_RATIO = 0.35
-DIRECT_EVENT_LEG_BUDGET_USDC = 25.0
 ARC_SETTLEMENT_BUFFER_USDC = 5.0
 LIQUIDITY_BUFFER_RATE = 0.05
 WEIGHTS_ELECTRICITY_EXPENSIVE = {
@@ -39,6 +38,43 @@ WEIGHTS_COMPUTE_EXPENSIVE = {
     "NRG": -0.10,
     "BTC-USD": 0.05,
     "ETH-USD": 0.03,
+}
+LEG_EXPLANATIONS = {
+    "NVDA": {
+        "what": "GPU supply and AI accelerator capex proxy.",
+        "driver": "Moves with AI compute demand, datacenter GPU purchasing, and inference/training capex expectations.",
+        "sell_reason": "The NVIDIA leg is hurting the mock contract when AI chip demand reprices against the chosen short/long side.",
+    },
+    "VRT": {
+        "what": "Datacenter power and cooling infrastructure proxy.",
+        "driver": "Moves with datacenter buildout, cooling systems, UPS gear, and electrical infrastructure orders.",
+        "sell_reason": "The Vertiv leg is hurting the mock contract when datacenter infrastructure demand moves against the hedge.",
+    },
+    "ETN": {
+        "what": "Grid electrification and power equipment proxy.",
+        "driver": "Moves with transformer, switchgear, grid upgrade, and industrial electrification demand.",
+        "sell_reason": "The Eaton leg is hurting the mock contract when grid-equipment beta moves against the hedge.",
+    },
+    "CEG": {
+        "what": "Nuclear-heavy baseload power proxy.",
+        "driver": "Moves with clean baseload scarcity, data-center PPAs, and power procurement premiums.",
+        "sell_reason": "The Constellation leg is hurting the mock contract when clean-power scarcity is not confirming the thesis.",
+    },
+    "NRG": {
+        "what": "Merchant power and retail load proxy.",
+        "driver": "Moves with merchant power price exposure, retail load, and regional electricity margin expectations.",
+        "sell_reason": "The NRG leg is hurting the mock contract when merchant-power exposure is not confirming the thesis.",
+    },
+    "BTC-USD": {
+        "what": "Proof-of-work miner-margin proxy.",
+        "driver": "Mining revenue is crypto-linked while electricity is a major variable cost; power spikes can compress miner margins.",
+        "sell_reason": "The BTC leg is hurting the mock contract when miner-margin beta moves against the power-cost hedge.",
+    },
+    "ETH-USD": {
+        "what": "Crypto beta and liquidity proxy.",
+        "driver": "Retained as a liquid beta reference for crypto-risk appetite; it is not a direct electricity claim.",
+        "sell_reason": "The ETH leg is hurting the mock contract when broad crypto beta overwhelms the spread thesis.",
+    },
 }
 
 
@@ -166,6 +202,9 @@ def _leg_summary(row: dict[str, Any]) -> dict[str, Any]:
         "status_label": _status_label(pricing_status),
         "last_price": row.get("last_price", ""),
         "currency": _text(row.get("currency")),
+        "source": _text(row.get("source")),
+        "exchange": _text(row.get("exchange")),
+        "description": _first_nonempty(row.get("leg_description"), row.get("description")),
         "directness": "direct" if surface in DIRECT_SURFACES or "direct" in role.lower() else "proxy",
     }
 
@@ -300,7 +339,7 @@ def _build_instructions(
     gap_names = ", ".join(gap["slug"] for gap in discovery_gaps[:3]) or "none"
     circle_ask = _round_money((mock_construction or {}).get("circle_testnet_usdc_request"))
     circle_detail = (
-        f"Request {circle_ask:,.2f} test USDC from Circle for hedge notional, direct-event budget, liquidity buffer, and Arc settlement buffer."
+        f"Request {circle_ask:,.2f} test USDC from Circle for hedge notional, liquidity buffer, and Arc settlement buffer."
         if circle_ask > 0
         else "Request Circle test USDC after the hedge notional is sized."
     )
@@ -450,6 +489,7 @@ def _weighted_hedge_legs(hedge_basket: list[dict[str, Any]], hedge_notional: flo
             continue
         leg_notional = hedge_notional * abs(raw_weight)
         side = "long" if raw_weight > 0 else "short"
+        explanation = LEG_EXPLANATIONS.get(slug, {})
         rows.append({
             "surface": leg.get("surface", "public_market"),
             "slug": leg.get("slug"),
@@ -462,6 +502,12 @@ def _weighted_hedge_legs(hedge_basket: list[dict[str, Any]], hedge_notional: flo
             "units": _round_units(leg_notional / price),
             "role": leg.get("role"),
             "pricing_status": leg.get("pricing_status"),
+            "source": leg.get("source") or "public_quote",
+            "exchange": leg.get("exchange") or "",
+            "description": explanation.get("what") or leg.get("description") or "",
+            "risk_driver": explanation.get("driver") or leg.get("direct_pair_role") or leg.get("role") or "",
+            "sell_reason": explanation.get("sell_reason") or f"{slug} moved against the mock hedge.",
+            "tracking_symbol": slug,
         })
     total_abs = sum(abs(_num(row.get("weight"))) for row in rows) or 1.0
     if abs(total_abs - 1.0) > 0.0001:
@@ -489,7 +535,7 @@ def _mock_hedge_construction(
     margin = receivable - power_cost
     hedge_notional = max(100.0, receivable * DEFAULT_HEDGE_RATIO)
     weighted_legs = _weighted_hedge_legs(hedge_basket, hedge_notional, direction)
-    direct_event_budget = max(2, len(direct_legs) or 2) * DIRECT_EVENT_LEG_BUDGET_USDC
+    direct_event_budget = 0.0
     liquidity_buffer = hedge_notional * LIQUIDITY_BUFFER_RATE
     circle_ask = hedge_notional + direct_event_budget + liquidity_buffer + ARC_SETTLEMENT_BUFFER_USDC
     circle_ask = float(int((circle_ask + 9.99) // 10 * 10))
@@ -497,10 +543,27 @@ def _mock_hedge_construction(
     hedge_offset = hedge_notional * 0.10
     compute_relief_gain = receivable * 0.08
     hedge_drag = -hedge_notional * 0.04
+    z_score = _num(signal_latest.get("z"))
+    margin_ratio = margin / receivable if receivable > 0 else 0.0
+    live_prices = [row for row in weighted_legs if _num(row.get("last_price")) > 0]
+    profitability_score = abs(z_score) * 0.55 + max(-0.5, min(margin_ratio, 0.5))
+    recommended_action = "BUY_CONTRACT" if live_prices and profitability_score >= 0.65 else "MONITOR_ONLY"
+    quote_sources = sorted({
+        _text(row.get("source"), "public_quote")
+        for row in weighted_legs
+        if row.get("source")
+    }) or ["public_quote"]
     return {
         "demo": True,
         "label": "Mock testnet hedge construction",
         "based_on": "live public quote snapshots plus current electricity and compute inputs",
+        "quote_sources": quote_sources,
+        "recommended_action": recommended_action,
+        "profitability_score": _round_units(profitability_score),
+        "profitability_note": (
+            "Buy the mock contract while the spread z-score is strong and the priced hedge basket confirms the thesis; "
+            "monitor live leg drift and close when the biggest contributor turns the package negative."
+        ),
         "demo_gpu_hours": _round_units(gpu_hours),
         "gpu_kwh_per_hr": _round_units(gpu_kwh),
         "receivable_usdc": _round_money(receivable),
@@ -531,7 +594,24 @@ def _mock_hedge_construction(
         "limitations": [
             "Mock weights are deterministic demo weights, not executed orders.",
             "Public-market proxies are not direct claims on compute sale collateral.",
-            "Circle USDC request is testnet funding guidance, not an automatic transfer.",
+            "Circle USDC request funds this mock hedge and buffers only; venue event contracts stay in research scouting.",
+        ],
+        "agent_tooling": [
+            {
+                "name": "Quote scout",
+                "uses": "IBKR, Alpaca, Yahoo/public quotes when configured",
+                "job": "Refresh prices and mark stale or missing legs before recommending a buy.",
+            },
+            {
+                "name": "Contract creator",
+                "uses": "Arc ERC-8183 mock wrapper after judge EXECUTE",
+                "job": "Freeze the canonical price blob, leg weights, and entry prices for tracking.",
+            },
+            {
+                "name": "Profitability monitor",
+                "uses": "live leg marks plus spread z-score",
+                "job": "Recommend hold/sell and explain which leg is making the package unprofitable.",
+            },
         ],
     }
 

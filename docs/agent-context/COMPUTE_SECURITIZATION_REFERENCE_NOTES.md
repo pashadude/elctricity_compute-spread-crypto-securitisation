@@ -88,9 +88,9 @@ core hedge basket. The proposal should prioritize:
 
 1. commercial compute exposure;
 2. priced public hedge basket;
-3. priced direct event contracts;
-4. proxy/context rows;
-5. pricing gaps that still need live venue quotes.
+3. local buy/monitor/sell mock ticket;
+4. optional direct event contracts as research inputs;
+5. proxy/context rows and pricing gaps that still need live venue quotes.
 
 This is now represented in `agent/synthetic_instrument.py` as:
 
@@ -107,6 +107,8 @@ This is now represented in `agent/synthetic_instrument.py` as:
 - `structure.schematic_steps`.
 
 The mock construction is testnet-only. It uses the latest public quote
-snapshots and current spread inputs to size hedge weights, units, simple stress
-scenarios, and a Circle test USDC funding request. It must not be treated as a
-live order or automatic Circle transfer.
+snapshots and current spread inputs to size hedge weights, units, leg
+explanations, simple stress scenarios, buy/monitor/sell recommendations, and a
+Circle test USDC funding request. It must not be treated as a live order or
+automatic Circle transfer. IBKR ForecastTrader and Polymarket rows are research
+scouting inputs unless they become priced, thesis-matched, gated candidates.

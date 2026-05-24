@@ -570,12 +570,12 @@ const PackageBundlePanel = ({ bundle, direction }) => {
           )}
           <div>
             <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, fontWeight: 700, marginBottom: '6px' }}>
-              Direct event / forecast legs
+              Research watchlist legs
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {directLegs.length ? directLegs.map((leg, i) => <PackageLegRow key={`${leg.id || leg.instrument}-d-${i}`} leg={leg} />) : (
                 <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, padding: '9px 10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-                  {bundle.directBlockedSummary || 'No thesis-matched Polymarket or IBKR forecast leg is currently passing discovery.'}
+                  {bundle.directBlockedSummary || 'No venue research leg is currently promoted into the mock contract.'}
                 </div>
               )}
             </div>
@@ -785,40 +785,171 @@ const CandidatesPanel = ({ candidates, title = 'Liquid Proxy Legs', emptyText = 
   </Card>
 );
 
-const PredictionLegsPanel = ({ candidates }) => (
-  <CandidatesPanel
-    title="Direct Event / Forecast Legs"
-    candidates={candidates}
-    emptyText="No direct prediction or IBKR forecast legs in this snapshot."
-  />
+const mockContractStorageKey = (proposal = {}) => (
+  `botozen:mock-contract:${proposal.proposal_id || proposal.reference_package_id || proposal.instrument_name || 'current'}`
 );
+
+const buildMockTicket = (proposal, construction, status = 'open') => ({
+  status,
+  proposalId: proposal?.proposal_id || '',
+  instrumentName: proposal?.instrument_name || 'Compute/energy mock contract',
+  enteredAt: Date.now(),
+  entryNotional: Number(construction?.hedge_notional_usdc || 0),
+  entryCircleAsk: Number(construction?.circle_testnet_usdc_request || 0),
+  entryLegs: (construction?.weighted_legs || []).map(leg => ({
+    slug: leg.slug,
+    side: leg.side,
+    weight: Number(leg.weight || 0),
+    units: Number(leg.units || 0),
+    entryPrice: Number(leg.last_price || 0),
+    description: leg.description || '',
+    sellReason: leg.sell_reason || '',
+  })),
+});
+
+const computeMockPnl = (ticket, weightedLegs) => {
+  if (!ticket?.entryLegs?.length) {
+    return { total: 0, pct: 0, legs: [], worst: null, isUnprofitable: false };
+  }
+  const liveBySlug = new Map((weightedLegs || []).map(leg => [leg.slug, leg]));
+  const legs = ticket.entryLegs.map(entry => {
+    const live = liveBySlug.get(entry.slug) || {};
+    const currentPrice = Number(live.last_price || entry.entryPrice || 0);
+    const entryPrice = Number(entry.entryPrice || currentPrice || 0);
+    const units = Number(entry.units || live.units || 0);
+    const pnl = entry.side === 'short'
+      ? (entryPrice - currentPrice) * units
+      : (currentPrice - entryPrice) * units;
+    return {
+      ...entry,
+      ...live,
+      entryPrice,
+      currentPrice,
+      units,
+      pnl,
+      movePct: entryPrice ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0,
+    };
+  });
+  const total = legs.reduce((sum, leg) => sum + leg.pnl, 0);
+  const entryNotional = Number(ticket.entryNotional || 0) || 1;
+  const worst = legs.length ? [...legs].sort((a, b) => a.pnl - b.pnl)[0] : null;
+  return {
+    total,
+    pct: (total / entryNotional) * 100,
+    legs,
+    worst,
+    isUnprofitable: total < -Math.max(1, entryNotional * 0.002),
+  };
+};
+
+const useMockContractTicket = (proposal, construction, weightedLegs) => {
+  const key = React.useMemo(() => mockContractStorageKey(proposal), [proposal?.proposal_id, proposal?.instrument_name]);
+  const [ticket, setTicket] = React.useState(null);
+
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      setTicket(raw ? JSON.parse(raw) : null);
+    } catch (_err) {
+      setTicket(null);
+    }
+  }, [key]);
+
+  const saveTicket = React.useCallback((next) => {
+    setTicket(next);
+    try {
+      if (next) window.localStorage.setItem(key, JSON.stringify(next));
+      else window.localStorage.removeItem(key);
+    } catch (_err) {
+      /* local demo state is best-effort only */
+    }
+  }, [key]);
+
+  const buy = React.useCallback(() => saveTicket(buildMockTicket(proposal, construction, 'open')), [proposal, construction, saveTicket]);
+  const monitor = React.useCallback(() => saveTicket(buildMockTicket(proposal, construction, 'watching')), [proposal, construction, saveTicket]);
+  const sell = React.useCallback(() => {
+    const marked = computeMockPnl(ticket, weightedLegs);
+    saveTicket({
+      ...ticket,
+      status: 'closed',
+      exitedAt: Date.now(),
+      exitPnl: marked.total,
+      exitPct: marked.pct,
+      exitReason: marked.worst?.sell_reason || marked.worst?.sellReason || 'Closed from dashboard mock monitor.',
+    });
+  }, [ticket, weightedLegs, saveTicket]);
+  const reset = React.useCallback(() => saveTicket(null), [saveTicket]);
+
+  return { ticket, marked: computeMockPnl(ticket, weightedLegs), buy, monitor, sell, reset };
+};
+
+const MockContractSummaryPanel = ({ proposal }) => {
+  const construction = proposal?.outputs?.mock_hedge_construction || {};
+  const sources = construction.quote_sources || [];
+  const score = Number(construction.profitability_score || 0);
+  const color = construction.recommended_action === 'BUY_CONTRACT' ? THEME.primary[400] : THEME.amber[400];
+  return (
+    <Card glow>
+      <SectionLabel>Mock Contract Control</SectionLabel>
+      {proposal ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div>
+            <div style={{ fontFamily: THEME.font.heading, fontSize: '22px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.15 }}>
+              {proposal.instrument_name || 'Compute/energy hedge contract'}
+            </div>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '4px' }}>
+              Real-price mock · {sources.join(' / ') || 'public quotes'} · updates with backend refresh
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>Notional</div>
+              <MonoText style={{ fontSize: '18px', fontWeight: 800 }}>{Number(construction.hedge_notional_usdc || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' })}</MonoText>
+            </div>
+            <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>Circle ask</div>
+              <MonoText style={{ fontSize: '18px', fontWeight: 800, color: THEME.amber[400] }}>
+                {Number(construction.circle_testnet_usdc_request || 0).toLocaleString()} USDC
+              </MonoText>
+            </div>
+          </div>
+          <div style={{ padding: '10px', borderRadius: '6px', background: `${color}12`, border: `1px solid ${color}30` }}>
+            <div style={{ fontFamily: THEME.font.mono, fontSize: '12px', color, fontWeight: 800 }}>
+              {construction.recommended_action === 'BUY_CONTRACT' ? 'Recommended: buy mock contract' : 'Recommended: monitor only'}
+            </div>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '4px' }}>
+              score {score.toFixed(2)} · buy only freezes a local entry ticket; Arc stays gated by judge.classify().
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted }}>
+          Waiting for priced public hedge legs.
+        </div>
+      )}
+    </Card>
+  );
+};
 
 const SyntheticInstrumentPanel = ({ proposal }) => {
   if (!proposal) return null;
-  const direct = proposal.outputs?.direct_reference_legs || [];
   const hedge = proposal.outputs?.priced_hedge_basket || [];
-  const gaps = proposal.outputs?.discovery_gaps || [];
   const actions = proposal.outputs?.agent_next_actions || [];
   const structure = proposal.structure || {};
   const inputs = proposal.inputs || {};
-  const schematic = structure.schematic_steps || [];
-  const buildInstructions = proposal.outputs?.build_instructions || [];
   const searchPlan = proposal.outputs?.agent_search_plan || [];
   const mockConstruction = proposal.outputs?.mock_hedge_construction || null;
   const weightedLegs = mockConstruction?.weighted_legs || [];
+  const tooling = mockConstruction?.agent_tooling || [];
+  const { ticket, marked, buy, monitor, sell, reset } = useMockContractTicket(proposal, mockConstruction, weightedLegs);
   const fmtMoney = value => `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  const statusColor = (status = '') => {
-    const low = String(status).toLowerCase();
-    if (low.includes('ready') || low.includes('clear')) return 'primary';
-    if (low.includes('locked') || low.includes('pending') || low.includes('search')) return 'blue';
-    if (low.includes('need')) return 'amber';
-    return 'muted';
-  };
+  const fmtPct = value => `${Number(value || 0).toFixed(2)}%`;
+  const monitorColor = marked.isUnprofitable ? THEME.red[400] : marked.total > 0 ? THEME.primary[400] : THEME.amber[400];
   return (
     <Card glow style={{ marginBottom: '16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '12px' }}>
         <div style={{ minWidth: 0 }}>
-          <SectionLabel>Agent-Proposed Synthetic Instrument</SectionLabel>
+          <SectionLabel>Dynamic Mock Contract</SectionLabel>
           <div style={{ fontFamily: THEME.font.heading, fontSize: '22px', fontWeight: 800, color: THEME.text.primary, marginTop: '3px', overflowWrap: 'anywhere' }}>
             {proposal.instrument_name || 'Compute/energy spread note'}
           </div>
@@ -827,52 +958,13 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <Badge color={proposal.status === 'PROPOSED' ? 'primary' : 'amber'}>{proposal.status || 'RESEARCH'}</Badge>
-          <Badge color={proposal.asset_backed ? 'primary' : 'amber'}>{proposal.asset_backed ? 'ASSET BACKED' : 'NOT ASSET BACKED'}</Badge>
+          <Badge color="primary">LIVE-PRICED MOCK</Badge>
+          <Badge color="amber">LOCAL TICKET</Badge>
         </div>
       </div>
       <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.secondary, lineHeight: 1.45, marginBottom: '12px' }}>
         {proposal.thesis}
       </div>
-      {schematic.length > 0 && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
-          gap: '8px',
-          marginBottom: '12px',
-        }}>
-          {schematic.map((step, i) => (
-            <div key={step.key || i} style={{
-              minHeight: '112px',
-              padding: '10px',
-              borderRadius: '8px',
-              background: THEME.bg.elevated,
-              border: `1px solid ${THEME.border.subtle}`,
-              position: 'relative',
-            }}>
-              {i < schematic.length - 1 && (
-                <div style={{
-                  position: 'absolute',
-                  right: '-7px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: THEME.text.faint,
-                  fontFamily: THEME.font.mono,
-                  fontSize: '14px',
-                  zIndex: 1,
-                }}>→</div>
-              )}
-              <Badge color={statusColor(step.status)} style={{ marginBottom: '8px' }}>{step.status}</Badge>
-              <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.25 }}>
-                {step.label}
-              </div>
-              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
-                {step.detail}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Real-world inputs</div>
@@ -898,19 +990,17 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
             {hedge.length ? hedge.map(leg => `${leg.slug || leg.title}${leg.last_price ? ` ${Number(leg.last_price).toFixed(2)}${leg.currency ? ` ${leg.currency}` : ''}` : ''}`).slice(0, 3).join(', ') : 'needs live prices'}
           </div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
-            Direct refs: {direct.length ? direct.map(leg => leg.slug || leg.title).slice(0, 2).join(', ') : 'none priced yet'}
+            Sources: {(mockConstruction?.quote_sources || []).join(', ') || 'public quote adapter'}.
           </div>
         </div>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Build instructions</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Agent action loop</div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
-            {buildInstructions.length ? buildInstructions[0].detail : (actions[0] || 'Wait for a stronger spread signal.')}
+            {mockConstruction?.profitability_note || actions[0] || 'Refresh quotes, monitor spread confirmation, then recommend buy or sell.'}
           </div>
-          {gaps.length > 0 && (
-            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.amber[400], lineHeight: 1.35, marginTop: '6px' }}>
-              Pricing gaps: {gaps.map(gap => `${gap.slug || gap.title} (${gap.status_label || 'Needs price'})`).slice(0, 2).join(', ')}
-            </div>
-          )}
+          <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.primary[400], lineHeight: 1.35, marginTop: '6px' }}>
+            {mockConstruction?.recommended_action === 'BUY_CONTRACT' ? 'agent says: buy while profitable' : 'agent says: monitor until edge improves'}
+          </div>
         </div>
       </div>
       {mockConstruction && (
@@ -944,25 +1034,74 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
                 {fmtMoney(mockConstruction.circle_testnet_usdc_request)}
               </div>
               <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '3px' }}>
-                Hedge + direct-event budget + liquidity buffer + Arc settlement buffer. No transfer before EXECUTE.
+                Hedge + liquidity buffer + Arc settlement buffer. No transfer before EXECUTE.
               </div>
             </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+              <GlowButton size="sm" onClick={buy}>▸ Buy Contract</GlowButton>
+              <GlowButton size="sm" variant="secondary" onClick={monitor}>◎ Monitor Price</GlowButton>
+              {ticket?.status === 'open' && (
+                <GlowButton size="sm" variant="secondary" onClick={sell} style={{ color: THEME.red[400], borderColor: THEME.red[400] + '40' }}>□ Sell Mock</GlowButton>
+              )}
+              {ticket && (
+                <GlowButton size="sm" variant="secondary" onClick={reset}>↺ Reset</GlowButton>
+              )}
+            </div>
+            {ticket && (
+              <div style={{
+                marginTop: '10px',
+                padding: '10px',
+                borderRadius: '6px',
+                background: monitorColor + '12',
+                border: `1px solid ${monitorColor}35`,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>
+                    {ticket.status === 'closed' ? 'Closed mock ticket' : ticket.status === 'watching' ? 'Monitoring from entry marks' : 'Open mock ticket'}
+                  </div>
+                  <MonoText style={{ color: monitorColor, fontWeight: 800 }}>
+                    {fmtMoney(ticket.status === 'closed' ? ticket.exitPnl : marked.total)} · {fmtPct(ticket.status === 'closed' ? ticket.exitPct : marked.pct)}
+                  </MonoText>
+                </div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.35, marginTop: '6px' }}>
+                  {marked.isUnprofitable && marked.worst
+                    ? `Unprofitable because ${marked.worst.slug} moved against the ${marked.worst.side} leg: ${fmtMoney(marked.worst.entryPrice)} entry to ${fmtMoney(marked.worst.currentPrice)} now. ${marked.worst.sell_reason || marked.worst.sellReason || ''}`
+                    : ticket.status === 'closed'
+                      ? (ticket.exitReason || 'Ticket closed.')
+                      : 'Tracking live leg marks against the frozen entry prices. Sell appears when a ticket is open.'}
+                </div>
+              </div>
+            )}
           </div>
           <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
             <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Real-price mock weights</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {weightedLegs.slice(0, 7).map((leg, i) => (
-                <div key={`${leg.slug}-${i}`} style={{ display: 'grid', gridTemplateColumns: '52px 1fr 76px', gap: '8px', alignItems: 'center' }}>
+                <div key={`${leg.slug}-${i}`} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '58px minmax(0, 1fr) 92px',
+                  gap: '9px',
+                  alignItems: 'start',
+                  padding: '8px',
+                  borderRadius: '6px',
+                  background: THEME.bg.surface,
+                }}>
                   <Badge color={leg.side === 'short' ? 'amber' : 'primary'}>{leg.side}</Badge>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {leg.slug} · {Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 1 })}
                     </div>
                     <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted }}>
                       {Number(leg.units || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} units @ {fmtMoney(leg.last_price)}
                     </div>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                      {leg.description}
+                    </div>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '3px' }}>
+                      Driver: {leg.risk_driver} · source: {leg.source || 'public quote'}
+                    </div>
                   </div>
-                  <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.secondary, textAlign: 'right' }}>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.secondary, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {fmtMoney(leg.notional_usdc)}
                   </div>
                 </div>
@@ -971,18 +1110,18 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           </div>
         </div>
       )}
-      {(buildInstructions.length > 1 || searchPlan.length > 0) && (
+      {(tooling.length > 0 || searchPlan.length > 0) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '10px', marginTop: '10px' }}>
-          {buildInstructions.length > 1 && (
+          {tooling.length > 0 && (
             <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Operator build path</div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Agent tools</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                {buildInstructions.map((step, i) => (
-                  <div key={`${step.title}-${i}`} style={{ display: 'grid', gridTemplateColumns: '86px 1fr', gap: '8px', alignItems: 'start' }}>
-                    <Badge color={statusColor(step.status)}>{step.status}</Badge>
+                {tooling.map((tool, i) => (
+                  <div key={`${tool.name}-${i}`} style={{ display: 'grid', gridTemplateColumns: '92px 1fr', gap: '8px', alignItems: 'start' }}>
+                    <Badge color={i === 0 ? 'primary' : i === 1 ? 'blue' : 'amber'}>{tool.name}</Badge>
                     <div>
-                      <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 700 }}>{step.title}</div>
-                      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35 }}>{step.detail}</div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 700 }}>{tool.uses}</div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35 }}>{tool.job}</div>
                     </div>
                   </div>
                 ))}
@@ -991,7 +1130,7 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           )}
           {searchPlan.length > 0 && (
             <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Agent search queue</div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Agent scouting queue</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
                 {searchPlan.slice(0, 4).map((item, i) => (
                   <div key={`${item.surface}-${i}`} style={{ paddingBottom: i === Math.min(searchPlan.length, 4) - 1 ? 0 : '7px', borderBottom: i === Math.min(searchPlan.length, 4) - 1 ? 'none' : `1px solid ${THEME.border.subtle}` }}>
@@ -1099,11 +1238,6 @@ const DashboardPage = ({ refreshRate }) => {
   const isMobile = useIsMobile(820);
   const isNarrow = useIsMobile(520);
   const pnlHistory = React.useRef(Array.from({ length: 30 }, (_, i) => 100 + i * 1.5 + Math.random() * 5));
-  const primaryCandidates = data.candidates.filter(c => !isPredictionSurface(c.surface));
-  const predictionCandidates = dedupeRows(
-    [...data.candidates.filter(c => isPredictionSurface(c.surface)), ...(data.directInventory || [])],
-    legKey,
-  );
   React.useEffect(() => {
     if (data.pnl.hasReconciled) {
       pnlHistory.current = [...pnlHistory.current.slice(1), data.pnl.total];
@@ -1146,19 +1280,10 @@ const DashboardPage = ({ refreshRate }) => {
       {/* Signal + Candidates */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
         <SignalPanel data={data} />
-        <PackageBundlePanel bundle={data.currentPackage} direction={data.direction} />
+        <MockContractSummaryPanel proposal={data.syntheticInstrument} />
       </div>
 
       <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />
-
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
-        <CandidatesPanel
-          title="Liquid Proxy Legs"
-          emptyText="No crypto or IBKR stock proxy legs in this snapshot."
-          candidates={primaryCandidates}
-        />
-        <PredictionLegsPanel candidates={predictionCandidates} />
-      </div>
 
       {/* Verdicts */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>

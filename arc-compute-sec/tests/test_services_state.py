@@ -63,6 +63,31 @@ def test_runtime_status_json_is_included(tmp_path, monkeypatch):
     assert state.snapshot()["runtime"] == {"state": "idle", "last_error": ""}
 
 
+def test_public_quote_uses_configured_source_order(monkeypatch):
+    state.cache.clear("public_quote")
+    monkeypatch.setenv("PUBLIC_HEDGE_PRICE_SOURCES", "alpaca,yahoo")
+    monkeypatch.setattr(state, "_fetch_alpaca_public_quote", lambda symbol: {
+        "symbol": symbol,
+        "price": None,
+        "source": "alpaca_market_data",
+        "error": "Unauthorized",
+    })
+    monkeypatch.setattr(state, "_fetch_yahoo_public_quote", lambda symbol: {
+        "symbol": symbol,
+        "price": 181.5,
+        "currency": "USD",
+        "exchange": "NMS",
+        "source": "yahoo_finance_chart",
+    })
+
+    quote = state._fetch_public_quote("NVDA")
+
+    assert quote["price"] == 181.5
+    assert quote["source"] == "yahoo_finance_chart"
+    assert quote["source_priority"] == "alpaca,yahoo"
+    assert quote["fallback_errors"] == ["alpaca_market_data:Unauthorized"]
+
+
 def test_snapshot_enriches_polymarket_leg_identity_from_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     _write_tsv(tmp_path / "positions.tsv", [{
@@ -284,6 +309,8 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert proposal["outputs"]["discovery_gaps"][0]["slug"] == "retxc-ec"
     assert proposal["outputs"]["priced_hedge_basket"][0]["slug"] == "NVDA"
     assert proposal["outputs"]["mock_hedge_construction"]["weighted_legs"][0]["last_price"] == 180.25
+    assert proposal["outputs"]["mock_hedge_construction"]["weighted_legs"][0]["source"] == "yahoo_finance_chart"
+    assert proposal["outputs"]["mock_hedge_construction"]["weighted_legs"][0]["description"] == "GPU supply and AI accelerator capex proxy."
     assert proposal["outputs"]["mock_hedge_construction"]["circle_testnet_usdc_request"] > 0
     assert "No Arc action unless verdict is EXECUTE." in proposal["outputs"]["guardrails"]
 

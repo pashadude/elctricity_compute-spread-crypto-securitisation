@@ -66,18 +66,17 @@ The router then expresses that package on available surfaces:
   AI-infra events, and configured IBKR ForecastTrader/ForecastEx contracts are
   filtered through the energy template universe and kept read-only/paper in
   v1. IBKR event contracts are a different surface from IBKR stocks.
-- **Direct-event inventory:** the dashboard and Telegram mini app also show a
-  sanitized `WATCHLIST` inventory from `IBKR_DIRECT_EVENT_SYMBOLS` and
-  `POLYMARKET_DIRECT_EVENT_SLUGS`. `POLYMARKET_DIRECT_EVENT_FETCH=1` refreshes
-  slug metadata and available prices from Gamma; set it to `0` only for offline
-  tests or demos. These rows explain the actual energy and compute-demand
-  legs being monitored. Unpriced rows stay in discovery gaps; they are not the
-  hedge basket, are not judge candidates, and cannot hit Arc until the normal
-  priced/gated route emits an `EXECUTE` candidate.
+- **Research inventory:** IBKR ForecastTrader and Polymarket slugs remain
+  agent scouting inputs, not the main securitized-tool UI. Telegram `/latest`
+  can list them as a research watchlist, but the dashboard promotes only the
+  live-priced mock contract unless a priced/gated route emits an `EXECUTE`
+  candidate.
 - **Priced public hedge basket:** when direct events are missing or unpriced,
-  the proposal uses read-only public quote snapshots from
-  `PUBLIC_HEDGE_SYMBOLS` such as `NVDA`, `VRT`, `ETN`, `CEG`, `NRG`,
-  `BTC-USD`, and `ETH-USD`. These Yahoo-style public market rows are liquid
+  the proposal uses read-only public quote snapshots from `PUBLIC_HEDGE_SYMBOLS`
+  such as `NVDA`, `VRT`, `ETN`, `CEG`, `NRG`, `BTC-USD`, and `ETH-USD`.
+  `PUBLIC_HEDGE_PRICE_SOURCES=yahoo` is the default; operators can set
+  `PUBLIC_HEDGE_PRICE_SOURCES=ibkr,alpaca,yahoo` to try IBKR TWS and Alpaca
+  market data before falling back to Yahoo. These public-market rows are liquid
   hedge proxies, not direct claims on compute or electricity.
 - **Crypto miner-margin proxies:** BTC/USD and ETH/USD paper/live-read legs
   are used only on `electricity_expensive` signals and are labelled as proxy
@@ -105,13 +104,11 @@ between "we watch slugs" and "we can structure a product":
 - it states the regional power profile, including whether the exposure is more
   about nuclear baseload, gas marginal power, renewables, congestion, PPAs, or
   another local input;
-- it separates priced public hedge legs, direct reference legs, proxy reference
-  legs, and pricing gaps that still need live venue quotes;
-- it exposes a schematic build path: compute sale, priced hedge basket, direct
-  event references, judge gates, and Arc wrap;
+- it promotes a dynamic live-priced mock contract instead of a raw venue-leg
+  browser;
 - it includes a testnet mock construction that uses current public quote
-  snapshots to size hedge weights, units, scenario checks, and a Circle test
-  USDC funding request;
+  snapshots to size hedge weights, units, leg explanations, scenario checks,
+  buy/monitor/sell recommendations, and a Circle test USDC funding request;
 - it exposes an agent search queue for Opoint/Nebius evidence, Polymarket
   direct events, IBKR ForecastTrader pricing, public-market hedges, and
   walk-forward validation;
@@ -139,14 +136,18 @@ strategy.
    hedge, and optional escrow proof.
 3. Freeze the priced hedge basket from public quotes; these are liquid proxies,
    not the asset-backed claim.
-4. Use the mock construction to calculate weighted hedge units and the Circle
-   test USDC request. This request covers hedge notional, direct-event budget,
-   liquidity buffer, and Arc settlement buffer.
-5. Promote only priced direct event references from Polymarket, IBKR
-   ForecastTrader, or another approved venue.
-6. Run the premium scorer and `judge.classify()`. No Arc action happens unless
+4. Use the mock construction to calculate weighted hedge units, entry marks,
+   live PnL, and the Circle test USDC request. This request covers hedge
+   notional, liquidity buffer, and Arc settlement buffer.
+5. Keep Polymarket, IBKR ForecastTrader, and future event tools in the agent
+   scouting queue until they are priced, thesis-matched, and useful enough to
+   join the package.
+6. Let the dashboard freeze a local mock ticket with **Buy Contract**, monitor
+   live leg drift, and show which leg makes the package unprofitable before a
+   **Sell Mock** close.
+7. Run the premium scorer and `judge.classify()`. No Arc action happens unless
    the verdict is `EXECUTE`.
-7. Backtest the exact basket and count every tested slug/symbol/model for
+8. Backtest the exact basket and count every tested slug/symbol/model for
    FDR-style promotion control.
 
 ## Evidence So Far

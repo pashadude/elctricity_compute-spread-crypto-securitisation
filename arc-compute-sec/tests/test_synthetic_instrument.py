@@ -58,9 +58,14 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert construction["demo"] is True
     assert construction["receivable_usdc"] == 7500.0
     assert construction["hedge_notional_usdc"] == 2625.0
-    assert construction["circle_testnet_usdc_request"] == 2820.0
+    assert construction["circle_testnet_usdc_request"] == 2770.0
+    assert construction["direct_event_budget_usdc"] == 0.0
+    assert construction["recommended_action"] == "BUY_CONTRACT"
     assert construction["weighted_legs"][0]["slug"] == "NVDA"
     assert construction["weighted_legs"][0]["side"] == "short"
+    assert construction["weighted_legs"][0]["description"] == "GPU supply and AI accelerator capex proxy."
+    assert construction["weighted_legs"][0]["source"] == "public_quote"
+    assert construction["agent_tooling"][0]["name"] == "Quote scout"
     assert "test USDC" in construction["circle_request_note"]
     assert proposal["structure"]["schematic_steps"][0]["label"] == "1. Compute sale"
     assert proposal["outputs"]["build_instructions"][0]["title"] == "Attach compute sale"

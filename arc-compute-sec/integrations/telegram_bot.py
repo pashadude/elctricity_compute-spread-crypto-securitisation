@@ -183,6 +183,8 @@ def format_latest(snap: dict[str, Any]) -> str:
                 f"{float(construction.get('hedge_notional_usdc') or 0):.2f} USDC notional, "
                 f"Circle ask {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
             )
+            if construction.get("recommended_action"):
+                lines.append(f"agent recommendation: {construction.get('recommended_action')}")
             weighted = construction.get("weighted_legs") or []
             if weighted:
                 lines.append("weights: " + ", ".join(
@@ -203,7 +205,7 @@ def format_latest(snap: dict[str, Any]) -> str:
             lines.append(f"next: {actions[0]}")
     inventory = [row for row in (snap.get("direct_inventory") or []) if isinstance(row, dict)]
     if inventory:
-        lines.append("direct watchlist:")
+        lines.append("research watchlist:")
         for row in inventory[:6]:
             title = _leg_name(row)
             surface = row.get("surface", "")

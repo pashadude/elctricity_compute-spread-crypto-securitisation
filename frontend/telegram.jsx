@@ -276,9 +276,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
                 {data.syntheticInstrument.instrument_name}
               </div>
             </div>
-            <TgBadge color={data.syntheticInstrument.asset_backed ? TG_THEME.green : TG_THEME.orange}>
-              {data.syntheticInstrument.asset_backed ? 'ASSET BACKED' : 'SYNTHETIC'}
-            </TgBadge>
+            <TgBadge color={TG_THEME.green}>LIVE MOCK</TgBadge>
           </div>
           <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '8px' }}>
             {data.syntheticInstrument.thesis}
@@ -288,7 +286,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
           </div>
           {data.syntheticInstrument.outputs?.mock_hedge_construction && (
             <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '6px' }}>
-              <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Mock hedge funding</div>
+              <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Buy / monitor mock contract</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'baseline', marginTop: '4px' }}>
                 <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700 }}>
                   ${Number(data.syntheticInstrument.outputs.mock_hedge_construction.hedge_notional_usdc || 0).toLocaleString()} notional
@@ -300,26 +298,14 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
               <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
                 {((data.syntheticInstrument.outputs.mock_hedge_construction.weighted_legs || []).slice(0, 3).map(leg => `${leg.side} ${leg.slug} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`).join(', '))}
               </div>
-            </div>
-          )}
-          {(data.syntheticInstrument.structure?.schematic_steps || []).length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
-              {data.syntheticInstrument.structure.schematic_steps.slice(0, 4).map((step, i) => (
-                <div key={step.key || i} style={{ background: TG_THEME.elevated, borderRadius: '7px', padding: '7px' }}>
-                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>{step.status}</div>
-                  <div style={{ fontSize: '11px', color: TG_THEME.text, lineHeight: 1.25, marginTop: '2px' }}>{step.label}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {(data.syntheticInstrument.outputs?.discovery_gaps || []).length > 0 && (
-            <div style={{ fontSize: '12px', color: TG_THEME.orange, lineHeight: 1.4, marginBottom: '6px' }}>
-              Pricing gaps: {data.syntheticInstrument.outputs.discovery_gaps.slice(0, 2).map(gap => `${gap.slug || gap.title} (${gap.status_label || 'Needs price'})`).join(', ')}
+              <div style={{ fontSize: '11px', color: TG_THEME.green, lineHeight: 1.35, marginTop: '4px' }}>
+                {data.syntheticInstrument.outputs.mock_hedge_construction.recommended_action === 'BUY_CONTRACT' ? 'Agent says buy while profitable; close if a leg drags package PnL red.' : 'Agent says monitor until edge improves.'}
+              </div>
             </div>
           )}
           {(data.syntheticInstrument.outputs?.agent_search_plan || []).length > 0 && (
             <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '6px' }}>
-              Search next: {data.syntheticInstrument.outputs.agent_search_plan.slice(0, 2).map(item => `${item.surface}:${item.target}`).join(', ')}
+              Agent scouting: {data.syntheticInstrument.outputs.agent_search_plan.slice(0, 2).map(item => `${item.surface}:${item.target}`).join(', ')}
             </div>
           )}
           <div style={{ fontSize: '12px', color: TG_THEME.tertiary, lineHeight: 1.4 }}>

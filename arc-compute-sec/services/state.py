@@ -37,6 +37,7 @@ DEFAULT_POLYMARKET_DIRECT_EVENT_SLUGS = (
     "ai-bubble-burst-by",
 )
 DEFAULT_PUBLIC_HEDGE_SYMBOLS = ("NVDA", "VRT", "ETN", "CEG", "NRG", "BTC-USD", "ETH-USD")
+DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES = ("yahoo",)
 IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
     "RETXC": {
         "title": "Texas Commercial Electricity Generation Sales Revenue",
@@ -516,24 +517,117 @@ def _pricing_status_label(status: Any) -> str:
     return str(status or "Needs review").replace("_", " ")
 
 
-def _fetch_public_quote(symbol: str) -> dict[str, Any] | None:
-    cache_key = str(symbol or "").strip().upper()
-    if not cache_key:
+def _fetch_ibkr_public_quote(symbol: str) -> dict[str, Any] | None:
+    clean = str(symbol or "").strip().upper()
+    if not clean or "-" in clean:
         return None
-    cached = cache.get("public_yahoo_quote", cache_key)
-    if isinstance(cached, dict):
-        return cached
     try:
-        quote = fetch_chart_quote(cache_key)
+        from adapters.ibkr import fetch_last_price
+
+        price = fetch_last_price(clean)
     except Exception as exc:
-        quote = {
-            "symbol": cache_key,
+        return {
+            "symbol": clean,
+            "price": None,
+            "source": "ibkr_tws",
+            "error": exc.__class__.__name__,
+        }
+    if price is None:
+        return None
+    return {
+        "symbol": clean,
+        "price": float(price),
+        "currency": "USD",
+        "exchange": "SMART",
+        "source": "ibkr_tws",
+    }
+
+
+def _fetch_alpaca_public_quote(symbol: str) -> dict[str, Any] | None:
+    clean = str(symbol or "").strip().upper()
+    if not clean or "-" in clean:
+        return None
+    key = os.environ.get("ALPACA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY")
+    secret = os.environ.get("ALPACA_SECRET_KEY") or os.environ.get("ALPACA_API_SECRET")
+    if not key or not secret:
+        return None
+    url = f"https://data.alpaca.markets/v2/stocks/{urllib.parse.quote(clean, safe='')}/trades/latest"
+    req = urllib.request.Request(url, headers={
+        "APCA-API-KEY-ID": key,
+        "APCA-API-SECRET-KEY": secret,
+        "User-Agent": "arc-compute-sec/1.0",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            body = resp.read().decode("utf-8")
+        data = json.loads(body)
+        trade = data.get("trade") if isinstance(data, dict) else {}
+        price = trade.get("p") if isinstance(trade, dict) else None
+        if price is None:
+            return None
+        return {
+            "symbol": clean,
+            "price": float(price),
+            "currency": "USD",
+            "exchange": str(trade.get("x") or "alpaca"),
+            "regular_market_time": str(trade.get("t") or ""),
+            "source": "alpaca_market_data",
+        }
+    except Exception as exc:
+        return {
+            "symbol": clean,
+            "price": None,
+            "source": "alpaca_market_data",
+            "error": exc.__class__.__name__,
+        }
+
+
+def _fetch_yahoo_public_quote(symbol: str) -> dict[str, Any] | None:
+    try:
+        return fetch_chart_quote(symbol)
+    except Exception as exc:
+        return {
+            "symbol": str(symbol or "").strip().upper(),
             "price": None,
             "source": "yahoo_finance_chart",
             "error": exc.__class__.__name__,
         }
-    if quote:
-        cache.put("public_yahoo_quote", cache_key, quote, ttl_seconds=900 if quote.get("price") is not None else 300)
+
+
+def _fetch_public_quote(symbol: str) -> dict[str, Any] | None:
+    cache_key = str(symbol or "").strip().upper()
+    if not cache_key:
+        return None
+    sources = [item.lower() for item in _env_csv("PUBLIC_HEDGE_PRICE_SOURCES", DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES)]
+    source_key = ",".join(sources) or "yahoo"
+    cached = cache.get("public_quote", f"{source_key}|{cache_key}")
+    if isinstance(cached, dict):
+        return cached
+    quote: dict[str, Any] | None = None
+    errors: list[str] = []
+    for source in sources:
+        if source == "ibkr":
+            quote = _fetch_ibkr_public_quote(cache_key)
+        elif source == "alpaca":
+            quote = _fetch_alpaca_public_quote(cache_key)
+        elif source == "yahoo":
+            quote = _fetch_yahoo_public_quote(cache_key)
+        else:
+            errors.append(f"{source}:unsupported")
+            quote = None
+        if isinstance(quote, dict) and quote.get("price") is not None:
+            quote["source_priority"] = source_key
+            if errors:
+                quote["fallback_errors"] = errors[:4]
+            cache.put("public_quote", f"{source_key}|{cache_key}", quote, ttl_seconds=900)
+            return quote
+        if isinstance(quote, dict) and quote.get("error"):
+            errors.append(f"{quote.get('source')}:{quote.get('error')}")
+    if quote is None:
+        quote = {"symbol": cache_key, "price": None, "source": source_key}
+    if errors:
+        quote["fallback_errors"] = errors[:4]
+    cache.put("public_quote", f"{source_key}|{cache_key}", quote, ttl_seconds=300)
     return quote
 
 
@@ -570,6 +664,7 @@ def public_hedge_state(*, logs: Path | str | None = None) -> list[dict[str, Any]
             "currency": quote.get("currency", "") if isinstance(quote, dict) else "",
             "exchange": quote.get("exchange", "") if isinstance(quote, dict) else "",
             "source": quote.get("source", "yahoo_finance_chart") if isinstance(quote, dict) else "yahoo_finance_chart",
+            "source_priority": quote.get("source_priority", "") if isinstance(quote, dict) else "",
             "leg_description": meta.get("description") or "",
             "inventory": True,
         })
