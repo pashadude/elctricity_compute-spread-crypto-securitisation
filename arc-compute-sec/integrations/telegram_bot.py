@@ -17,7 +17,8 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 SENT_NAME = "telegram_sent.jsonl"
 DEFAULT_NOTIFY_MAX_PER_PASS = 3
 DEFAULT_IBKR_REAUTH_REMINDER_HOURS = 4.0
-CHANNEL_ABOUT_KEY = "channel-about:v1"
+CHANNEL_ABOUT_KEY = "channel-about:v2"
+CHANNEL_FEEDBACK_UPDATE_KEY = "channel-feedback-update:v1"
 
 
 def admin_ids() -> set[str]:
@@ -77,19 +78,16 @@ def delete_webhook() -> dict[str, Any]:
 
 
 def bot_short_description() -> str:
-    return "Compute/energy spread desk. Watchlist in /latest; channel posts only EXECUTE packages/jobs."
+    return "Compute/energy spread desk. Live-priced mock contract, buy/monitor/sell, Arc-gated."
 
 
 def bot_description() -> str:
     return "\n".join([
-        "Power by Botozen wraps judged compute/energy spread packages on Arc.",
-        "",
-        "/latest and the Mini App show direct IBKR ForecastTrader and Polymarket watchlist slugs.",
-        "The public channel posts only EXECUTE packages, Arc job updates, and runtime errors.",
-        "Commands are private-chat only; the channel ignores inbound /status or /scan commands.",
-        "REJECT, DEFER, and premium_gate_fail rows are intentionally muted.",
-        "",
-        "No Arc action can happen unless judge.classify() returns EXECUTE.",
+        "Power by Botozen: live-priced compute/energy mock contract.",
+        "/latest + Mini App show notional, Circle test USDC ask, live weights, and buy/monitor recommendation.",
+        "IBKR/Polymarket are scouting inputs, not the funnel.",
+        "Channel posts mock-contract updates, operator notes, and runtime errors. Raw REJECT/DEFER/premium_gate/watchlist noise is muted.",
+        "No Arc action unless judge.classify() returns EXECUTE.",
     ])
 
 
@@ -99,10 +97,10 @@ def configure_bot_profile() -> dict[str, Any]:
         ("setMyDescription", {"description": bot_description()}),
         ("setMyCommands", {"commands": [
             {"command": "start", "description": "Open desk policy and commands"},
-            {"command": "about", "description": "Explain watchlist vs channel posts"},
-            {"command": "latest", "description": "Show signal and watchlist slugs"},
-            {"command": "status", "description": "Show worker and judge status"},
-            {"command": "positions", "description": "Show recent Arc jobs"},
+            {"command": "about", "description": "Explain the mock contract workflow"},
+            {"command": "latest", "description": "Show mock contract and weights"},
+            {"command": "status", "description": "Show worker and quote status"},
+            {"command": "positions", "description": "Show audit-only Arc jobs"},
         ]}),
     ]
     base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -137,67 +135,63 @@ def _latest_verdict(snap: dict[str, Any]) -> dict[str, Any] | None:
 def format_status(snap: dict[str, Any]) -> str:
     runtime = snap.get("runtime") or {}
     mode = snap.get("mode") or {}
-    verdict = _latest_verdict(snap)
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    construction = (((proposal.get("outputs") or {}).get("mock_hedge_construction")) or {}) if proposal else {}
     parts = [
-        "Arc Compute Sec",
+        "Power by Botozen",
         f"state: {runtime.get('state', 'unknown')}",
-        f"live_chain: {'enabled' if mode.get('live_chain_enabled') else 'disabled'}",
+        f"live_chain: {'enabled' if mode.get('live_chain_enabled') else 'disabled'}; no Arc before EXECUTE",
     ]
+    if construction:
+        parts.append(f"mock_contract: {construction.get('recommended_action', 'MONITOR_ONLY')}")
+        parts.append(
+            f"notional: {float(construction.get('hedge_notional_usdc') or 0):.2f} USDC; "
+            f"Circle ask: {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
+        )
+        sources = construction.get("quote_sources") or []
+        if sources:
+            parts.append("quotes: " + ", ".join(str(src) for src in sources[:3]))
     if runtime.get("last_success_at"):
         parts.append(f"last_success: {int(float(runtime['last_success_at']))}")
     if runtime.get("last_error"):
         parts.append(f"last_error: {runtime['last_error']}")
-    if verdict:
-        parts.append(
-            f"latest: {verdict.get('label', '?')} {verdict.get('surface', '')}/{verdict.get('instrument', '')}"
-        )
     return "\n".join(parts)
 
 
 def format_latest(snap: dict[str, Any]) -> str:
     signal = (snap.get("signal") or {}).get("latest") or {}
-    verdict = _latest_verdict(snap) or {}
-    position = (snap.get("positions") or [{}])[0] if snap.get("positions") else {}
     lines = [
-        "Latest desk state",
+        "Latest mock contract",
         f"signal: {signal.get('direction', 'none')} z={signal.get('z', '')}",
-        f"verdict: {verdict.get('label', 'none')} {verdict.get('reason_code', '')}",
-        f"position: #{position.get('job_id', '')} {position.get('surface', '')}/{position.get('instrument', '')}".strip(),
     ]
     proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
     if proposal:
-        lines.append(
-            f"proposal: {proposal.get('instrument_name', 'synthetic spread note')} "
-            f"({proposal.get('collateral_status', 'not_asset_backed_v0')})"
-        )
+        lines.append(f"contract: {proposal.get('instrument_name', 'compute/energy mock contract')}")
         actions = (((proposal.get("outputs") or {}).get("agent_next_actions")) or [])
         hedges = (((proposal.get("outputs") or {}).get("priced_hedge_basket")) or [])
-        gaps = (((proposal.get("outputs") or {}).get("discovery_gaps")) or [])
         search_plan = (((proposal.get("outputs") or {}).get("agent_search_plan")) or [])
         construction = (((proposal.get("outputs") or {}).get("mock_hedge_construction")) or {})
         if hedges:
-            lines.append("priced hedges: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in hedges[:4]))
+            lines.append("live-priced basket: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in hedges[:4]))
         if construction:
             lines.append(
-                "mock hedge: "
+                "funding: "
                 f"{float(construction.get('hedge_notional_usdc') or 0):.2f} USDC notional, "
                 f"Circle ask {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
             )
             if construction.get("recommended_action"):
-                lines.append(f"agent recommendation: {construction.get('recommended_action')}")
+                lines.append(f"agent recommendation: {construction.get('recommended_action')} while profitable")
+            sources = construction.get("quote_sources") or []
+            if sources:
+                lines.append("quote source: " + ", ".join(str(src) for src in sources[:3]))
             weighted = construction.get("weighted_legs") or []
             if weighted:
                 lines.append("weights: " + ", ".join(
                     f"{leg.get('side')} {leg.get('slug')} {float(leg.get('weight') or 0):+.1%}"
                     for leg in weighted[:4]
                 ))
-        if gaps:
-            lines.append("pricing gaps: " + ", ".join(
-                f"{gap.get('slug') or gap.get('title')} ({gap.get('status_label') or 'Needs price'})"
-                for gap in gaps[:4]
-            ))
         if search_plan:
-            lines.append("search next: " + ", ".join(
+            lines.append("agent scouting: " + ", ".join(
                 f"{item.get('surface')}:{item.get('target')}"
                 for item in search_plan[:3]
             ))
@@ -219,16 +213,16 @@ def format_latest(snap: dict[str, Any]) -> str:
 def format_about() -> str:
     return "\n".join([
         "Power by Botozen",
-        "Arc-wrapped compute/energy spread desk.",
+        "Live-priced compute/energy mock contract desk.",
         "",
         "How to read the feed:",
-        "- /latest and the Mini App show IBKR ForecastTrader and Polymarket slugs as direct watchlist inventory.",
-        "- Watchlist rows are research surfaces, not public channel alerts.",
-        "- The agent proposes a synthetic instrument from the latest spread, legs, collateral status, and next actions.",
-        "- The channel posts only EXECUTE spread packages, Arc job updates, and runtime errors.",
-        "- REJECT, DEFER, and premium_gate_fail rows stay out of the channel.",
+        "- /latest and the Mini App show the mock contract, live-priced weights, Circle test USDC ask, and buy/monitor recommendation.",
+        "- Buy Contract freezes a local testnet entry ticket; Monitor tracks live leg marks; Sell Mock explains the worst drag if PnL turns red.",
+        "- IBKR ForecastTrader, Polymarket, and future venues are agent scouting inputs until priced and thesis-matched.",
+        "- The channel posts mock-contract updates, product updates, and runtime errors.",
+        "- Raw REJECT, DEFER, premium_gate_fail, and watchlist-only rows stay out of the channel.",
         "- Commands work in the private bot chat only; channel commands are ignored.",
-        "- BTC/ETH are miner-margin proxies; the securitized object is the judged spread package.",
+        "- BTC/ETH are labelled proxies inside the weighted basket, not the securitized object.",
         "- No Arc action can happen unless judge.classify() returns EXECUTE.",
         "",
         "Commands: /latest, /status, /positions, /about, /scan",
@@ -458,17 +452,70 @@ def channel_about_message() -> str:
     return "\n".join([
         "How this channel works",
         "",
-        "Power by Botozen tracks electricity stress against GPU compute demand, then packages only judge-approved legs for Arc settlement.",
+        "Power by Botozen now centers the live-priced compute/energy mock contract.",
         "",
         "This channel posts:",
-        "- EXECUTE spread packages with grouped IBKR/Polymarket/crypto legs",
-        "- Arc ERC-8183 job updates",
+        "- buy/monitor recommendations for the mock contract",
+        "- product updates and operator notes",
         "- runtime errors that need operator attention",
         "",
-        "This channel does not post repeated REJECT/DEFER rows or watchlist-only slugs. Use /latest in the bot or the Mini App for the live watchlist.",
+        "This channel does not post repeated REJECT/DEFER rows, premium_gate_fail rows, raw judge tables, or watchlist-only slugs. Use /latest in the bot or the Mini App for research scouting details.",
         "",
-        "BTC/ETH are labelled miner-margin proxies. The securitized object is the judged spread package, and no Arc action can happen unless judge.classify() returns EXECUTE.",
+        "The Mini App shows live-priced weights, Circle test USDC ask, local Buy Contract / Monitor Price / Sell Mock controls, and the leg that drags PnL red.",
+        "",
+        "No Arc action can happen unless judge.classify() returns EXECUTE.",
     ])
+
+
+def channel_feedback_update_message() -> str:
+    return "\n".join([
+        "Product update: feedback shipped",
+        "",
+        "Thank you for the sharp feedback on the previous dashboard. You were right: raw Direct Event / Forecast Legs, repeated rejects, and isolated BTC rows did not explain the product.",
+        "",
+        "New in Power by Botozen:",
+        "- live-priced mock contract is now the main surface",
+        "- Buy Contract freezes a local testnet entry ticket",
+        "- Monitor Price tracks refreshed leg marks",
+        "- Sell Mock explains which leg makes the package unprofitable",
+        "- weights now describe NVDA, VRT, ETN, CEG, NRG, BTC, and ETH in plain English",
+        "- IBKR/Polymarket are now agent scouting inputs, not the main product funnel",
+        "- channel and bot mute raw REJECT/DEFER/watchlist noise",
+        "",
+        "Open Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    if not proposal:
+        return None
+    construction = (((proposal.get("outputs") or {}).get("mock_hedge_construction")) or {})
+    if not construction:
+        return None
+    action = str(construction.get("recommended_action") or "MONITOR_ONLY")
+    proposal_id = str(proposal.get("proposal_id") or proposal.get("reference_package_id") or proposal.get("instrument_name") or "mock")
+    circle = float(construction.get("circle_testnet_usdc_request") or 0)
+    notional = float(construction.get("hedge_notional_usdc") or 0)
+    weighted = construction.get("weighted_legs") or []
+    weights = ", ".join(
+        f"{leg.get('side')} {leg.get('slug')} {float(leg.get('weight') or 0):+.0%}"
+        for leg in weighted[:5]
+        if isinstance(leg, dict)
+    )
+    sources = ", ".join(str(src) for src in (construction.get("quote_sources") or [])[:3]) or "public quotes"
+    key = f"mock-contract:{proposal_id}:{action}:{round(circle, 2)}"
+    text = "\n".join([
+        f"{action} mock compute/energy contract",
+        f"instrument: {proposal.get('instrument_name', 'compute/energy hedge note')}",
+        f"notional: {notional:.2f} USDC",
+        f"Circle ask: {circle:.2f} test USDC",
+        f"weights: {weights or 'waiting for live prices'}",
+        f"quotes: {sources}",
+        "Open Mini App to buy/monitor/sell the local testnet ticket.",
+    ])
+    return key, text
 
 
 def channel_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
@@ -481,35 +528,9 @@ def channel_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
             f"Runtime error: {runtime.get('last_error')}",
         ))
 
-    packages = [pkg for pkg in (snap.get("packages") or []) if isinstance(pkg, dict)]
-    for pkg in packages:
-        label = str(pkg.get("label") or "")
-        if label != "EXECUTE":
-            continue
-        key = f"package:{pkg.get('package_id') or pkg.get('id') or pkg.get('arb_signal_id')}:{label}"
-        out.append((key, _package_message(pkg)))
-
-    packaged_leg_hashes = {
-        str(leg.get("action_payload_hash") or "")
-        for pkg in packages
-        for leg in (pkg.get("legs") or [])
-        if isinstance(leg, dict) and leg.get("action_payload_hash")
-    }
-    for verdict in snap.get("verdicts") or []:
-        label = verdict.get("label")
-        if label != "EXECUTE":
-            continue
-        if str(verdict.get("action_payload_hash") or "") in packaged_leg_hashes:
-            continue
-        key = f"verdict:{verdict.get('action_payload_hash', '')}:{label}"
-        text = f"{label} {verdict.get('surface', '')}/{verdict.get('instrument', '')}: {verdict.get('reason_code', '')}"
-        out.append((key, text))
-    for pos in snap.get("positions") or []:
-        if pos.get("job_id"):
-            text = f"Arc job #{pos.get('job_id')} {pos.get('status', pos.get('stage', ''))} {pos.get('surface', '')}/{pos.get('instrument', '')}"
-            if pos.get("arcscan_url"):
-                text += f"\n{pos['arcscan_url']}"
-            out.append((f"position:{pos.get('job_id')}:{pos.get('stage', '')}", text))
+    mock_message = _mock_contract_message(snap)
+    if mock_message:
+        out.append(mock_message)
     return out
 
 
@@ -522,6 +543,18 @@ def notify_channel_about_once(*, logs: Path | str | None = None) -> int:
         return 0
     send_message(channel_id, channel_about_message())
     _mark_sent(CHANNEL_ABOUT_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_feedback_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_FEEDBACK_UPDATE_KEY in sent:
+        return 0
+    send_message(channel_id, channel_feedback_update_message())
+    _mark_sent(CHANNEL_FEEDBACK_UPDATE_KEY, logs=logs)
     return 1
 
 
@@ -576,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delete-webhook", action="store_true", help="Delete Telegram webhook")
     parser.add_argument("--configure-bot-profile", action="store_true", help="Configure bot description, commands, and menu")
     parser.add_argument("--post-channel-about", action="store_true", help="Post the deduped channel explainer")
+    parser.add_argument("--post-feedback-update", action="store_true", help="Post the deduped feedback/new-features channel update")
     args = parser.parse_args(argv)
     if args.set_webhook:
         print(json.dumps(set_webhook(), sort_keys=True))
@@ -588,6 +622,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.post_channel_about:
         print(notify_channel_about_once())
+        return 0
+    if args.post_feedback_update:
+        print(notify_channel_feedback_update_once())
         return 0
     if args.notify_once:
         print(notify_channel_once() + notify_ibkr_reauth_reminder_once())

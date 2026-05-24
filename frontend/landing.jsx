@@ -82,7 +82,7 @@ const HeroV3 = ({ setPage }) => {
       }}>
         <Badge color="primary">
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: THEME.primary[400], display: 'inline-block', animation: 'pulse 2s ease infinite' }}></span>
-          Live on Arc Testnet · Phase 4
+          Live-priced mock contract · Arc-gated
         </Badge>
         <GlowButton size="sm" onClick={() => setPage('dashboard')} style={{ justifyContent: 'center' }}>
           Open Dashboard →
@@ -106,14 +106,15 @@ const HeroV3 = ({ setPage }) => {
             color: THEME.text.secondary, margin: '0 0 32px', maxWidth: '460px',
           }}>
             We measure the real-time gap between GPU compute costs and electricity prices,
-            build a canonical spread package, and wrap only judge-approved legs as ERC-8183 jobs on Arc.
+            build a live-priced mock contract, and let operators buy, monitor, or sell a local
+            testnet ticket. Arc wrapping is audit-only until judge.classify() returns EXECUTE.
           </p>
 
           {/* Proof stats inline */}
           <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: '12px', maxWidth: isMobile ? '100%' : '420px' }}>
             {[
-              { val: '97.1%', label: 'Win rate', color: THEME.primary[400] },
-              { val: '+$152', label: 'PnL', color: THEME.primary[400] },
+              { val: '1,560', label: 'Circle test USDC ask', color: THEME.primary[400] },
+              { val: '7', label: 'Live-priced legs', color: THEME.primary[400] },
               { val: '280K', label: 'News sources', color: THEME.amber[400] },
             ].map((s, i) => (
               <div key={i} style={{
@@ -149,7 +150,7 @@ const HeroV3 = ({ setPage }) => {
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ff5f57' }}></div>
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#febc2e' }}></div>
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#28c840' }}></div>
-              <span style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted, marginLeft: '8px' }}>arc-compute-sec · phase4:live</span>
+              <span style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted, marginLeft: '8px' }}>power.botozen.com · mock contract</span>
             </div>
             {/* Live spread display */}
             <div style={{ padding: '20px' }}>
@@ -183,8 +184,8 @@ const HeroV3 = ({ setPage }) => {
               {/* Signal + verdict */}
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <Badge color="amber">electricity_expensive</Badge>
-                <Badge color="primary">EXECUTE</Badge>
-                <Badge color="muted">spread package</Badge>
+                <Badge color="primary">BUY_CONTRACT</Badge>
+                <Badge color="muted">local ticket</Badge>
               </div>
             </div>
           </div>
@@ -271,7 +272,7 @@ const QuoteV3 = () => {
           fontFamily: THEME.font.body, fontSize: isMobile ? '16px' : '18px', lineHeight: 1.7,
           color: THEME.text.secondary,
         }}>
-          That market doesn't exist yet. <span style={{ color: THEME.text.primary, fontWeight: 600 }}>This is the first step.</span> We canonicalize a spread package: direct prediction-event pairs when available, labelled liquid proxies when not, and an Arc audit trail around the judged package.
+          That market doesn't exist yet. <span style={{ color: THEME.text.primary, fontWeight: 600 }}>This is the first step.</span> We price a transparent mock contract from liquid public legs, use IBKR and Polymarket as scouting inputs, and keep the Arc trail gated behind the judge.
         </p>
       </div>
     </div>
@@ -293,7 +294,7 @@ const SpreadV3 = () => {
         fontFamily: THEME.font.body, fontSize: '17px', color: THEME.text.secondary,
         maxWidth: '580px', margin: '0 auto 40px', lineHeight: 1.6,
       }}>
-        Compute is becoming a commodity, but not yet directly tradable. We bridge the gap by measuring the real-time spread and turning it into a canonical package of direct event legs plus labelled proxy legs.
+        Compute is becoming a commodity, but not yet directly tradable. We bridge the gap by measuring the real-time spread and turning it into a live-priced mock contract with labelled weights and a clear Circle test USDC ask.
       </p>
       <div style={{ display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
         <SpreadIllustration width={isMobile ? 340 : 600} height={isMobile ? 150 : 200} />
@@ -392,12 +393,12 @@ const SettleLayer = () => {
   return (
   <LayerV3 layer="3.0" label="Settlement" color={THEME.primary[400]}
     title="Arc on-chain audit"
-    desc="Every judged spread package becomes an ERC-8183 job with escrow, identity, reputation, and a full trail. Circle USDC handles settlement. The 4-way judge ensures nothing bypasses review."
+    desc="The dashboard is local mock-contract first. Arc ERC-8183 jobs, escrow, identity, and reputation stay locked until the judge returns EXECUTE. Circle test USDC handles the demo funding path."
     illustration={<BlockchainIllustration width={isMobile ? 330 : 440} height={isMobile ? 230 : 300} />}
   >
     <MetricChips items={[
-      { val: '#19091', label: 'latest job', color: THEME.primary[400] },
-      { val: 'EXECUTE', label: 'judge verdict', color: THEME.primary[400] },
+      { val: 'LOCKED', label: 'Arc action', color: THEME.primary[400] },
+      { val: 'EXECUTE', label: 'required verdict', color: THEME.primary[400] },
       { val: '5 USDC', label: 'escrowed (test)', color: THEME.amber[400] },
     ]} />
   </LayerV3>
@@ -412,8 +413,8 @@ const BigStatsV3 = () => {
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: isMobile ? '12px' : '20px' }}>
         {[
-          { value: '97.1%', label: 'Win rate on AI-infra', color: THEME.primary[400] },
-          { value: '+$152', label: 'PnL from 99 gate-kept fills', color: THEME.primary[400] },
+          { value: '1,560', label: 'Circle test USDC ask in the demo contract', color: THEME.primary[400] },
+          { value: '7', label: 'Live-priced weights across compute, power, and miner proxies', color: THEME.primary[400] },
           { value: '280K', label: 'News sources · 200 languages', color: THEME.amber[400] },
         ].map((s, i) => (
           <div key={i} style={{
@@ -430,7 +431,7 @@ const BigStatsV3 = () => {
       </div>
       <div style={{ textAlign: 'center', marginTop: '16px' }}>
         <MonoText style={{ fontSize: '12px', color: THEME.text.faint }}>
-          Frontier models analyse · Premium gate filters · Only EXECUTE hits the chain
+          Frontier models scout · Public prices size the mock · Only EXECUTE can hit the chain
         </MonoText>
       </div>
     </div>
@@ -443,9 +444,9 @@ const PipelineV3 = () => {
   const isMobile = useIsMobile(700);
   const steps = [
     { IconComp: IconSignal, title: 'Signal', desc: 'Z-score dislocation', color: THEME.amber[400] },
-    { IconComp: IconPrediction, title: 'Package', desc: 'events + proxies', color: THEME.purple[400] },
-    { IconComp: IconJudge, title: 'Judge', desc: '4-way gate', color: THEME.primary[400] },
-    { IconComp: IconArc, title: 'Settle', desc: 'ERC-8183 on Arc', color: THEME.primary[400] },
+    { IconComp: IconPrediction, title: 'Price Basket', desc: 'live public legs', color: THEME.purple[400] },
+    { IconComp: IconJudge, title: 'Buy/Monitor', desc: 'local test ticket', color: THEME.primary[400] },
+    { IconComp: IconArc, title: 'Arc Gate', desc: 'EXECUTE only', color: THEME.primary[400] },
   ];
   return (
     <section style={{ padding: isMobile ? '32px 16px 46px' : '40px 32px 60px', position: 'relative', zIndex: 2 }}>
@@ -482,8 +483,8 @@ const PricingV3 = ({ setPage }) => {
   const [selectedPlan, setSelectedPlan] = React.useState(null);
   const isMobile = useIsMobile(760);
   const plans = [
-    { id: 'free', name: 'Explorer', price: '0', period: 'forever', features: ['Read-only signal feed', 'Basic z-score alerts', 'Community Telegram channel', '1 mock backtest/day'], cta: 'Start Free', popular: false },
-    { id: 'operator', name: 'Operator', price: '5', period: '/month', features: ['Spread package routing', 'Actionable package alerts', 'Telegram scan commands', 'Saved oracle backtest view', 'Arc Testnet wrap controls'], cta: 'Start Operator', popular: true, usdc: '5' },
+    { id: 'free', name: 'Explorer', price: '0', period: 'forever', features: ['Read-only signal feed', 'Live mock contract view', 'Community Telegram channel', '1 mock backtest/day'], cta: 'Start Free', popular: false },
+    { id: 'operator', name: 'Operator', price: '5', period: '/month', features: ['Buy/monitor/sell local tickets', 'Full mock contract weights', 'Telegram scan commands', 'Agent scouting queue', 'Arc-gated settlement controls'], cta: 'Start Operator', popular: true, usdc: '5' },
   ];
   return (
     <section id="pricing-section" style={{ padding: isMobile ? '48px 16px' : '60px 32px', position: 'relative', zIndex: 2 }}>
@@ -597,7 +598,7 @@ const LandingPage = ({ setPage }) => (
     </Rail>
     <footer style={{ padding: '40px 32px 60px', textAlign: 'center', borderTop: `1px solid ${THEME.border.subtle}` }}>
       <MonoText style={{ color: THEME.text.faint, fontSize: '12px' }}>
-        arc-compute-sec v1.0 · Arc Testnet · Phase 4 Live · Job #19091
+        power.botozen.com · live-priced mock contract · Arc only after EXECUTE
       </MonoText>
     </footer>
   </div>

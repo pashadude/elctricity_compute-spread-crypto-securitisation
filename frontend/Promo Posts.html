@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Arc Compute — Promo Posts & Channel</title>
+  <title>Power by Botozen — Feedback Update Kit</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -124,13 +124,13 @@
           {/* Avatar + Name */}
           <div style={{ background: T.bg.surface, border: `1px solid ${T.border.subtle}`, borderRadius: '16px', padding: '32px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
             <ChannelAvatar size={100} />
-            <h3 style={{ fontFamily: T.font.heading, fontSize: '22px', fontWeight: 700, color: T.text.primary, marginTop: '16px' }}>Arc Compute</h3>
-            <div style={{ fontFamily: T.font.mono, fontSize: '14px', color: T.primary[400], marginTop: '4px' }}>@arc_compute</div>
+            <h3 style={{ fontFamily: T.font.heading, fontSize: '22px', fontWeight: 700, color: T.text.primary, marginTop: '16px' }}>Power by Botozen</h3>
+            <div style={{ fontFamily: T.font.mono, fontSize: '14px', color: T.primary[400], marginTop: '4px' }}>@botozen_power</div>
             <div style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.secondary, marginTop: '12px', lineHeight: 1.6, maxWidth: '300px' }}>
-              Electricity–compute spread arbitrage settled on Arc. Live signals, frontier model verdicts, USDC settlement.
+              Live-priced compute/energy mock contract. Buy, monitor, or sell local testnet tickets. Arc stays gated behind EXECUTE.
             </div>
             <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-              {['Crypto', 'Energy', 'AI-Infra', 'DeFi'].map((tag, ti) => {
+              {['Power', 'Compute', 'Arc', 'AI-Infra'].map((tag, ti) => {
                 const tagColors = ['#00DC82', '#F59E0B', '#60A5FA', '#00DC82'];
                 const c = tagColors[ti];
                 return (
@@ -144,11 +144,11 @@
           <div style={{ background: T.bg.surface, border: `1px solid ${T.border.subtle}`, borderRadius: '16px', padding: '32px' }}>
             <h4 style={{ fontFamily: T.font.heading, fontSize: '16px', fontWeight: 700, color: T.text.primary, marginBottom: '20px' }}>Channel Details</h4>
             {[
-              { label: 'Name', value: 'Arc Compute' },
-              { label: 'Handle', value: '@arc_compute' },
+              { label: 'Name', value: 'Power by Botozen' },
+              { label: 'Handle', value: '@botozen_power' },
               { label: 'Type', value: 'Public channel + Bot' },
-              { label: 'Bot handle', value: '@arc_compute_bot' },
-              { label: 'Website', value: 'arccompute.io' },
+              { label: 'Bot handle', value: '@BotozenPowerBot' },
+              { label: 'Website', value: 'power.botozen.com' },
             ].map((d, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: i < 4 ? `1px solid ${T.border.subtle}` : 'none' }}>
                 <span style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.muted }}>{d.label}</span>
@@ -158,11 +158,11 @@
             <div style={{ marginTop: '20px' }}>
               <div style={{ fontFamily: T.font.body, fontSize: '13px', color: T.text.muted, marginBottom: '8px' }}>Bio / Description</div>
               <div style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.secondary, lineHeight: 1.6, padding: '12px', background: T.bg.elevated, borderRadius: '8px', border: `1px solid ${T.border.subtle}` }}>
-                ⚡ Electricity–compute spread arb desk<br />
-                📊 97.1% WR on AI-infra · +$152 PnL<br />
-                🔗 Arc Testnet ERC-8183 settlement<br />
-                🧠 280K news sources · Frontier model verdicts<br />
-                💳 Pay with Circle test USDC<br />
+                ⚡ Live-priced compute/energy mock contract<br />
+                📊 Buy / monitor / sell local testnet tickets<br />
+                🔎 IBKR + Polymarket scouting, no reject spam<br />
+                🔗 Arc only after judge.classify() returns EXECUTE<br />
+                💳 Operator plan: 5 Circle test USDC<br />
                 💡 "Futures of compute" — Larry Fink
               </div>
             </div>
@@ -174,9 +174,9 @@
     /* ── Shareable Graphic ── */
     const PromoGraphic = ({ variant = 'A' }) => {
       const variants = {
-        A: { headline: 'Securitize the\nelectricity–compute\nspread', accent: 'Signal-first', stat: '97.1% WR', statLabel: 'AI-Infra Win Rate', bg: `linear-gradient(145deg, #060a08 0%, #0d1a12 50%, #0a1510 100%)` },
-        B: { headline: '+$152 PnL from\n99 gate-kept fills', accent: 'Proven edge', stat: '280K', statLabel: 'News Sources Analysed', bg: `linear-gradient(145deg, #060a08 0%, #111916 50%, #0a0f0c 100%)` },
-        C: { headline: 'From signal to\nArc settlement\nin one pass', accent: 'Multi-surface', stat: 'Phase 4', statLabel: 'Live on Arc Testnet', bg: `linear-gradient(145deg, #060a08 0%, #0f1a15 50%, #081210 100%)` },
+        A: { headline: 'Feedback shipped:\nlive-priced mock\ncontract', accent: 'Product update', stat: '1,560', statLabel: 'Circle Test USDC Ask', bg: `linear-gradient(145deg, #060a08 0%, #0d1a12 50%, #0a1510 100%)` },
+        B: { headline: 'Buy, monitor,\nsell the spread\nmock', accent: 'Mini App', stat: '7', statLabel: 'Live-Priced Legs', bg: `linear-gradient(145deg, #060a08 0%, #111916 50%, #0a0f0c 100%)` },
+        C: { headline: 'IBKR + Polymarket\nare scouting,\nnot the funnel', accent: 'No reject spam', stat: '280K', statLabel: 'News Sources', bg: `linear-gradient(145deg, #060a08 0%, #0f1a15 50%, #081210 100%)` },
       };
       const v = variants[variant];
 
@@ -201,7 +201,7 @@
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <ChannelAvatar size={36} />
                 <span style={{ fontFamily: T.font.heading, fontWeight: 700, fontSize: '16px', color: T.text.primary }}>
-                  arc<span style={{ color: T.primary[400] }}>·</span>compute
+                  power<span style={{ color: T.primary[400] }}>·</span>botozen
                 </span>
               </div>
               <span style={{ padding: '4px 12px', borderRadius: '100px', fontSize: '11px', fontFamily: T.font.mono, fontWeight: 600, background: T.primary[400] + '18', color: T.primary[400], border: `1px solid ${T.primary[400]}30` }}>
@@ -222,9 +222,9 @@
             <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
               {[
                 { val: v.stat, label: v.statLabel, highlight: true },
-                ...(variant === 'A' ? [{ val: '+$152', label: 'Gate-Kept PnL' }, { val: '200', label: 'Languages' }] : []),
-                ...(variant === 'B' ? [{ val: '97.1%', label: 'Win Rate' }, { val: '200', label: 'Languages' }] : []),
-                ...(variant === 'C' ? [{ val: '3', label: 'Surfaces' }, { val: 'USDC', label: 'Circle Settlement' }] : []),
+                ...(variant === 'A' ? [{ val: '7', label: 'Weighted Legs' }, { val: 'Quiet', label: 'Reject Rows' }] : []),
+                ...(variant === 'B' ? [{ val: 'Buy', label: 'Local Ticket' }, { val: 'Sell', label: 'PnL Drag Explainer' }] : []),
+                ...(variant === 'C' ? [{ val: 'IBKR', label: 'Forecast Scouting' }, { val: 'Poly', label: 'Event Scouting' }] : []),
               ].map((s, i) => (
                 <div key={i} style={{
                   flex: 1, padding: '12px', borderRadius: '10px',
@@ -240,10 +240,10 @@
             {/* CTA bar */}
             <div style={{ display: 'flex', gap: '8px' }}>
               <div style={{ flex: 1, padding: '12px 16px', borderRadius: '10px', background: T.primary[400], color: '#000', fontFamily: T.font.body, fontSize: '14px', fontWeight: 700, textAlign: 'center' }}>
-                Open Dashboard →
+                Open Mini App →
               </div>
               <div style={{ flex: 1, padding: '12px 16px', borderRadius: '10px', background: T.bg.elevated, border: `1px solid ${T.border.default}`, color: T.text.primary, fontFamily: T.font.body, fontSize: '14px', fontWeight: 600, textAlign: 'center' }}>
-                🤖 Telegram Bot
+                Telegram Bot
               </div>
             </div>
           </div>
@@ -254,70 +254,59 @@
     /* ── Post Text Variants ── */
     const postTexts = {
       A: {
-        title: 'Variant A — Signal-First Technical',
-        text: `⚡ Arc Compute — Securitize the electricity–compute spread
+        title: 'Variant A — Feedback Shipped',
+        text: `Product update: feedback shipped.
 
-As Larry Fink said: "A new asset class will be buying futures of compute."
+Thank you for calling out the confusing parts of the first demo: raw forecast legs, repeated rejects, and isolated BTC rows did not explain the compute/energy product.
 
-We measure the real-time spread between GPU compute and electricity costs, detect dislocations via z-score signals, and wrap judged positions as ERC-8183 jobs on Arc.
+What changed in Power by Botozen:
+- live-priced mock contract is now the main surface
+- Buy Contract freezes a local testnet ticket
+- Monitor Price refreshes the leg marks
+- Sell Mock explains which leg drags PnL red
+- IBKR and Polymarket are agent scouting inputs, not the funnel
+- public channel stays quiet: no repeated REJECT/DEFER/watchlist spam
 
-📊 The numbers:
-→ 97.1% win rate on AI-infra outcomes
-→ +$152 PnL from 99 gate-kept fills
-→ 280,000 news sources in 200 languages
-→ Frontier models do the judgement
+Arc remains gated. No on-chain action before judge.classify() returns EXECUTE.
 
-🔗 Live on Arc Testnet — Phase 4 multi-surface routing across crypto, equities, and prediction markets.
-
-💳 Free trial → Pay with Circle test USDC (free from faucet.circle.com)
-
-🌐 arccompute.io
-🤖 @arc_compute_bot`,
+Mini App: https://power.botozen.com/tg
+Bot: @BotozenPowerBot
+Channel: @botozen_power`,
       },
       B: {
-        title: 'Variant B — Results-Led Accessible',
-        text: `"A new asset class will be buying futures of compute" — Larry Fink, BlackRock
+        title: 'Variant B — Mini App Walkthrough',
+        text: `"A new asset class will be buying futures of compute" - Larry Fink, BlackRock
 
-What if you could trade the gap between electricity and compute?
+We are turning that idea into a demo you can actually inspect:
 
-That's what Arc Compute does.
+1. Measure the electricity/compute dislocation.
+2. Build a live-priced mock contract from transparent public legs.
+3. Ask Circle test USDC for the required notional.
+4. Let the operator buy, monitor, or sell a local testnet ticket.
+5. Use IBKR, Polymarket, Opoint, and Nebius to scout better direct legs.
+6. Keep Arc settlement locked until the judge says EXECUTE.
 
-+$152 PnL. 97.1% win rate. 99 trades.
+This is not a legal ABS and not asset backed yet. It is a judged, auditable hedge package around the spread.
 
-Every position goes through a 4-way judge (EXECUTE / REJECT / DEFER / CHALLENGE) backed by 280K news sources in 200 languages analysed by frontier models.
-
-Only EXECUTE verdicts hit the chain. Everything settled on Arc with test USDC via Circle.
-
-⚠️ Uses test tokens only (free from faucet.circle.com) — not real money.
-
-Try it free:
-🌐 arccompute.io
-🤖 @arc_compute_bot`,
+Open the Mini App: https://power.botozen.com/tg
+Join the channel: @botozen_power`,
       },
       C: {
-        title: 'Variant C — Launch Announcement',
-        text: `🚀 Arc Compute is live on Arc Testnet
+        title: 'Variant C — Channel Policy',
+        text: `How @botozen_power works now:
 
-The first auditable outcome desk for the electricity–compute spread.
+The channel posts only:
+- mock contract buy/monitor recommendations
+- product updates and operator notes
+- runtime errors that need attention
 
-"A new asset class will be buying futures of compute" — Larry Fink
+The channel does not post repeated reject rows, premium_gate_fail rows, raw judge tables, or watchlist-only slugs.
 
-What's inside:
-⚡ Real-time spread signal (S_t z-score)
-◎ Multi-surface routing — crypto, IBKR, Polymarket
-⚖️ 4-way judge gate — no chain action without EXECUTE
-🔗 ERC-8183 settlement with full audit trail
-🧠 280K news sources · 200 languages · Frontier model verdicts
-💳 Circle test USDC payments (free tokens from faucet.circle.com)
+Use /latest in @BotozenPowerBot or open the Mini App for the live research watchlist.
 
-Phase 4 proof: Job #19091 wrapped, settled, feedback sent.
+BTC/ETH are labelled miner-margin proxies. IBKR and Polymarket are scouting surfaces. The securitized object is the judged compute/energy spread package, not a random crypto row.
 
-⚠️ All tokens are testnet only — zero real value.
-
-Dashboard → arccompute.io
-Bot → @arc_compute_bot
-
-Free trial on all plans.`,
+Mini App: https://power.botozen.com/tg`,
       },
     };
 
@@ -364,8 +353,8 @@ Free trial on all plans.`,
                 <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '0.5px solid #38383A' }}>
                   <ChannelAvatar size={36} />
                   <div>
-                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>Arc Compute</div>
-                    <div style={{ fontSize: '12px', color: '#8E8E93' }}>@arc_compute</div>
+                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>Power by Botozen</div>
+                    <div style={{ fontSize: '12px', color: '#8E8E93' }}>@botozen_power</div>
                   </div>
                 </div>
                 {/* Message */}
@@ -393,7 +382,7 @@ Free trial on all plans.`,
       const [activeTab, setActiveTab] = React.useState('channel');
       const tabs = [
         { id: 'channel', label: 'Channel Identity' },
-        { id: 'posts', label: 'Promo Posts' },
+        { id: 'posts', label: 'Feedback Posts' },
       ];
 
       return (
@@ -408,9 +397,9 @@ Free trial on all plans.`,
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <ChannelAvatar size={28} />
               <span style={{ fontFamily: T.font.heading, fontWeight: 700, fontSize: '16px', color: T.text.primary }}>
-                arc<span style={{ color: T.primary[400] }}>·</span>compute
+                power<span style={{ color: T.primary[400] }}>·</span>botozen
               </span>
-              <span style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.muted, marginLeft: '8px' }}>Promo Kit</span>
+              <span style={{ fontFamily: T.font.body, fontSize: '14px', color: T.text.muted, marginLeft: '8px' }}>Feedback Update Kit</span>
             </div>
             <div style={{ display: 'flex', gap: '4px', background: T.bg.surface, borderRadius: '10px', padding: '3px' }}>
               {tabs.map(t => (
@@ -431,13 +420,13 @@ Free trial on all plans.`,
             {activeTab === 'posts' && (
               <div>
                 <div style={{ fontFamily: T.font.mono, fontSize: '11px', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.primary[400], marginBottom: '12px' }}>
-                  Promo Posts
+                  Feedback Posts
                 </div>
                 <h2 style={{ fontFamily: T.font.heading, fontSize: '32px', fontWeight: 800, letterSpacing: '-0.03em', color: T.text.primary, marginBottom: '8px' }}>
-                  3 Variations to A/B Test
+                  3 Updates to Publish
                 </h2>
                 <p style={{ fontFamily: T.font.body, fontSize: '16px', color: T.text.secondary, marginBottom: '40px' }}>
-                  Each includes a shareable graphic + copy-ready post text. Click "Copy Text" to grab the message.
+                  Each thanks users for the feedback and explains the new Mini App, bot, and channel behavior.
                 </p>
                 <PostPreview variant="A" />
                 <div style={{ height: '1px', background: T.border.subtle, margin: '32px 0' }}></div>

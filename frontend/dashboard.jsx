@@ -549,7 +549,7 @@ const PackageBundlePanel = ({ bundle, direction }) => {
   const status = bundle?.label || 'PENDING';
   return (
     <Card glow>
-      <SectionLabel>Current Spread Package</SectionLabel>
+      <SectionLabel>Research Legs Snapshot</SectionLabel>
       {bundle ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
@@ -558,7 +558,7 @@ const PackageBundlePanel = ({ bundle, direction }) => {
                 {String(bundle.direction || direction || 'no_signal').replace('_', ' ')}
               </div>
               <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '3px' }}>
-                One judged package · direct legs first, proxies labelled separately
+                Research-only venue legs. The mock contract above is the main product surface.
               </div>
             </div>
             <Badge color={verdictColor(status)}>{status}</Badge>

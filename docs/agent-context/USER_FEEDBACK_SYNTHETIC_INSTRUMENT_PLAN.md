@@ -35,8 +35,10 @@
 - The judge gate is intact: no Arc action may bypass `judge.classify()`, and no
   chain call may happen unless the verdict is `EXECUTE`.
 - Telegram and channel policy are sparse: `/latest` and the Mini App show the
-  watchlist, while the public channel posts only EXECUTE packages, Arc jobs, and
-  runtime errors.
+  mock contract plus research watchlist, while the public channel posts
+  mock-contract recommendations, operator updates, and runtime errors. Raw
+  rejects, raw judge tables, Arc job tables, and watchlist-only slugs stay out
+  of the public channel.
 
 ## New Solution
 

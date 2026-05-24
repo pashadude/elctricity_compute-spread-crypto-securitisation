@@ -45,7 +45,8 @@ def test_configure_bot_profile_sets_description_commands_and_menu(monkeypatch):
     }
     methods = [method for method, _payload in calls]
     assert methods == ["setMyShortDescription", "setMyDescription", "setMyCommands", "setChatMenuButton"]
-    assert "channel posts only EXECUTE" in calls[1][1]["description"]
+    assert "live-priced compute/energy mock contract" in calls[1][1]["description"]
+    assert "Raw REJECT/DEFER" in calls[1][1]["description"]
     assert calls[3][1]["menu_button"]["web_app"]["url"] == "https://power.example.com/tg"
 
 
@@ -65,19 +66,27 @@ def test_channel_notify_dedupes_messages(tmp_path, monkeypatch):
     monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
     monkeypatch.setattr(telegram_bot, "snapshot", lambda logs=None: {
         "signal": {"latest": {"signal_id": "sig1", "direction": "electricity_expensive", "z": -2}},
-        "verdicts": [{
-            "action_payload_hash": "abc",
-            "label": "EXECUTE",
-            "surface": "crypto",
-            "instrument": "BTC/USD",
-            "reason_code": "all_gates_passed",
-        }],
+        "synthetic_instrument": {
+            "proposal_id": "abc",
+            "instrument_name": "ERCOT power compute receivable hedge note abc",
+            "outputs": {
+                "mock_hedge_construction": {
+                    "hedge_notional_usdc": 1500.0,
+                    "circle_testnet_usdc_request": 1630.0,
+                    "recommended_action": "BUY_CONTRACT",
+                    "quote_sources": ["yahoo_finance_chart"],
+                    "weighted_legs": [{"slug": "NVDA", "side": "short", "weight": -0.2}],
+                },
+            },
+        },
+        "verdicts": [],
         "positions": [],
     })
 
     assert telegram_bot.notify_channel_once(logs=tmp_path) == 1
     assert telegram_bot.notify_channel_once(logs=tmp_path) == 0
     assert len(sent) == 1
+    assert "BUY_CONTRACT mock compute/energy contract" in sent[0][1]
 
 
 def test_channel_messages_mute_rejects():
@@ -131,14 +140,15 @@ def test_latest_includes_direct_inventory_watchlist():
         }],
     })
 
+    assert "Latest mock contract" in text
     assert "research watchlist:" in text
-    assert "proposal: ERCOT power compute receivable hedge note abc123 (not_asset_backed_v0)" in text
-    assert "priced hedges: NVDA, CEG" in text
-    assert "mock hedge: 1500.00 USDC notional, Circle ask 1630.00 test USDC" in text
-    assert "agent recommendation: BUY_CONTRACT" in text
+    assert "contract: ERCOT power compute receivable hedge note abc123" in text
+    assert "live-priced basket: NVDA, CEG" in text
+    assert "funding: 1500.00 USDC notional, Circle ask 1630.00 test USDC" in text
+    assert "agent recommendation: BUY_CONTRACT while profitable" in text
     assert "weights: short NVDA -20.0%, long CEG +20.0%" in text
-    assert "pricing gaps: retxc-ec (Needs live venue price)" in text
-    assert "search next: opoint_nebius:news-grounded spread drivers" in text
+    assert "pricing gaps:" not in text
+    assert "agent scouting: opoint_nebius:news-grounded spread drivers" in text
     assert "next: Find one direct regional energy/grid-stress leg." in text
     assert "Texas Commercial Electricity Generation Sales Revenue" in text
     assert "Needs live venue price" in text
@@ -148,62 +158,45 @@ def test_latest_includes_direct_inventory_watchlist():
 def test_about_explains_watchlist_and_channel_policy(tmp_path):
     text = telegram_bot.handle_command("/start", 7, logs=tmp_path)
 
-    assert "/latest and the Mini App show IBKR ForecastTrader and Polymarket slugs" in text
-    assert "The agent proposes a synthetic instrument" in text
-    assert "The channel posts only EXECUTE spread packages" in text
-    assert "premium_gate_fail rows stay out of the channel" in text
+    assert "/latest and the Mini App show the mock contract" in text
+    assert "Buy Contract freezes a local testnet entry ticket" in text
+    assert "The channel posts mock-contract updates" in text
+    assert "premium_gate_fail" in text
     assert "judge.classify() returns EXECUTE" in text
 
 
-def test_channel_messages_group_execute_package():
+def test_channel_messages_post_mock_contract_recommendation():
     messages = telegram_bot.channel_messages({
         "runtime": {},
-        "packages": [{
-            "id": "pkg1",
-            "package_id": "pkg1",
-            "label": "EXECUTE",
-            "direction": "electricity_expensive",
-            "reason_code": "all_gates_passed",
-            "legs": [
-                {
-                    "action_payload_hash": "abc",
-                    "label": "EXECUTE",
-                    "surface": "polymarket",
-                    "side": "long",
-                    "leg_role": "direct_prediction_event",
-                    "leg_title": "Texas power price above threshold?",
-                    "leg_slug": "texas-power-price-above-threshold",
-                    "leg_end_date": "2026-06-30",
+        "synthetic_instrument": {
+            "proposal_id": "abc123",
+            "instrument_name": "ERCOT power compute receivable hedge note abc123",
+            "outputs": {
+                "mock_hedge_construction": {
+                    "hedge_notional_usdc": 1500.0,
+                    "circle_testnet_usdc_request": 1630.0,
+                    "recommended_action": "BUY_CONTRACT",
+                    "quote_sources": ["yahoo_finance_chart"],
+                    "weighted_legs": [
+                        {"slug": "NVDA", "side": "short", "weight": -0.2},
+                        {"slug": "CEG", "side": "long", "weight": 0.2},
+                    ],
                 },
-                {
-                    "action_payload_hash": "def",
-                    "label": "EXECUTE",
-                    "surface": "ibkr",
-                    "side": "short",
-                    "leg_role": "liquid_equity_proxy",
-                    "instrument": "GOOGL",
-                },
-            ],
-        }],
-        "verdicts": [{
-            "action_payload_hash": "abc",
-            "label": "EXECUTE",
-            "surface": "polymarket",
-            "instrument": "texas-power-price-above-threshold",
-            "reason_code": "all_gates_passed",
-        }],
+            },
+        },
+        "verdicts": [],
         "positions": [],
     })
 
     assert len(messages) == 1
     key, text = messages[0]
-    assert key == "package:pkg1:EXECUTE"
-    assert "EXECUTE spread package" in text
-    assert "Texas power price above threshold?" in text
-    assert "GOOGL" in text
+    assert key == "mock-contract:abc123:BUY_CONTRACT:1630.0"
+    assert "BUY_CONTRACT mock compute/energy contract" in text
+    assert "Circle ask: 1630.00 test USDC" in text
+    assert "weights: short NVDA -20%, long CEG +20%" in text
 
 
-def test_channel_package_message_excludes_reject_legs():
+def test_channel_messages_do_not_post_raw_execute_packages():
     messages = telegram_bot.channel_messages({
         "runtime": {},
         "packages": [{
@@ -225,9 +218,7 @@ def test_channel_package_message_excludes_reject_legs():
         "positions": [],
     })
 
-    assert len(messages) == 1
-    assert "BTC/USD" in messages[0][1]
-    assert "Rejected direct event" not in messages[0][1]
+    assert messages == []
 
 
 def test_channel_messages_include_runtime_errors():
@@ -249,8 +240,22 @@ def test_channel_about_dedupes(tmp_path, monkeypatch):
     assert telegram_bot.notify_channel_about_once(logs=tmp_path) == 1
     assert telegram_bot.notify_channel_about_once(logs=tmp_path) == 0
     assert sent[0][0] == "@desk"
+    assert "live-priced compute/energy mock contract" in sent[0][1]
     assert "This channel does not post repeated REJECT/DEFER rows" in sent[0][1]
-    assert "Use /latest in the bot or the Mini App" in sent[0][1]
+    assert "Mini App shows live-priced weights" in sent[0][1]
+
+
+def test_channel_feedback_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_feedback_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_feedback_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "feedback shipped" in sent[0][1]
+    assert "live-priced mock contract" in sent[0][1]
+    assert "channel and bot mute raw REJECT/DEFER/watchlist noise" in sent[0][1]
 
 
 def test_ibkr_reauth_reminder_goes_to_private_admin_and_dedupes(tmp_path, monkeypatch):

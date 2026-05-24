@@ -149,9 +149,23 @@ const requestBackendScan = async () => {
   return body.request;
 };
 
+const tgMockConstruction = (data) => data.syntheticInstrument?.outputs?.mock_hedge_construction || {};
+const tgSearchPlan = (data) => data.syntheticInstrument?.outputs?.agent_search_plan || [];
+const tgWeightedLegs = (data) => tgMockConstruction(data).weighted_legs || [];
+const tgUsdc = (value, fallback = 'Pending') => {
+  const n = Number(value || 0);
+  return n > 0 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : fallback;
+};
+const tgRecommendation = (construction) => construction.recommended_action === 'BUY_CONTRACT' ? 'Buy' : 'Monitor';
+const tgWeightLabel = (leg) => `${leg.side || 'hold'} ${leg.slug || leg.symbol || 'leg'} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`;
+
 /* ── Mini App Screens ── */
 
-const TgHome = ({ setScreen, data, requestScan }) => (
+const TgHome = ({ setScreen, data, requestScan }) => {
+  const construction = tgMockConstruction(data);
+  const searchCount = tgSearchPlan(data).length + (data.directInventory?.length || 0);
+  const recommendation = tgRecommendation(construction);
+  return (
   <TgScreen title="Botozen Power" subtitle="Compute/Energy Spread Desk">
     <div style={{ padding: '16px' }}>
       {/* Fink quote banner */}
@@ -182,12 +196,12 @@ const TgHome = ({ setScreen, data, requestScan }) => (
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
           {[
-            { label: 'PnL', value: data.pnl.totalDisplay || 'Pending', color: data.pnl.hasReconciled ? TG_THEME.green : TG_THEME.secondary },
-            { label: 'Jobs', value: String(data.pnl.wrappedJobs || 0), color: TG_THEME.text },
-            { label: 'EXECUTEs', value: String(data.pnl.executes || 0), color: TG_THEME.text },
+            { label: 'Notional', value: tgUsdc(construction.hedge_notional_usdc), color: TG_THEME.text },
+            { label: 'Circle Ask', value: tgUsdc(construction.circle_testnet_usdc_request), color: TG_THEME.orange },
+            { label: 'Action', value: recommendation, color: recommendation === 'Buy' ? TG_THEME.green : TG_THEME.orange },
           ].map((s, i) => (
             <div key={i} style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '20px', fontWeight: 700, color: s.color, fontFamily: 'SF Mono, monospace' }}>{s.value}</div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: s.color, fontFamily: 'SF Mono, monospace', overflowWrap: 'anywhere' }}>{s.value}</div>
               <div style={{ fontSize: '11px', color: TG_THEME.secondary, marginTop: '2px' }}>{s.label}</div>
             </div>
           ))}
@@ -214,10 +228,9 @@ const TgHome = ({ setScreen, data, requestScan }) => (
 
     {/* Menu */}
     <div style={{ background: TG_THEME.surface, borderRadius: '12px', margin: '0 16px 16px' }}>
-      <TgListItem icon="▦" title="Package Dashboard" subtitle="Spread, direct legs, proxy legs" accent={TG_THEME.green} onClick={() => setScreen('dashboard')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
-      <TgListItem icon="✓" title="Actionable Decisions" subtitle="EXECUTE / DEFER / CHALLENGE" accent={TG_THEME.green} onClick={() => setScreen('verdicts')} trailing={<TgBadge color={TG_THEME.green}>{data.verdicts?.length || 0}</TgBadge>} />
-      <TgListItem icon="◇" title="Arc Positions" subtitle="ERC-8183 jobs on testnet" accent={TG_THEME.orange} onClick={() => setScreen('positions')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
-      <TgListItem icon="!" title="Alerts" subtitle="Sparse package notifications" accent={TG_THEME.orange} onClick={() => setScreen('alerts')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
+      <TgListItem icon="▦" title="Mock Contract" subtitle="Buy / monitor / sell live-priced basket" accent={TG_THEME.green} onClick={() => setScreen('dashboard')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
+      <TgListItem icon="⌕" title="Agent Scouting" subtitle="IBKR, Polymarket, Opoint/Nebius research" accent={TG_THEME.blue} onClick={() => setScreen('scouting')} trailing={<TgBadge color={TG_THEME.blue}>{searchCount}</TgBadge>} />
+      <TgListItem icon="!" title="Alerts" subtitle="Sparse product and runtime updates" accent={TG_THEME.orange} onClick={() => setScreen('alerts')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
       <TgListItem icon="$" title="Subscription" subtitle="Operator plan · 5 test USDC" accent={TG_THEME.green} onClick={() => setScreen('billing')} trailing={<TgBadge color={TG_THEME.green}>$5</TgBadge>} />
     </div>
 
@@ -226,10 +239,10 @@ const TgHome = ({ setScreen, data, requestScan }) => (
       <div style={{ fontSize: '13px', color: TG_THEME.secondary, fontWeight: 600, marginBottom: '8px', paddingLeft: '4px' }}>Quick Actions</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
         {[
-          { label: 'Run Scan', icon: '▸', color: TG_THEME.green },
-          { label: 'Mock Test', icon: '◎', color: TG_THEME.orange },
+          { label: 'Run Scan', icon: '▸', color: TG_THEME.green, screen: 'scan' },
+          { label: 'Contract', icon: '◎', color: TG_THEME.orange, screen: 'dashboard' },
         ].map((a, i) => (
-          <button key={i} onClick={() => setScreen('scan')} style={{
+          <button key={i} onClick={() => setScreen(a.screen)} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
             padding: '14px', borderRadius: '10px', border: 'none', cursor: 'pointer',
             background: TG_THEME.surface, color: a.color,
@@ -239,10 +252,14 @@ const TgHome = ({ setScreen, data, requestScan }) => (
       </div>
     </div>
   </TgScreen>
-);
+  );
+};
 
-const TgDashboard = ({ setScreen, goBack, data }) => (
-  <TgScreen title="Spread Package" subtitle="Arc Testnet" onBack={goBack}>
+const TgDashboard = ({ setScreen, goBack, data }) => {
+  const weightedLegs = tgWeightedLegs(data);
+  const searchPlan = tgSearchPlan(data);
+  return (
+  <TgScreen title="Mock Contract" subtitle="Live-priced demo" onBack={goBack}>
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {/* Spread */}
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
@@ -314,132 +331,129 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
         </div>
       )}
 
-      {/* Package legs */}
+      {/* Live weighted basket */}
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
         <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-          Current Spread Package
+          Live-priced basket
         </div>
         <div style={{ padding: '0 16px 10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-          {['1 Spread', '2 Package', '3 Legs', '4 Judge→Arc'].map((step, i) => (
+          {['1 Spread', '2 Price basket', '3 Buy/monitor', '4 Arc only if EXECUTE'].map((step, i) => (
             <div key={i} style={{ fontSize: '11px', color: TG_THEME.secondary, background: TG_THEME.elevated, borderRadius: '6px', padding: '6px 8px' }}>
               {step}
             </div>
           ))}
         </div>
-        {data.currentPackage && (
-          <div style={{ padding: '0 16px 10px' }}>
-            <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 600 }}>
-              {String(data.currentPackage.direction || data.direction || 'no_signal').replace('_', ' ')}
-            </div>
-            <div style={{ fontSize: '12px', color: TG_THEME.secondary, marginTop: '2px' }}>
-              package verdict: {data.currentPackage.label || 'PENDING'}{data.currentPackage.reason ? ` · ${data.currentPackage.reason}` : ''}
-              {data.currentPackage.repeatCount > 1 ? ` · ${data.currentPackage.repeatCount} scan rows collapsed` : ''}
-            </div>
+        <div style={{ padding: '0 16px 10px' }}>
+          <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 600 }}>
+            {String(data.direction || 'no_signal').replace('_', ' ')}
+          </div>
+          <div style={{ fontSize: '12px', color: TG_THEME.secondary, marginTop: '2px', lineHeight: 1.35 }}>
+            Mock contract is local testnet first. IBKR/Polymarket stay in scouting until they are priced and thesis-matched.
+          </div>
+        </div>
+        {weightedLegs.length ? weightedLegs.slice(0, 8).map((leg, i) => (
+          <TgListItem
+            key={`${leg.slug || leg.symbol || 'leg'}-${i}`}
+            icon={String(leg.side || '').toLowerCase() === 'short' ? '↓' : '↑'}
+            title={tgWeightLabel(leg)}
+            subtitle={leg.description || `${leg.source || 'public quote'} · ${leg.surface || 'public_market'}`}
+            trailing={<span style={{ fontFamily: 'SF Mono, monospace', fontSize: '12px', color: TG_THEME.secondary }}>{leg.last_price ? `$${Number(leg.last_price).toFixed(2)}` : 'priced'}</span>}
+          />
+        )) : (
+          <div style={{ padding: '8px 16px 12px', fontSize: '12px', color: TG_THEME.secondary }}>
+            Waiting for live prices before a mock contract is promoted.
           </div>
         )}
-        {[
-          ['Direct event / forecast', data.currentPackage?.directLegs || []],
-          ['Proxy', data.currentPackage?.proxyLegs || []],
-        ].map(([section, legs]) => (
-          <div key={section}>
-            <div style={{ padding: '8px 16px 4px', fontSize: '11px', color: TG_THEME.tertiary, fontWeight: 600, textTransform: 'uppercase' }}>
-              {section}
-            </div>
-            {legs.length ? legs.slice(0, 4).map((c, i) => {
-              const trail = c.estPnl ? `${c.estPnl} $/$` : (c.pricingStatus || 'watchlist');
-              return (
-                <TgListItem key={`${section}-${i}`} icon={surfaceIcon(c.surface)} title={c.displayName || c.instrument || 'candidate'}
-                  subtitle={`${c.surface || 'surface'} · ${c.directPairRole || c.role || 'expression leg'} · ${c.direction || c.dir || 'pending'} · ${c.sizing || 0} USDC${c.repeatCount > 1 ? ` · seen ${c.repeatCount} scans` : ''}${c.endDate ? ` · resolves ${formatEventDate(c.endDate)}` : ''}`}
-                  trailing={<span style={{ fontFamily: 'SF Mono, monospace', fontSize: '13px', color: Number(c.estPnl || 0) < 0 ? TG_THEME.red : TG_THEME.green }}>{trail}</span>}
-                />
-              );
-            }) : (
-              <div style={{ padding: '8px 16px 12px', fontSize: '12px', color: TG_THEME.secondary }}>
-                {section === 'Proxy'
-                  ? 'No proxy leg routed for this signal.'
-                  : (data.currentPackage?.directBlockedSummary || 'No direct leg currently passing discovery.')}
+      </div>
+
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          Agent scouting
+        </div>
+        {(searchPlan.length || data.directInventory?.length) ? (
+          <>
+            {searchPlan.slice(0, 3).map((item, i) => (
+              <div key={`${item.surface}-${i}`} style={{ padding: '10px 16px', borderBottom: `0.5px solid ${TG_THEME.separator}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{item.target}</div>
+                  <TgBadge color={TG_THEME.blue}>{item.surface}</TgBadge>
+                </div>
+                <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px', overflowWrap: 'anywhere' }}>
+                  {item.query || 'searching for thesis-matched priced legs'}
+                </div>
               </div>
-            )}
+            ))}
+            {(data.directInventory || []).slice(0, 4).map((leg, i) => (
+              <TgListItem
+                key={`${leg.slug || leg.instrument || 'inventory'}-${i}`}
+                icon={surfaceIcon(leg.surface)}
+                title={leg.displayName || leg.instrument || leg.slug || 'research leg'}
+                subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
+                trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.pricingStatusLabel || 'watchlist'}</span>}
+              />
+            ))}
+          </>
+        ) : (
+          <div style={{ padding: '8px 16px 12px', fontSize: '12px', color: TG_THEME.secondary }}>
+            No IBKR or Polymarket research legs are currently promoted into scouting.
           </div>
-        ))}
+        )}
       </div>
     </div>
   </TgScreen>
-);
+  );
+};
 
-const TgVerdicts = ({ setScreen, goBack, data }) => (
-  <TgScreen title="Actionable Decisions" onBack={goBack}>
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-      {!(data.verdicts || []).length && (
-        <div style={{ background: TG_THEME.surface, borderRadius: '10px', padding: '14px', fontSize: '13px', color: TG_THEME.secondary }}>
-          No actionable judge decisions in this snapshot.
+const TgScouting = ({ setScreen, goBack, data }) => {
+  const searchPlan = tgSearchPlan(data);
+  return (
+  <TgScreen title="Agent Scouting" subtitle="Research only" onBack={goBack}>
+    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ background: TG_THEME.surface, borderRadius: '10px', padding: '14px', fontSize: '13px', color: TG_THEME.secondary, lineHeight: 1.45 }}>
+        These rows are not the contract. The agent uses Opoint/Nebius, IBKR ForecastTrader, and Polymarket to find legs that are actually driven by the compute/energy spread. Public channel posts stay quiet until the mock contract changes or an operator action is needed.
+      </div>
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          Search queue
         </div>
-      )}
-      {(data.verdicts || []).slice(0, 8).map((v, i) => {
-        const colors = { EXECUTE: TG_THEME.green, REJECT: TG_THEME.red, DEFER: TG_THEME.orange, CHALLENGE: '#BF5AF2' };
-        return (
-          <div key={i} style={{ background: TG_THEME.surface, borderRadius: '10px', padding: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '15px' }}>{surfaceIcon(v.surface)}</span>
-                <span style={{ fontSize: '15px', fontWeight: 600, color: TG_THEME.text }}>{v.displayName || v.instrument}</span>
-              </div>
-              <TgBadge color={colors[v.label]}>{v.label}</TgBadge>
+        {searchPlan.length ? searchPlan.map((item, i) => (
+          <div key={`${item.surface}-${i}`} style={{ padding: '12px 16px', borderTop: i ? `0.5px solid ${TG_THEME.separator}` : 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+              <div style={{ fontSize: '14px', color: TG_THEME.text, fontWeight: 700 }}>{item.target || 'spread driver search'}</div>
+              <TgBadge color={TG_THEME.blue}>{item.surface || 'agent'}</TgBadge>
             </div>
-            <div style={{ fontSize: '12px', color: TG_THEME.secondary }}>
-              {v.reason}{v.repeatCount > 1 ? ` · seen ${v.repeatCount} scans` : ''}{v.slug ? ` · ${v.slug}` : ''}{v.endDate ? ` · resolves ${formatEventDate(v.endDate)}` : ''}
+            <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '5px', overflowWrap: 'anywhere' }}>
+              {item.query || 'looking for thesis-matched priced legs'}
             </div>
-            {v.connection && (
-              <div style={{ fontSize: '12px', color: TG_THEME.tertiary, marginTop: '6px', lineHeight: 1.35 }}>
-                {v.connection}
-              </div>
-            )}
           </div>
-        );
-      })}
+        )) : (
+          <div style={{ padding: '12px 16px', fontSize: '12px', color: TG_THEME.secondary }}>
+            Search queue is empty in this snapshot.
+          </div>
+        )}
+      </div>
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          Research watchlist
+        </div>
+        {(data.directInventory || []).length ? (data.directInventory || []).slice(0, 10).map((leg, i) => (
+          <TgListItem
+            key={`${leg.slug || leg.instrument || 'leg'}-${i}`}
+            icon={surfaceIcon(leg.surface)}
+            title={leg.displayName || leg.instrument || leg.slug || 'research leg'}
+            subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
+            trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.pricingStatusLabel || 'watchlist'}</span>}
+          />
+        )) : (
+          <div style={{ padding: '12px 16px', fontSize: '12px', color: TG_THEME.secondary }}>
+            No venue watchlist rows in this snapshot.
+          </div>
+        )}
+      </div>
     </div>
   </TgScreen>
-);
-
-const TgPositions = ({ setScreen, goBack, data }) => (
-  <TgScreen title="Arc Positions" subtitle="ERC-8183 Jobs" onBack={goBack}>
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-      {(data.positions || []).map((p, i) => (
-        <div key={i} style={{ background: TG_THEME.surface, borderRadius: '10px', padding: '14px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontFamily: 'SF Mono, monospace', fontSize: '14px', fontWeight: 700, color: TG_THEME.green }}>#{p.jobId}</span>
-              <TgBadge color={p.status === 'completed' ? TG_THEME.green : TG_THEME.orange}>{p.status}</TgBadge>
-            </div>
-            <span style={{
-              fontFamily: 'SF Mono, monospace', fontSize: '15px', fontWeight: 700,
-              color: p.pnl.startsWith('+') ? TG_THEME.green : TG_THEME.text,
-            }}>{p.pnl === '-' ? '—' : p.pnl}</span>
-          </div>
-          <div style={{ fontSize: '13px', color: TG_THEME.secondary }}>
-            {surfaceIcon(p.surface)} {p.surface} · {p.role || 'expression leg'} · {p.sizing} USDC
-          </div>
-          <div style={{ fontSize: '13px', color: TG_THEME.text, marginTop: '6px', fontWeight: 600 }}>
-            {p.displayName || p.instrument}
-          </div>
-          {(p.slug || p.endDate) && (
-            <div style={{ fontSize: '11px', color: TG_THEME.tertiary, marginTop: '3px' }}>
-              {p.slug || p.instrument}{p.endDate ? ` · resolves ${formatEventDate(p.endDate)}` : ''}
-            </div>
-          )}
-          {p.connection && (
-            <div style={{ fontSize: '12px', color: TG_THEME.secondary, marginTop: '6px', lineHeight: 1.35 }}>
-              {p.connection}
-            </div>
-          )}
-          <div style={{ fontSize: '11px', color: TG_THEME.tertiary, marginTop: '6px', fontFamily: 'SF Mono, monospace' }}>
-            {p.txHash}
-          </div>
-        </div>
-      ))}
-    </div>
-  </TgScreen>
-);
+  );
+};
 
 const TgAlerts = ({ setScreen, goBack }) => {
   const [alerts, setAlerts] = React.useState({
@@ -460,7 +474,7 @@ const TgAlerts = ({ setScreen, goBack }) => {
   return (
     <TgScreen title="Alert Settings" onBack={goBack}>
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', margin: '16px' }}>
-        {Object.entries({ signals: 'New Signals', verdicts: 'Actionable Package Decisions', positions: 'Arc Position Updates', pnl: 'PnL Thresholds', oracle: 'Oracle Evidence Updates' }).map(([k, label]) => (
+        {Object.entries({ signals: 'Mock Contract Updates', verdicts: 'Buy / Monitor Recommendations', positions: 'Operator Runtime Errors', pnl: 'PnL Drag Warnings', oracle: 'Scouting Evidence Updates' }).map(([k, label]) => (
           <TgListItem key={k} title={label} trailing={
             <Toggle on={alerts[k]} onToggle={() => setAlerts(a => ({ ...a, [k]: !a[k] }))} />
           } />
@@ -530,7 +544,7 @@ const TgBilling = ({ setScreen, goBack }) => {
             5 <span style={{ fontSize: '16px', fontWeight: 500 }}>USDC/mo</span>
           </div>
           <div style={{ fontSize: '12px', color: TG_THEME.secondary, marginTop: '8px', lineHeight: 1.4 }}>
-            Operator-lite access: package dashboard, scan commands, actionable alerts, and Arc Testnet controls.
+            Operator-lite access: live-priced mock contract, buy/monitor/sell controls, scan commands, and sparse channel alerts.
           </div>
         </div>
 
@@ -623,10 +637,10 @@ const TgScanRunning = ({ setScreen, goBack }) => {
         {step >= steps.length && (
           <div style={{ marginTop: '20px', textAlign: 'center' }}>
             {error && <div style={{ color: TG_THEME.red, fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
-            <button onClick={() => setScreen('verdicts')} style={{
+            <button onClick={() => setScreen('dashboard')} style={{
               padding: '14px 32px', borderRadius: '10px', border: 'none',
               background: TG_THEME.green, color: '#000', fontSize: '15px', fontWeight: 700, cursor: 'pointer',
-            }}>View Verdicts</button>
+            }}>View Mock Contract</button>
           </div>
         )}
       </div>
@@ -643,8 +657,8 @@ const TelegramPage = () => {
   const deviceWidth = Math.min(375, Math.max(300, viewport.width - 32));
   const deviceHeight = isMobile ? Math.min(720, Math.max(620, Math.round(deviceWidth * 1.82))) : 700;
   const screens = {
-    home: TgHome, dashboard: TgDashboard, verdicts: TgVerdicts,
-    positions: TgPositions, alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
+    home: TgHome, dashboard: TgDashboard, scouting: TgScouting,
+    alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
   };
   const Screen = screens[screen] || TgHome;
 
@@ -668,17 +682,17 @@ const TelegramPage = () => {
           fontFamily: THEME.font.body, fontSize: '16px', lineHeight: 1.7,
           color: THEME.text.secondary, marginBottom: '32px',
         }}>
-          Full Mini App experience inside Telegram. Monitor canonical compute/energy spread packages, review actionable package decisions, manage Arc positions, and pay 5 Circle test USDC without leaving the chat.
+          Full Mini App experience inside Telegram. Monitor the live-priced mock contract, buy/monitor/sell local testnet tickets, review agent scouting, and pay 5 Circle test USDC without leaving the chat.
         </p>
         <TgWebLinks />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {[
-            { title: 'Live Signal Feed', desc: 'Real-time electricity–compute spread with package alerts', IconComp: IconGrid, iconColor: TG_THEME.orange },
-            { title: 'Actionable Decisions', desc: 'Review EXECUTE/DEFER/CHALLENGE package decisions without reject spam', IconComp: IconJudge, iconColor: TG_THEME.green },
-            { title: 'Arc Settlement', desc: 'Track ERC-8183 jobs and USDC escrow on testnet', IconComp: IconArc, iconColor: TG_THEME.green },
+            { title: 'Live Mock Contract', desc: 'Real-time electricity-compute basket with notional and Circle ask', IconComp: IconGrid, iconColor: TG_THEME.orange },
+            { title: 'Buy / Monitor / Sell', desc: 'Freeze a local ticket, refresh marks, and see which leg drags PnL red', IconComp: IconJudge, iconColor: TG_THEME.green },
+            { title: 'Agent Scouting', desc: 'IBKR, Polymarket, and Opoint/Nebius are research inputs only', IconComp: IconArc, iconColor: TG_THEME.blue },
             { title: 'Circle Payments', desc: 'Operator access is 5 test USDC on Arc Testnet', IconComp: IconCoin, iconColor: TG_THEME.orange },
-            { title: 'Scan Commands', desc: 'Trigger one-shot scans and mock tests from chat', IconComp: IconSignal, iconColor: TG_THEME.green },
+            { title: 'Scan Commands', desc: 'Trigger one-shot scans while public rejects stay muted', IconComp: IconSignal, iconColor: TG_THEME.green },
           ].map((f, i) => (
             <Card key={i} hoverable style={{ padding: '16px', display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
               <f.IconComp size={24} color={f.iconColor} />
@@ -705,8 +719,8 @@ const TelegramMiniApp = () => {
   const { screen, setScreen, goBack } = useTgScreenRouter();
   const data = useTelegramBackendData();
   const screens = {
-    home: TgHome, dashboard: TgDashboard, verdicts: TgVerdicts,
-    positions: TgPositions, alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
+    home: TgHome, dashboard: TgDashboard, scouting: TgScouting,
+    alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
   };
   const Screen = screens[screen] || TgHome;
 

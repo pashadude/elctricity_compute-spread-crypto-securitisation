@@ -349,14 +349,17 @@ Telegram uses the Bot API via `TELEGRAM_BOT_TOKEN`, posts channel updates to
 Bot commands are private-chat only. The public channel is broadcast-only:
 `/status`, `/latest`, `/scan`, and `/scan_live` are ignored when posted in the
 channel or a group.
-Channel posts are intentionally sparse: runtime errors, Arc positions, and
-one grouped `EXECUTE` spread-package brief. `REJECT`, `DEFER`, and
-watchlist-only rows are muted in the channel so repeated premium-gate failures
-do not spam users. Ask the bot for `/latest` or open the Mini App when you want
-the live IBKR/Polymarket slug watchlist. Use `npm run telegram:channel-about`
-to post the one-time public explainer for this channel policy. Each notification
-pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS` (default `3`) to avoid
-Telegram rate limits.
+
+The public channel is sparse by design. It posts mock-contract buy/monitor
+recommendations, product/operator updates, and runtime errors that need
+attention. It does not post repeated `REJECT`/`DEFER` rows,
+`premium_gate_fail` rows, raw judge tables, raw Arc job tables, or
+watchlist-only slugs. Ask the bot for `/latest` or open the Mini App when you
+want the live IBKR/Polymarket/Opoint/Nebius research watchlist. Use
+`npm run telegram:channel-about` to post the one-time public explainer and
+`npm run telegram:feedback-update` to post the one-time feedback/new-features
+announcement. Each notification pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS`
+(default `3`) to avoid Telegram rate limits.
 Use `npm run telegram:configure` after token rotation to set the bot description,
 command menu, and Mini App menu button from `PUBLIC_BASE_URL`.
 Polling mode works locally without ngrok. Use `ngrok http 8080` and set
