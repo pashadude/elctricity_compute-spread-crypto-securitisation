@@ -60,6 +60,17 @@ def test_parse_float_normalizes_forecast_cents():
     assert ibkr._parse_float("nan") is None
 
 
+def test_ibkr_port_accepts_brent_strategy_alias(monkeypatch):
+    monkeypatch.delenv("IBKR_GATEWAY_PORT", raising=False)
+    monkeypatch.setenv("IBKR_PORT", "4002")
+
+    assert ibkr._ibkr_port() == 4002
+
+    monkeypatch.setenv("IBKR_GATEWAY_PORT", "7497")
+
+    assert ibkr._ibkr_port() == 7497
+
+
 def test_flatten_forecast_markets_filters_thesis():
     tree = {
         "root": {"label": "Root", "markets": []},
@@ -256,6 +267,168 @@ def test_forecast_ec_event_can_be_unpriced(monkeypatch):
     assert event["pricing_status"] == "ibkr_quote_unavailable"
     assert event["yes_prices"] == []
     assert event["yes_conid"] == "793085619"
+
+
+def test_public_quote_maps_yahoo_future_to_ibkr_front_future(monkeypatch):
+    monkeypatch.setenv("IBKR_PUBLIC_FUTURES_LIVE_FIRST", "1")
+
+    class FakeContract:
+        def __init__(self, expiry, price):
+            self.symbol = "BZ"
+            self.exchange = "NYMEX"
+            self.currency = "USD"
+            self.lastTradeDateOrContractMonth = expiry
+            self.localSymbol = f"BZ{expiry[:6]}"
+            self.conId = int(expiry)
+            self._price = price
+
+    class FakeDetail:
+        def __init__(self, contract):
+            self.contract = contract
+
+    class FakeTicker:
+        last = None
+        close = None
+        delayedLast = None
+        delayedClose = None
+        bid = None
+        ask = None
+
+        def __init__(self, price):
+            self._price = price
+
+        def marketPrice(self):
+            return self._price
+
+        def midpoint(self):
+            return float("nan")
+
+    class FakeIB:
+        def __init__(self):
+            self.requested_base_symbol = None
+
+        def reqContractDetails(self, base):
+            self.requested_base_symbol = base.symbol
+            return [
+                FakeDetail(FakeContract("20200120", 10.0)),
+                FakeDetail(FakeContract("20991220", 96.5)),
+                FakeDetail(FakeContract("21000120", 97.0)),
+            ]
+
+        def qualifyContracts(self, contract):
+            return [contract]
+
+        def reqTickers(self, contract):
+            return [FakeTicker(contract._price)]
+
+    fake_ib = FakeIB()
+    monkeypatch.setattr(ibkr, "_connect", lambda: fake_ib)
+
+    quote = ibkr.fetch_public_quote("BZ=F")
+
+    assert fake_ib.requested_base_symbol == "BZ"
+    assert quote["symbol"] == "BZ"
+    assert quote["requested_symbol"] == "BZ=F"
+    assert quote["price"] == 96.5
+    assert quote["source"] == "ibkr_tws_front_future"
+    assert quote["expiry"] == "20991220"
+
+
+def test_public_quote_uses_stock_contract_for_equity(monkeypatch):
+    monkeypatch.setattr(ibkr, "fetch_last_price", lambda symbol: 215.33 if symbol == "NVDA" else None)
+
+    quote = ibkr.fetch_public_quote("NVDA")
+
+    assert quote == {
+        "symbol": "NVDA",
+        "price": 215.33,
+        "currency": "USD",
+        "exchange": "SMART",
+        "source": "ibkr_tws_stock",
+    }
+
+
+def test_front_future_quote_falls_back_to_historical_close(monkeypatch):
+    monkeypatch.setenv("IBKR_PUBLIC_FUTURES_LIVE_FIRST", "1")
+
+    class FakeContract:
+        symbol = "NG"
+        exchange = "NYMEX"
+        currency = "USD"
+        lastTradeDateOrContractMonth = "20991220"
+        localSymbol = "NGZ99"
+        conId = 123
+
+    class FakeDetail:
+        contract = FakeContract()
+
+    class EmptyTicker:
+        last = None
+        close = None
+        delayedLast = None
+        delayedClose = None
+        bid = None
+        ask = None
+
+        def marketPrice(self):
+            return float("nan")
+
+        def midpoint(self):
+            return float("nan")
+
+    class FakeBar:
+        def __init__(self, close):
+            self.close = close
+
+    class FakeIB:
+        def reqContractDetails(self, base):
+            return [FakeDetail()]
+
+        def qualifyContracts(self, contract):
+            return [contract]
+
+        def reqTickers(self, contract):
+            return [EmptyTicker()]
+
+        def reqMktData(self, contract, *args):
+            return EmptyTicker()
+
+        def sleep(self, seconds):
+            return None
+
+        def cancelMktData(self, contract):
+            return None
+
+        def reqHistoricalData(self, contract, **kwargs):
+            return [FakeBar(3.0), FakeBar(3.21)]
+
+    monkeypatch.setattr(ibkr, "_connect", lambda: FakeIB())
+
+    quote = ibkr.fetch_public_quote("NG=F")
+
+    assert quote["price"] == 3.21
+    assert quote["source"] == "ibkr_tws_front_future"
+
+
+def test_public_quote_falls_back_to_brent_strategy_csv(tmp_path, monkeypatch):
+    path = tmp_path / "ibkr_energy_history.csv"
+    path.write_text(
+        "date,symbol,expiry,settle,volume\n"
+        "2026-05-20,BZ,20260828,99.5,100\n"
+        "2026-05-21,BZ,20260731,96.5,100\n"
+        "2026-05-21,BZ,20260828,97.2,100\n"
+        "2026-05-21,NG,20260729,3.2,100\n"
+    )
+    monkeypatch.setenv("IBKR_ENERGY_HISTORY_CSV", str(path))
+    monkeypatch.setattr(ibkr, "fetch_front_future_quote", lambda *args, **kwargs: None)
+
+    quote = ibkr.fetch_public_quote("BZ=F")
+
+    assert quote["price"] == 96.5
+    assert quote["expiry"] == "20260731"
+    assert quote["requested_symbol"] == "BZ=F"
+    assert quote["source"] == "ibkr_energy_history_csv"
+    assert quote["stale"] is True
 
 
 def test_simulate_prediction_fill():

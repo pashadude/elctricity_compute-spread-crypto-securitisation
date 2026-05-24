@@ -38,6 +38,7 @@ DEFAULT_POLYMARKET_DIRECT_EVENT_SLUGS = (
 )
 DEFAULT_PUBLIC_HEDGE_SYMBOLS = ("NVDA", "VRT", "ETN", "CEG", "NRG", "BTC-USD", "ETH-USD")
 DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES = ("yahoo",)
+DEFAULT_IBKR_FORECAST_PROXY_PRICE_SOURCES = ("ibkr", "yahoo")
 IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
     "RETXC": {
         "title": "Texas Commercial Electricity Generation Sales Revenue",
@@ -548,12 +549,12 @@ def _pricing_status_label(status: Any) -> str:
 
 def _fetch_ibkr_public_quote(symbol: str) -> dict[str, Any] | None:
     clean = str(symbol or "").strip().upper()
-    if not clean or "-" in clean:
+    if not clean:
         return None
     try:
-        from adapters.ibkr import fetch_last_price
+        from adapters.ibkr import fetch_public_quote
 
-        price = fetch_last_price(clean)
+        quote = fetch_public_quote(clean)
     except Exception as exc:
         return {
             "symbol": clean,
@@ -561,15 +562,9 @@ def _fetch_ibkr_public_quote(symbol: str) -> dict[str, Any] | None:
             "source": "ibkr_tws",
             "error": exc.__class__.__name__,
         }
-    if price is None:
+    if not isinstance(quote, dict) or quote.get("price") is None:
         return None
-    return {
-        "symbol": clean,
-        "price": float(price),
-        "currency": "USD",
-        "exchange": "SMART",
-        "source": "ibkr_tws",
-    }
+    return quote
 
 
 def _fetch_alpaca_public_quote(symbol: str) -> dict[str, Any] | None:
@@ -623,18 +618,25 @@ def _fetch_yahoo_public_quote(symbol: str) -> dict[str, Any] | None:
         }
 
 
-def _fetch_public_quote(symbol: str) -> dict[str, Any] | None:
+def _fetch_public_quote(symbol: str, sources: list[str] | tuple[str, ...] | None = None) -> dict[str, Any] | None:
     cache_key = str(symbol or "").strip().upper()
     if not cache_key:
         return None
-    sources = [item.lower() for item in _env_csv("PUBLIC_HEDGE_PRICE_SOURCES", DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES)]
-    source_key = ",".join(sources) or "yahoo"
+    selected_sources = [
+        item.lower()
+        for item in (
+            list(sources)
+            if sources is not None
+            else _env_csv("PUBLIC_HEDGE_PRICE_SOURCES", DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES)
+        )
+    ]
+    source_key = ",".join(selected_sources) or "yahoo"
     cached = cache.get("public_quote", f"{source_key}|{cache_key}")
     if isinstance(cached, dict):
         return cached
     quote: dict[str, Any] | None = None
     errors: list[str] = []
-    for source in sources:
+    for source in selected_sources:
         if source == "ibkr":
             quote = _fetch_ibkr_public_quote(cache_key)
         elif source == "alpaca":
@@ -762,7 +764,8 @@ def _ibkr_external_proxy_quote_fields(symbol: str, pricing_status: str) -> dict[
     proxy_symbol = str(meta.get("symbol") or "").strip().upper()
     if not proxy_symbol:
         return {}
-    quote = _fetch_public_quote(proxy_symbol)
+    sources = _env_csv("IBKR_FORECAST_PROXY_PRICE_SOURCES", DEFAULT_IBKR_FORECAST_PROXY_PRICE_SOURCES)
+    quote = _fetch_public_quote(proxy_symbol, sources=sources)
     price = quote.get("price") if isinstance(quote, dict) else None
     base = {
         "external_proxy_symbol": proxy_symbol,
@@ -777,6 +780,10 @@ def _ibkr_external_proxy_quote_fields(symbol: str, pricing_status: str) -> dict[
             "external_proxy_currency": quote.get("currency", ""),
             "external_proxy_exchange": quote.get("exchange", ""),
             "external_proxy_source": quote.get("source", ""),
+            "external_proxy_source_priority": quote.get("source_priority", ""),
+            "external_proxy_regular_market_time": quote.get("regular_market_time", ""),
+            "external_proxy_expiry": quote.get("expiry", ""),
+            "external_proxy_stale": bool(quote.get("stale")),
         })
     return base
 

@@ -12,6 +12,41 @@ const TG_BOT_URL = 'https://t.me/BotozenPowerBot';
 const TG_CHANNEL_URL = 'https://t.me/botozen_power';
 const TG_MINI_APP_PATH = '/tg';
 
+const tgHasProxyPrice = (leg = {}) => (
+  leg.externalProxyLastPrice !== null
+  && leg.externalProxyLastPrice !== undefined
+  && Number.isFinite(Number(leg.externalProxyLastPrice))
+);
+
+const tgProxySourceLabel = (leg = {}) => {
+  const low = String(leg.externalProxySource || '').toLowerCase();
+  if (low === 'ibkr_energy_history_csv') return `IBKR paper CSV${leg.externalProxyStale ? ' · stale' : ''}`;
+  if (low === 'ibkr_tws_front_future') return 'IBKR paper TWS';
+  if (low === 'ibkr_tws_stock') return 'IBKR paper TWS';
+  if (low === 'yahoo_finance_chart') return 'Yahoo fallback';
+  if (low === 'alpaca_market_data') return 'Alpaca fallback';
+  return leg.externalProxySource || '';
+};
+
+const tgInventorySubtitle = (leg = {}) => {
+  const parts = [
+    leg.surface || 'surface',
+    leg.directPairRole || leg.role || 'research only',
+  ];
+  if (leg.externalProxySymbol) parts.push(`proxy ${leg.externalProxySymbol}`);
+  const source = tgProxySourceLabel(leg);
+  if (source) parts.push(source);
+  if (leg.externalProxyRegularMarketTime) parts.push(`as of ${leg.externalProxyRegularMarketTime}`);
+  if (leg.endDate) parts.push(`resolves ${formatEventDate(leg.endDate)}`);
+  return parts.filter(Boolean).join(' · ');
+};
+
+const tgInventoryTrailing = (leg = {}) => (
+  tgHasProxyPrice(leg)
+    ? `$${Number(leg.externalProxyLastPrice).toFixed(2)}`
+    : (leg.pricingStatusLabel || 'watchlist')
+);
+
 const TgScreen = ({ children, title, subtitle, onBack, style }) => (
   <div style={{
     background: TG_THEME.bg, height: '100%', minHeight: '100%', display: 'flex', flexDirection: 'column',
@@ -388,8 +423,8 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                 key={`${leg.slug || leg.instrument || 'inventory'}-${i}`}
                 icon={surfaceIcon(leg.surface)}
                 title={leg.displayName || leg.instrument || leg.slug || 'research leg'}
-                subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.externalProxySymbol ? ` · proxy ${leg.externalProxySymbol}` : ''}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
-                trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.externalProxyLastPrice ? `$${Number(leg.externalProxyLastPrice).toFixed(2)}` : (leg.pricingStatusLabel || 'watchlist')}</span>}
+                subtitle={tgInventorySubtitle(leg)}
+                trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{tgInventoryTrailing(leg)}</span>}
               />
             ))}
           </>
@@ -441,8 +476,8 @@ const TgScouting = ({ setScreen, goBack, data }) => {
             key={`${leg.slug || leg.instrument || 'leg'}-${i}`}
             icon={surfaceIcon(leg.surface)}
             title={leg.displayName || leg.instrument || leg.slug || 'research leg'}
-            subtitle={`${leg.surface || 'surface'} · ${leg.directPairRole || leg.role || 'research only'}${leg.externalProxySymbol ? ` · proxy ${leg.externalProxySymbol}` : ''}${leg.endDate ? ` · resolves ${formatEventDate(leg.endDate)}` : ''}`}
-            trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{leg.externalProxyLastPrice ? `$${Number(leg.externalProxyLastPrice).toFixed(2)}` : (leg.pricingStatusLabel || 'watchlist')}</span>}
+            subtitle={tgInventorySubtitle(leg)}
+            trailing={<span style={{ fontSize: '11px', color: TG_THEME.secondary }}>{tgInventoryTrailing(leg)}</span>}
           />
         )) : (
           <div style={{ padding: '12px 16px', fontSize: '12px', color: TG_THEME.secondary }}>

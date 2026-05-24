@@ -78,6 +78,27 @@ The router then expresses that package on available surfaces:
   `PUBLIC_HEDGE_PRICE_SOURCES=ibkr,alpaca,yahoo` to try IBKR TWS and Alpaca
   market data before falling back to Yahoo. These public-market rows are liquid
   hedge proxies, not direct claims on compute or electricity.
+- **IBKR terminal proxy marks:** when a ForecastTrader EC leg is visible but
+  IBKR does not return a usable EC bid/ask/last, the dashboard may attach a
+  separate proxy mark. `IBKR_FORECAST_PROXY_PRICE_SOURCES=ibkr,yahoo` is the
+  default, so `ITNVD -> NVDA` is read through TWS first and `CRUDB -> BZ=F` /
+  `NGP -> NG=F` are mapped to front-month NYMEX futures through the same
+  terminal path used by the Brent strategy repo. This still does not convert
+  the proxy mark into an EC contract price.
+  The socket quote path accepts either `IBKR_GATEWAY_PORT` or the Brent repo's
+  `IBKR_PORT` alias. Use paper ports by default: `4002` for IB Gateway paper or
+  `7497` for TWS paper. Live ports are `4001` / `7496` and should not be used
+  for this demo unless the operator explicitly changes the risk mode.
+  If IBKR blocks live and historical market data because another session owns
+  the data bridge, the adapter can fall back to the Brent repo's local
+  `improm_signal/data/ibkr_energy_history.csv` file, or an explicit
+  `IBKR_ENERGY_HISTORY_CSV=/path/to/ibkr_energy_history.csv`. Those marks are
+  labelled `ibkr_energy_history_csv` and stale, not live EC prices.
+  Docker mounts `${IBKR_ENERGY_HISTORY_DATA_DIR:-../../brent_strategy/improm_signal/data}`
+  read-only at `/brent_strategy_data` so the website can use the same fallback.
+  For demo reliability, energy futures proxy marks prefer that local IBKR CSV
+  first; set `IBKR_PUBLIC_FUTURES_LIVE_FIRST=1` only when you want to force a
+  live TWS/Gateway futures quote attempt before the CSV fallback.
 - **Crypto miner-margin proxies:** BTC/USD and ETH/USD paper/live-read legs
   are used only on `electricity_expensive` signals and are labelled as proxy
   evidence, not the spread claim.
@@ -356,9 +377,10 @@ attention. It does not post repeated `REJECT`/`DEFER` rows,
 `premium_gate_fail` rows, raw judge tables, raw Arc job tables, or
 watchlist-only slugs. Ask the bot for `/latest` or open the Mini App when you
 want the live IBKR/Polymarket/Opoint/Nebius research watchlist. Use
-`npm run telegram:channel-about` to post the one-time public explainer and
+`npm run telegram:channel-about` to post the one-time public explainer,
 `npm run telegram:feedback-update` to post the one-time feedback/new-features
-announcement. Each notification pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS`
+announcement, and `npm run telegram:market-data-update` to post the IBKR
+paper-terminal/proxy-source labelling update. Each notification pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS`
 (default `3`) to avoid Telegram rate limits.
 Use `npm run telegram:configure` after token rotation to set the bot description,
 command menu, and Mini App menu button from `PUBLIC_BASE_URL`.
@@ -480,11 +502,14 @@ resolved before quotes or orders. When Client Portal returns EC metadata
 without bid/ask/last fields, the adapter now attempts a read-only delayed TWS
 EC snapshot fallback through `IBKR_GATEWAY_PORT` and marks the row
 `ibkr_quote_unavailable` if both paths lack a usable price. The dashboard can
-still attach a clearly labelled external proxy quote from Yahoo/Alpaca/IBKR
-public-market sources (`IBKR_FORECAST_PROXY_QUOTE_FETCH=1`, default on), for
-example ITNVD -> NVDA or CRUDB -> BZ=F. That proxy quote is not treated as the
-ForecastTrader EC price. Kalshi and live external venue execution
-remain deferred. Crypto proxy PnL is not counted as direct
+still attach a clearly labelled external proxy quote from IBKR TWS, Yahoo, or
+Alpaca public-market sources (`IBKR_FORECAST_PROXY_QUOTE_FETCH=1`, default on;
+`IBKR_FORECAST_PROXY_PRICE_SOURCES=ibkr,yahoo` by default), for example ITNVD
+-> NVDA or CRUDB -> BZ=F front Brent. That proxy quote is not treated as the
+ForecastTrader EC price. CME account data can be added later as an official
+futures/settlement source, but it should not be labelled as a ForecastTrader EC
+quote unless the venue contract IDs actually map. Kalshi and live external
+venue execution remain deferred. Crypto proxy PnL is not counted as direct
 spread-securitization proof; it must be reconciled separately.
 
 The current EIA adapter uses EIA's public electricity data as an ERCOT/TX

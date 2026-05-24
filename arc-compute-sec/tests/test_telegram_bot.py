@@ -258,6 +258,19 @@ def test_channel_feedback_update_dedupes(tmp_path, monkeypatch):
     assert "channel and bot mute raw REJECT/DEFER/watchlist noise" in sent[0][1]
 
 
+def test_channel_market_data_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_market_data_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_market_data_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "IBKR paper-terminal marks shipped" in sent[0][1]
+    assert "IBKR paper CSV / stale" in sent[0][1]
+    assert "not live EC prices" in sent[0][1]
+
+
 def test_ibkr_reauth_reminder_goes_to_private_admin_and_dedupes(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM_ADMIN_USER_IDS", "1145119")
     monkeypatch.setenv("IBKR_REAUTH_REMINDER_ENABLED", "1")

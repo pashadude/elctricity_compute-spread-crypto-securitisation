@@ -2,6 +2,7 @@
 
 This adapter ONLY uses the paper-trading account. It connects to the IB
 Gateway/TWS on `IBKR_HOST:IBKR_GATEWAY_PORT` (defaults 127.0.0.1:4002).
+`IBKR_PORT` is accepted as a compatibility alias for the Brent strategy repo.
 The operator must have Gateway running in paper mode before any chain
 phase starts; pre-Gate-A this adapter is unreachable.
 
@@ -13,13 +14,15 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import csv
 import hashlib
 import json
 import math
 import os
 import re
 import time
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -27,9 +30,6 @@ import requests
 # `ib_insync` requires a running asyncio event loop on import in some
 # environments. We try to lazy-init.
 
-_DEFAULT_HOST = os.environ.get("IBKR_HOST", "127.0.0.1")
-_DEFAULT_PORT = int(os.environ.get("IBKR_GATEWAY_PORT", "4002"))
-_DEFAULT_CLIENT_ID = int(os.environ.get("IBKR_CLIENT_ID", "42"))
 _ib_singleton: Any = None
 _forecast_tws_unavailable_reason: str | None = None
 _FORECAST_KEYWORDS = (
@@ -43,6 +43,20 @@ _TWS_FORECAST_TERMS = (
     "temperature", "weather", "Nvidia", "AI", "industrial production",
     "Fed Funds", "CPI", "unemployment", "GDP",
 )
+_PUBLIC_FUTURE_SYMBOLS: dict[str, tuple[str, str, str]] = {
+    "CL": ("CL", "NYMEX", "USD"),
+    "CL=F": ("CL", "NYMEX", "USD"),
+    "BZ": ("BZ", "NYMEX", "USD"),
+    "BZ=F": ("BZ", "NYMEX", "USD"),
+    "NG": ("NG", "NYMEX", "USD"),
+    "NG=F": ("NG", "NYMEX", "USD"),
+    "RB": ("RB", "NYMEX", "USD"),
+    "RB=F": ("RB", "NYMEX", "USD"),
+    "HO": ("HO", "NYMEX", "USD"),
+    "HO=F": ("HO", "NYMEX", "USD"),
+    "ZQ": ("ZQ", "CBOT", "USD"),
+    "ZQ=F": ("ZQ", "CBOT", "USD"),
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -50,6 +64,27 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ibkr_host() -> str:
+    return os.environ.get("IBKR_HOST", "127.0.0.1")
+
+
+def _ibkr_port() -> int:
+    # Brent strategy uses IBKR_PORT; this repo historically used
+    # IBKR_GATEWAY_PORT. Gateway paper=4002, TWS paper=7497.
+    raw = os.environ.get("IBKR_GATEWAY_PORT") or os.environ.get("IBKR_PORT") or "4002"
+    try:
+        return int(raw)
+    except ValueError:
+        return 4002
+
+
+def _ibkr_client_id() -> int:
+    try:
+        return int(os.environ.get("IBKR_CLIENT_ID", "42"))
+    except ValueError:
+        return 42
 
 
 def _cp_timeout() -> float:
@@ -244,6 +279,46 @@ def _parse_float(value: Any) -> float | None:
     if out > 1.0 and out <= 100.0:
         return out / 100.0
     return out if out <= 1.0 else None
+
+
+def _parse_positive_price(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isfinite(out) and out > 0:
+        return out
+    return None
+
+
+def _ticker_public_price(ticker: Any) -> float | None:
+    """Extract a positive stock/futures quote from an ib_insync ticker."""
+    candidates: list[Any] = []
+    try:
+        candidates.append(ticker.marketPrice())
+    except Exception:
+        pass
+    candidates.extend([
+        getattr(ticker, "last", None),
+        getattr(ticker, "close", None),
+    ])
+    try:
+        candidates.append(ticker.midpoint())
+    except Exception:
+        pass
+    candidates.extend([
+        getattr(ticker, "delayedLast", None),
+        getattr(ticker, "delayedClose", None),
+    ])
+    for cand in candidates:
+        price = _parse_positive_price(cand)
+        if price is not None:
+            return price
+    bid = _parse_positive_price(getattr(ticker, "bid", None))
+    ask = _parse_positive_price(getattr(ticker, "ask", None))
+    if bid is not None and ask is not None and bid <= ask:
+        return (bid + ask) / 2.0
+    return None
 
 
 def _snapshot_price(row: dict[str, Any]) -> float | None:
@@ -696,6 +771,9 @@ def _connect():
     global _ib_singleton
     if _ib_singleton is not None and _ib_singleton.isConnected():
         return _ib_singleton
+    host = _ibkr_host()
+    port = _ibkr_port()
+    client_id = _ibkr_client_id()
     try:
         # Ensure there is an event loop in this thread (Python 3.12 doesn't
         # implicitly create one).
@@ -708,7 +786,7 @@ def _connect():
             asyncio.set_event_loop(loop)
         from ib_insync import IB
         ib = IB()
-        ib.connect(_DEFAULT_HOST, _DEFAULT_PORT, clientId=_DEFAULT_CLIENT_ID, timeout=8)
+        ib.connect(host, port, clientId=client_id, timeout=8)
         # IBKR paper accounts don't have a real-time market-data
         # subscription; reqTickers() returns NaN otherwise. Type 3 =
         # DELAYED_FROZEN — free, returns the last delayed quote. Switching
@@ -719,8 +797,9 @@ def _connect():
         return ib
     except Exception as exc:
         raise RuntimeError(
-            f"IBKR Gateway not reachable at {_DEFAULT_HOST}:{_DEFAULT_PORT} "
-            f"(clientId={_DEFAULT_CLIENT_ID}). Start IB Gateway in paper-trading mode. "
+            f"IBKR Gateway not reachable at {host}:{port} "
+            f"(clientId={client_id}). Start IB Gateway/TWS API in paper-trading mode "
+            "(Gateway paper=4002, TWS paper=7497). "
             f"Underlying error: {exc!r}"
         )
 
@@ -843,6 +922,194 @@ def simulate_prediction_fill(
     }
 
 
+def _front_future_contract(symbol: str, exchange: str, currency: str) -> Any | None:
+    ib = _connect()
+    from ib_insync import Future
+
+    details = ib.reqContractDetails(Future(symbol=symbol, exchange=exchange, currency=currency))
+    today = datetime.now(UTC).strftime("%Y%m%d")
+    contracts: list[Any] = []
+    for detail in details or []:
+        contract = getattr(detail, "contract", None)
+        expiry = str(getattr(contract, "lastTradeDateOrContractMonth", "") or "")
+        if not contract or not expiry:
+            continue
+        expiry_key = expiry[:8] if len(expiry) >= 8 else f"{expiry[:6]}01"
+        if expiry_key >= today:
+            contracts.append(contract)
+    contracts.sort(key=lambda c: str(getattr(c, "lastTradeDateOrContractMonth", "") or ""))
+    return contracts[0] if contracts else None
+
+
+def _latest_price_for_contract(contract: Any) -> float | None:
+    ib = _connect()
+    qualified = ib.qualifyContracts(contract)
+    if qualified:
+        contract = qualified[0]
+    tickers = ib.reqTickers(contract)
+    ticker = tickers[0] if tickers else None
+    price = _ticker_public_price(ticker) if ticker is not None else None
+    if price is not None:
+        return price
+    try:
+        wait_seconds = max(0.5, float(os.environ.get("IBKR_PUBLIC_QUOTE_WAIT_SECONDS", "4.0")))
+    except ValueError:
+        wait_seconds = 4.0
+    ticker = ib.reqMktData(contract, "", False, False)
+    ib.sleep(wait_seconds)
+    price = _ticker_public_price(ticker)
+    try:
+        ib.cancelMktData(contract)
+    except Exception:
+        pass
+    if price is not None:
+        return price
+    try:
+        bars = ib.reqHistoricalData(
+            contract,
+            endDateTime="",
+            durationStr=os.environ.get("IBKR_PUBLIC_QUOTE_HISTORY_DURATION", "5 D"),
+            barSizeSetting="1 day",
+            whatToShow=os.environ.get("IBKR_PUBLIC_QUOTE_HISTORY_WHAT", "TRADES"),
+            useRTH=True,
+            formatDate=1,
+        )
+    except Exception:
+        return None
+    for bar in reversed(list(bars or [])):
+        close = _parse_positive_price(getattr(bar, "close", None))
+        if close is not None:
+            return close
+    return None
+
+
+def fetch_front_future_quote(symbol: str, *, exchange: str, currency: str = "USD") -> dict[str, Any] | None:
+    """Read a delayed/live front-month futures mark from TWS/Gateway.
+
+    This mirrors the Brent strategy's terminal workflow: enumerate futures
+    contracts through IBKR, choose the nearest non-expired expiry, and read a
+    delayed/live market-data mark. It is a read-only proxy quote, not a
+    ForecastTrader EC contract price.
+    """
+    root = str(symbol or "").strip().upper()
+    if not root:
+        return None
+    contract = _front_future_contract(root, exchange, currency)
+    if contract is None:
+        return None
+    price = _latest_price_for_contract(contract)
+    if price is None:
+        return None
+    return {
+        "symbol": root,
+        "price": float(price),
+        "currency": str(getattr(contract, "currency", None) or currency),
+        "exchange": str(getattr(contract, "exchange", None) or exchange),
+        "local_symbol": str(getattr(contract, "localSymbol", None) or ""),
+        "expiry": str(getattr(contract, "lastTradeDateOrContractMonth", None) or ""),
+        "conid": str(getattr(contract, "conId", None) or ""),
+        "source": "ibkr_tws_front_future",
+    }
+
+
+def _energy_history_csv_paths() -> list[Path]:
+    raw = os.environ.get("IBKR_ENERGY_HISTORY_CSV", "").strip()
+    if raw:
+        return [Path(raw).expanduser()]
+    try:
+        vsprojects = Path(__file__).resolve().parents[3]
+    except IndexError:
+        return []
+    return [vsprojects / "brent_strategy" / "improm_signal" / "data" / "ibkr_energy_history.csv"]
+
+
+def fetch_energy_history_csv_quote(symbol: str) -> dict[str, Any] | None:
+    clean = str(symbol or "").strip().upper()
+    future = _PUBLIC_FUTURE_SYMBOLS.get(clean)
+    if not future:
+        return None
+    root, exchange, currency = future
+    if root not in {"CL", "BZ", "NG", "RB", "HO"}:
+        return None
+    best: dict[str, Any] | None = None
+    for path in _energy_history_csv_paths():
+        if not path.exists():
+            continue
+        try:
+            with path.open(newline="") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    if str(row.get("symbol") or "").strip().upper() != root:
+                        continue
+                    price = _parse_positive_price(row.get("settle"))
+                    if price is None:
+                        continue
+                    candidate = {
+                        "date": str(row.get("date") or ""),
+                        "expiry": str(row.get("expiry") or ""),
+                        "price": price,
+                    }
+                    if (
+                        best is None
+                        or candidate["date"] > best["date"]
+                        or (candidate["date"] == best["date"] and candidate["expiry"] < best["expiry"])
+                    ):
+                        best = candidate
+        except OSError:
+            continue
+    if best is None:
+        return None
+    return {
+        "symbol": root,
+        "requested_symbol": clean,
+        "price": float(best["price"]),
+        "currency": currency,
+        "exchange": exchange,
+        "expiry": best["expiry"],
+        "regular_market_time": best["date"],
+        "source": "ibkr_energy_history_csv",
+        "stale": True,
+    }
+
+
+def fetch_public_quote(symbol: str) -> dict[str, Any] | None:
+    """Read a public proxy quote from TWS/Gateway.
+
+    Stocks use SMART stock contracts. Energy/rate futures accept both IBKR root
+    symbols (`BZ`, `NG`) and Yahoo-style futures tickers (`BZ=F`, `NG=F`).
+    """
+    clean = str(symbol or "").strip().upper()
+    if not clean:
+        return None
+    future = _PUBLIC_FUTURE_SYMBOLS.get(clean)
+    if future:
+        root, exchange, currency = future
+        if not _env_bool("IBKR_PUBLIC_FUTURES_LIVE_FIRST", False):
+            quote = fetch_energy_history_csv_quote(clean)
+            if quote:
+                return quote
+        try:
+            quote = fetch_front_future_quote(root, exchange=exchange, currency=currency)
+        except RuntimeError:
+            quote = None
+        if quote:
+            quote["requested_symbol"] = clean
+            return quote
+        return fetch_energy_history_csv_quote(clean)
+    if "-" in clean:
+        return None
+    price = fetch_last_price(clean)
+    if price is None:
+        return None
+    return {
+        "symbol": clean,
+        "price": float(price),
+        "currency": "USD",
+        "exchange": "SMART",
+        "source": "ibkr_tws_stock",
+    }
+
+
 def fetch_last_price(symbol: str) -> float | None:
     """Used by the Phase 0.6 smoke test.
 
@@ -851,7 +1118,6 @@ def fetch_last_price(symbol: str) -> float | None:
     accounts: marketPrice (NaN on delayed), last/close/midpoint, then
     explicit delayed fields, finally bid/ask midpoint.
     """
-    import math
     try:
         ib = _connect()
     except RuntimeError as exc:
@@ -861,18 +1127,4 @@ def fetch_last_price(symbol: str) -> float | None:
     contract = Stock(symbol, "SMART", "USD")
     ib.qualifyContracts(contract)
     [tk] = ib.reqTickers(contract)
-    for cand in (tk.marketPrice(), tk.last, tk.close, tk.midpoint(),
-                 getattr(tk, "delayedLast", None), getattr(tk, "delayedClose", None)):
-        try:
-            v = float(cand)
-            if math.isfinite(v) and v > 0:
-                return v
-        except (TypeError, ValueError):
-            continue
-    # Final fallback: bid/ask midpoint if both available
-    try:
-        if tk.bid > 0 and tk.ask > 0:
-            return (tk.bid + tk.ask) / 2.0
-    except Exception:
-        pass
-    return None
+    return _ticker_public_price(tk)

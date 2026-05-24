@@ -15,12 +15,14 @@ services:
       IBKR_HOST: host.docker.internal
       IBKR_CLIENT_ID: ${IBKR_API_CLIENT_ID:-42}
       IBKR_CP_BASE_URL: ${IBKR_DOCKER_CP_BASE_URL:-https://host.docker.internal:5055/v1/api}
+      IBKR_ENERGY_HISTORY_CSV: ${IBKR_DOCKER_ENERGY_HISTORY_CSV:-/brent_strategy_data/ibkr_energy_history.csv}
     ports:
       - "${PORT:-8080}:8080"
     volumes:
       - ./logs:/app/logs
       - ../frontend:/frontend:ro
       - ${UPSTREAM_RELAYER_PATH:-../../py-builder-relayer-client}:/app/upstream/py-builder-relayer-client:ro
+      - ${IBKR_ENERGY_HISTORY_DATA_DIR:-../../brent_strategy/improm_signal/data}:/brent_strategy_data:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3).read()"]
@@ -44,10 +46,12 @@ services:
       IBKR_HOST: host.docker.internal
       IBKR_CLIENT_ID: ${IBKR_WORKER_CLIENT_ID:-43}
       IBKR_CP_BASE_URL: ${IBKR_DOCKER_CP_BASE_URL:-https://host.docker.internal:5055/v1/api}
+      IBKR_ENERGY_HISTORY_CSV: ${IBKR_DOCKER_ENERGY_HISTORY_CSV:-/brent_strategy_data/ibkr_energy_history.csv}
     volumes:
       - ./logs:/app/logs
       - ../frontend:/frontend:ro
       - ${UPSTREAM_RELAYER_PATH:-../../py-builder-relayer-client}:/app/upstream/py-builder-relayer-client:ro
+      - ${IBKR_ENERGY_HISTORY_DATA_DIR:-../../brent_strategy/improm_signal/data}:/brent_strategy_data:ro
     restart: unless-stopped
 
   telegram:
@@ -65,8 +69,10 @@ services:
       IBKR_HOST: host.docker.internal
       IBKR_CLIENT_ID: ${IBKR_TELEGRAM_CLIENT_ID:-44}
       IBKR_CP_BASE_URL: ${IBKR_DOCKER_CP_BASE_URL:-https://host.docker.internal:5055/v1/api}
+      IBKR_ENERGY_HISTORY_CSV: ${IBKR_DOCKER_ENERGY_HISTORY_CSV:-/brent_strategy_data/ibkr_energy_history.csv}
     volumes:
       - ./logs:/app/logs
       - ../frontend:/frontend:ro
       - ${UPSTREAM_RELAYER_PATH:-../../py-builder-relayer-client}:/app/upstream/py-builder-relayer-client:ro
+      - ${IBKR_ENERGY_HISTORY_DATA_DIR:-../../brent_strategy/improm_signal/data}:/brent_strategy_data:ro
     restart: unless-stopped

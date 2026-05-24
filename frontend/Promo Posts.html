@@ -177,6 +177,7 @@
         A: { headline: 'Feedback shipped:\nlive-priced mock\ncontract', accent: 'Product update', stat: '1,560', statLabel: 'Circle Test USDC Ask', bg: `linear-gradient(145deg, #060a08 0%, #0d1a12 50%, #0a1510 100%)` },
         B: { headline: 'Buy, monitor,\nsell the spread\nmock', accent: 'Mini App', stat: '7', statLabel: 'Live-Priced Legs', bg: `linear-gradient(145deg, #060a08 0%, #111916 50%, #0a0f0c 100%)` },
         C: { headline: 'IBKR + Polymarket\nare scouting,\nnot the funnel', accent: 'No reject spam', stat: '280K', statLabel: 'News Sources', bg: `linear-gradient(145deg, #060a08 0%, #0f1a15 50%, #081210 100%)` },
+        D: { headline: 'IBKR paper marks:\nvisible, labelled,\nand honest', accent: 'Market data fix', stat: '102.58', statLabel: 'Brent CSV Mark', bg: `linear-gradient(145deg, #060a08 0%, #122018 48%, #07110d 100%)` },
       };
       const v = variants[variant];
 
@@ -225,6 +226,7 @@
                 ...(variant === 'A' ? [{ val: '7', label: 'Weighted Legs' }, { val: 'Quiet', label: 'Reject Rows' }] : []),
                 ...(variant === 'B' ? [{ val: 'Buy', label: 'Local Ticket' }, { val: 'Sell', label: 'PnL Drag Explainer' }] : []),
                 ...(variant === 'C' ? [{ val: 'IBKR', label: 'Forecast Scouting' }, { val: 'Poly', label: 'Event Scouting' }] : []),
+                ...(variant === 'D' ? [{ val: '4002', label: 'Paper Gateway' }, { val: 'Stale', label: 'Clearly Labelled' }] : []),
               ].map((s, i) => (
                 <div key={i} style={{
                   flex: 1, padding: '12px', borderRadius: '10px',
@@ -307,6 +309,23 @@ Use /latest in @BotozenPowerBot or open the Mini App for the live research watch
 BTC/ETH are labelled miner-margin proxies. IBKR and Polymarket are scouting surfaces. The securitized object is the judged compute/energy spread package, not a random crypto row.
 
 Mini App: https://power.botozen.com/tg`,
+      },
+      D: {
+        title: 'Variant D — Market Data Fix',
+        text: `Product update: IBKR paper-terminal marks shipped.
+
+We fixed the confusing market-data edge case:
+- IBKR ForecastTrader EC contract status stays separate
+- IBKR paper terminal proxy marks are labelled separately
+- Yahoo/Alpaca are fallbacks, not hidden sources
+- if IBKR blocks market data because another session owns the bridge, Brent/gas can fall back to the local IBKR history file
+
+Those fallback rows are now labelled IBKR paper CSV / stale. They are not live EC prices.
+
+The contract is still the judged compute/energy package. IBKR and Polymarket are scouting surfaces until priced, thesis-matched, and approved by the judge.
+
+Mini App: https://power.botozen.com/tg
+Dashboard: https://power.botozen.com/dashboard`,
       },
     };
 
@@ -423,16 +442,18 @@ Mini App: https://power.botozen.com/tg`,
                   Feedback Posts
                 </div>
                 <h2 style={{ fontFamily: T.font.heading, fontSize: '32px', fontWeight: 800, letterSpacing: '-0.03em', color: T.text.primary, marginBottom: '8px' }}>
-                  3 Updates to Publish
+                  4 Updates to Publish
                 </h2>
                 <p style={{ fontFamily: T.font.body, fontSize: '16px', color: T.text.secondary, marginBottom: '40px' }}>
-                  Each thanks users for the feedback and explains the new Mini App, bot, and channel behavior.
+                  Each thanks users for the feedback and explains the Mini App, bot, channel behavior, and IBKR market-data labelling.
                 </p>
                 <PostPreview variant="A" />
                 <div style={{ height: '1px', background: T.border.subtle, margin: '32px 0' }}></div>
                 <PostPreview variant="B" />
                 <div style={{ height: '1px', background: T.border.subtle, margin: '32px 0' }}></div>
                 <PostPreview variant="C" />
+                <div style={{ height: '1px', background: T.border.subtle, margin: '32px 0' }}></div>
+                <PostPreview variant="D" />
               </div>
             )}
           </div>

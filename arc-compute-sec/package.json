@@ -25,6 +25,7 @@
     "telegram:configure": ".venv/bin/python -m integrations.telegram_bot --configure-bot-profile",
     "telegram:channel-about": ".venv/bin/python -m integrations.telegram_bot --post-channel-about",
     "telegram:feedback-update": ".venv/bin/python -m integrations.telegram_bot --post-feedback-update",
+    "telegram:market-data-update": ".venv/bin/python -m integrations.telegram_bot --post-market-data-update",
     "telegram:webhook:set": ".venv/bin/python -m integrations.telegram_bot --set-webhook",
     "telegram:webhook:delete": ".venv/bin/python -m integrations.telegram_bot --delete-webhook",
     "docker:up": "docker compose up --build api worker",

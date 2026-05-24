@@ -19,6 +19,7 @@ DEFAULT_NOTIFY_MAX_PER_PASS = 3
 DEFAULT_IBKR_REAUTH_REMINDER_HOURS = 4.0
 CHANNEL_ABOUT_KEY = "channel-about:v2"
 CHANNEL_FEEDBACK_UPDATE_KEY = "channel-feedback-update:v1"
+CHANNEL_MARKET_DATA_UPDATE_KEY = "channel-market-data-update:v1"
 
 
 def admin_ids() -> set[str]:
@@ -85,7 +86,7 @@ def bot_description() -> str:
     return "\n".join([
         "Power by Botozen: live-priced compute/energy mock contract.",
         "/latest + Mini App show notional, Circle test USDC ask, live weights, and buy/monitor recommendation.",
-        "IBKR/Polymarket are scouting inputs, not the funnel.",
+        "IBKR/Polymarket are scouting inputs, not the funnel. IBKR paper-terminal proxy marks are labelled separately.",
         "Channel posts mock-contract updates, operator notes, and runtime errors. Raw REJECT/DEFER/premium_gate/watchlist noise is muted.",
         "No Arc action unless judge.classify() returns EXECUTE.",
     ])
@@ -487,6 +488,24 @@ def channel_feedback_update_message() -> str:
     ])
 
 
+def channel_market_data_update_message() -> str:
+    return "\n".join([
+        "Product update: IBKR paper-terminal marks shipped",
+        "",
+        "The scouting panel now separates three things that were easy to confuse:",
+        "- IBKR ForecastTrader EC contract status",
+        "- IBKR paper-terminal proxy marks for public futures/stocks",
+        "- Yahoo/Alpaca fallback marks when IBKR market data is blocked",
+        "",
+        "If IBKR blocks live market data because another session owns the data bridge, Power can still show Brent and gas marks from the local Brent strategy IBKR history file. Those rows are labelled IBKR paper CSV / stale, not live EC prices.",
+        "",
+        "This keeps the story honest: the contract is the judged compute/energy package; IBKR and Polymarket are scouting surfaces until priced, thesis-matched, and approved by the judge.",
+        "",
+        "Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
 def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
     if not proposal:
@@ -558,6 +577,18 @@ def notify_channel_feedback_update_once(*, logs: Path | str | None = None) -> in
     return 1
 
 
+def notify_channel_market_data_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_MARKET_DATA_UPDATE_KEY in sent:
+        return 0
+    send_message(channel_id, channel_market_data_update_message())
+    _mark_sent(CHANNEL_MARKET_DATA_UPDATE_KEY, logs=logs)
+    return 1
+
+
 def notify_channel_once(*, logs: Path | str | None = None) -> int:
     channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
     if not channel_id:
@@ -610,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--configure-bot-profile", action="store_true", help="Configure bot description, commands, and menu")
     parser.add_argument("--post-channel-about", action="store_true", help="Post the deduped channel explainer")
     parser.add_argument("--post-feedback-update", action="store_true", help="Post the deduped feedback/new-features channel update")
+    parser.add_argument("--post-market-data-update", action="store_true", help="Post the deduped IBKR/proxy market-data update")
     args = parser.parse_args(argv)
     if args.set_webhook:
         print(json.dumps(set_webhook(), sort_keys=True))
@@ -625,6 +657,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.post_feedback_update:
         print(notify_channel_feedback_update_once())
+        return 0
+    if args.post_market_data_update:
+        print(notify_channel_market_data_update_once())
         return 0
     if args.notify_once:
         print(notify_channel_once() + notify_ibkr_reauth_reminder_once())

@@ -49,6 +49,30 @@ const pricingStatusLabel = (status) => {
   return String(status || 'Needs review').replaceAll('_', ' ');
 };
 
+const proxySourceLabel = (source, stale = false) => {
+  const low = String(source || '').toLowerCase();
+  if (low === 'ibkr_energy_history_csv') return `IBKR paper CSV${stale ? ' · stale' : ''}`;
+  if (low === 'ibkr_tws_front_future') return 'IBKR paper TWS front future';
+  if (low === 'ibkr_tws_stock') return 'IBKR paper TWS stock';
+  if (low === 'yahoo_finance_chart') return 'Yahoo fallback';
+  if (low === 'alpaca_market_data') return 'Alpaca fallback';
+  if (low === 'ibkr_tws') return 'IBKR paper TWS';
+  return source || 'external proxy';
+};
+
+const proxyMarkMeta = (leg = {}) => {
+  const parts = [proxySourceLabel(leg.externalProxySource, leg.externalProxyStale)];
+  if (leg.externalProxyRegularMarketTime) parts.push(`as of ${leg.externalProxyRegularMarketTime}`);
+  if (leg.externalProxyExpiry) parts.push(`expiry ${leg.externalProxyExpiry}`);
+  return parts.filter(Boolean).join(' · ');
+};
+
+const hasExternalProxyPrice = (row = {}) => (
+  row.externalProxyLastPrice !== null
+  && row.externalProxyLastPrice !== undefined
+  && Number.isFinite(Number(row.externalProxyLastPrice))
+);
+
 const isMockRow = (row = {}) => {
   const text = [row.instrument, row.displayName, row.slug, row.description]
     .filter(Boolean).join(' ').toLowerCase();
@@ -202,6 +226,10 @@ const mapSnapshotToDashboardData = (snapshot) => {
     externalProxyRole: v.external_proxy_role || '',
     externalProxyLastPrice: v.external_proxy_last_price === undefined || v.external_proxy_last_price === '' ? null : numberOr(v.external_proxy_last_price, null),
     externalProxySource: v.external_proxy_source || '',
+    externalProxySourcePriority: v.external_proxy_source_priority || '',
+    externalProxyRegularMarketTime: v.external_proxy_regular_market_time || '',
+    externalProxyExpiry: v.external_proxy_expiry || '',
+    externalProxyStale: Boolean(v.external_proxy_stale),
     externalProxyStatus: v.external_proxy_status || '',
     externalProxyStatusLabel: v.external_proxy_status_label || '',
     directPairRole: v.direct_pair_role || '',
@@ -268,6 +296,10 @@ const mapSnapshotToDashboardData = (snapshot) => {
     externalProxyRole: v.externalProxyRole,
     externalProxyLastPrice: v.externalProxyLastPrice,
     externalProxySource: v.externalProxySource,
+    externalProxySourcePriority: v.externalProxySourcePriority,
+    externalProxyRegularMarketTime: v.externalProxyRegularMarketTime,
+    externalProxyExpiry: v.externalProxyExpiry,
+    externalProxyStale: v.externalProxyStale,
     externalProxyStatus: v.externalProxyStatus,
     externalProxyStatusLabel: v.externalProxyStatusLabel,
     directPairRole: v.directPairRole,
@@ -562,20 +594,20 @@ const PackageLegRow = ({ leg }) => (
         <MonoText style={{ display: 'block', fontSize: '11px', marginTop: '4px', color: numberOr(leg.estPnl) < 0 ? THEME.red[400] : THEME.primary[400] }}>
           {leg.estPnl
             ? `${leg.estPnl} $/$`
-            : (leg.externalProxyLastPrice
+            : (hasExternalProxyPrice(leg)
               ? `proxy ${leg.externalProxySymbol} $${Number(leg.externalProxyLastPrice).toFixed(2)}`
               : (leg.pricingStatusLabel || pricingStatusLabel(leg.pricingStatus) || 'watchlist'))}
         </MonoText>
-        {leg.externalProxyLastPrice && (
+        {hasExternalProxyPrice(leg) && (
           <MonoText style={{ display: 'block', fontSize: '10px', marginTop: '2px', color: THEME.text.faint }}>
-            {leg.externalProxySource || 'external proxy'}
+            {proxySourceLabel(leg.externalProxySource, leg.externalProxyStale)}
           </MonoText>
         )}
       </div>
     </div>
-    {leg.externalProxyLastPrice && (
+    {hasExternalProxyPrice(leg) && (
       <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginTop: '6px', lineHeight: 1.35 }}>
-        IBKR identified the event contract; external proxy mark is {leg.externalProxyTitle || leg.externalProxySymbol}.
+        IBKR identified the event contract; external proxy mark is {leg.externalProxyTitle || leg.externalProxySymbol}. {proxyMarkMeta(leg)}
       </div>
     )}
     {leg.reason && (
@@ -771,7 +803,18 @@ const CandidatesPanel = ({ candidates, title = 'Liquid Proxy Legs', emptyText = 
           </div>
           <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
             {c.label && <Badge color={verdictColor(c.label)}>{c.label}</Badge>}
-            <MonoText style={{ fontSize: '12px' }}>{c.estPnl ? `${c.estPnl} $/$` : (c.pricingStatusLabel || pricingStatusLabel(c.pricingStatus) || 'watchlist')}</MonoText>
+            <MonoText style={{ fontSize: '12px' }}>
+              {c.estPnl
+                ? `${c.estPnl} $/$`
+                : (hasExternalProxyPrice(c)
+                  ? `proxy ${c.externalProxySymbol} $${Number(c.externalProxyLastPrice).toFixed(2)}`
+                  : (c.pricingStatusLabel || pricingStatusLabel(c.pricingStatus) || 'watchlist'))}
+            </MonoText>
+            {hasExternalProxyPrice(c) && (
+              <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint }}>
+                {proxySourceLabel(c.externalProxySource, c.externalProxyStale)}
+              </div>
+            )}
             <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted }}>{c.sizing} USDC</div>
           </div>
         </div>

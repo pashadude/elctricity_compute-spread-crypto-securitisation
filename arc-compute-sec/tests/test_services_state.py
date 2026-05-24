@@ -88,6 +88,31 @@ def test_public_quote_uses_configured_source_order(monkeypatch):
     assert quote["fallback_errors"] == ["alpaca_market_data:Unauthorized"]
 
 
+def test_public_quote_can_use_call_site_source_order(monkeypatch):
+    state.cache.clear("public_quote")
+    monkeypatch.setenv("PUBLIC_HEDGE_PRICE_SOURCES", "yahoo")
+    monkeypatch.setattr(state, "_fetch_ibkr_public_quote", lambda symbol: {
+        "symbol": symbol,
+        "price": 96.5,
+        "currency": "USD",
+        "exchange": "NYMEX",
+        "source": "ibkr_tws_front_future",
+    })
+    monkeypatch.setattr(state, "_fetch_yahoo_public_quote", lambda symbol: {
+        "symbol": symbol,
+        "price": 100.0,
+        "currency": "USD",
+        "exchange": "NYM",
+        "source": "yahoo_finance_chart",
+    })
+
+    quote = state._fetch_public_quote("BZ=F", sources=["ibkr", "yahoo"])
+
+    assert quote["price"] == 96.5
+    assert quote["source"] == "ibkr_tws_front_future"
+    assert quote["source_priority"] == "ibkr,yahoo"
+
+
 def test_snapshot_enriches_polymarket_leg_identity_from_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     _write_tsv(tmp_path / "positions.tsv", [{
@@ -259,7 +284,7 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "1")
     monkeypatch.setenv("PUBLIC_HEDGE_SYMBOLS", "NVDA")
     monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
-    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol: {
+    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol, sources=None: {
         "symbol": symbol,
         "price": 180.25,
         "currency": "USD",
@@ -349,13 +374,20 @@ def test_snapshot_adds_external_proxy_price_for_ibkr_forecast_gap(tmp_path, monk
     monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "ITNVD")
     monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "")
     monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
-    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol: {
-        "symbol": symbol,
-        "price": 181.25,
-        "currency": "USD",
-        "exchange": "NMS",
-        "source": "yahoo_finance_chart",
-    })
+    seen = {}
+
+    def fake_public_quote(symbol, sources=None):
+        seen["sources"] = sources
+        return {
+            "symbol": symbol,
+            "price": 181.25,
+            "currency": "USD",
+            "exchange": "NMS",
+            "source": "yahoo_finance_chart",
+            "source_priority": "ibkr,yahoo",
+        }
+
+    monkeypatch.setattr(state, "_fetch_public_quote", fake_public_quote)
     (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
         "events": [{
             "symbol": "ITNVD",
@@ -373,6 +405,45 @@ def test_snapshot_adds_external_proxy_price_for_ibkr_forecast_gap(tmp_path, monk
     assert row["external_proxy_last_price"] == 181.25
     assert row["external_proxy_status"] == "priced_external_proxy"
     assert row["external_proxy_source"] == "yahoo_finance_chart"
+    assert row["external_proxy_source_priority"] == "ibkr,yahoo"
+    assert row["external_proxy_stale"] is False
+    assert seen["sources"] == ["ibkr", "yahoo"]
+
+
+def test_snapshot_marks_stale_ibkr_energy_history_proxy(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "1")
+    monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "CRUDB")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol, sources=None: {
+        "symbol": "BZ",
+        "requested_symbol": symbol,
+        "price": 102.58,
+        "currency": "USD",
+        "exchange": "NYMEX",
+        "expiry": "20260529",
+        "regular_market_time": "2026-05-21",
+        "source": "ibkr_energy_history_csv",
+        "source_priority": "ibkr,yahoo",
+        "stale": True,
+    })
+    (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
+        "events": [{
+            "symbol": "CRUDB",
+            "slug": "crudb-ec",
+            "title": "Brent Crude Oil Price",
+            "pricing_status": "ibkr_quote_unavailable",
+        }],
+    }))
+
+    row = state.snapshot()["direct_inventory"][0]
+
+    assert row["external_proxy_source"] == "ibkr_energy_history_csv"
+    assert row["external_proxy_last_price"] == 102.58
+    assert row["external_proxy_stale"] is True
+    assert row["external_proxy_regular_market_time"] == "2026-05-21"
+    assert row["external_proxy_expiry"] == "20260529"
 
 
 def test_snapshot_rolls_up_repeated_rejects_and_groups_package(tmp_path, monkeypatch):
