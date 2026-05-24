@@ -96,6 +96,7 @@ This is now represented in `agent/synthetic_instrument.py` as:
 
 - `inputs.underlying_contract`;
 - `outputs.priced_hedge_basket`;
+- `outputs.mock_hedge_construction`;
 - `outputs.direct_reference_legs`;
 - `outputs.proxy_reference_legs`;
 - `outputs.discovery_gaps`;
@@ -104,3 +105,8 @@ This is now represented in `agent/synthetic_instrument.py` as:
 - `inputs.search_adjustment`;
 - `structure.index_governance`;
 - `structure.schematic_steps`.
+
+The mock construction is testnet-only. It uses the latest public quote
+snapshots and current spread inputs to size hedge weights, units, simple stress
+scenarios, and a Circle test USDC funding request. It must not be treated as a
+live order or automatic Circle transfer.

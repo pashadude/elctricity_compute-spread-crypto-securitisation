@@ -16,6 +16,30 @@ from agent.arb_identifier import DIRECTION_COMPUTE_EXPENSIVE, DIRECTION_ELEC_EXP
 
 SYNTHETIC_INSTRUMENT_VERSION = "synthetic_instrument_v1"
 DIRECT_SURFACES = {"polymarket", "ibkr_prediction", "kalshi"}
+DEFAULT_DEMO_GPU_HOURS = 5_000.0
+DEFAULT_GPU_KWH = 0.7
+DEFAULT_HEDGE_RATIO = 0.35
+DIRECT_EVENT_LEG_BUDGET_USDC = 25.0
+ARC_SETTLEMENT_BUFFER_USDC = 5.0
+LIQUIDITY_BUFFER_RATE = 0.05
+WEIGHTS_ELECTRICITY_EXPENSIVE = {
+    "NRG": 0.24,
+    "CEG": 0.20,
+    "ETN": 0.14,
+    "VRT": 0.12,
+    "NVDA": -0.20,
+    "BTC-USD": -0.07,
+    "ETH-USD": -0.03,
+}
+WEIGHTS_COMPUTE_EXPENSIVE = {
+    "NVDA": 0.34,
+    "VRT": 0.20,
+    "ETN": 0.14,
+    "CEG": -0.14,
+    "NRG": -0.10,
+    "BTC-USD": 0.05,
+    "ETH-USD": 0.03,
+}
 
 
 def _hash_payload(payload: dict[str, Any]) -> str:
@@ -28,6 +52,15 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _round_money(value: Any) -> float:
+    return round(_num(value), 2)
+
+
+def _round_units(value: Any) -> float:
+    out = _num(value)
+    return round(out, 8 if abs(out) < 1 else 4)
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -260,10 +293,17 @@ def _build_instructions(
     hedge_basket: list[dict[str, Any]],
     discovery_gaps: list[dict[str, Any]],
     collateral_status: str,
+    mock_construction: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     hedge_names = ", ".join(leg["slug"] for leg in hedge_basket[:4]) or "no priced basket yet"
     direct_names = ", ".join(leg["slug"] for leg in direct_legs[:3]) or "no priced direct pair yet"
     gap_names = ", ".join(gap["slug"] for gap in discovery_gaps[:3]) or "none"
+    circle_ask = _round_money((mock_construction or {}).get("circle_testnet_usdc_request"))
+    circle_detail = (
+        f"Request {circle_ask:,.2f} test USDC from Circle for hedge notional, direct-event budget, liquidity buffer, and Arc settlement buffer."
+        if circle_ask > 0
+        else "Request Circle test USDC after the hedge notional is sized."
+    )
     return [
         {
             "status": "READY" if collateral_status == "asset_backed" else "NEEDS COLLATERAL",
@@ -274,6 +314,11 @@ def _build_instructions(
             "status": "READY" if hedge_basket else "NEEDS PRICE",
             "title": "Freeze priced hedge basket",
             "detail": f"Use public-priced proxies for sizing now: {hedge_names}.",
+        },
+        {
+            "status": "READY" if circle_ask > 0 else "NEEDS SIZE",
+            "title": "Request Circle test USDC",
+            "detail": circle_detail,
         },
         {
             "status": "READY" if direct_legs else "SEARCHING",
@@ -379,6 +424,118 @@ def _agent_search_plan(
     ]
 
 
+def _weights_for_direction(direction: str) -> dict[str, float]:
+    if direction == DIRECTION_COMPUTE_EXPENSIVE:
+        return WEIGHTS_COMPUTE_EXPENSIVE
+    return WEIGHTS_ELECTRICITY_EXPENSIVE
+
+
+def _weighted_hedge_legs(hedge_basket: list[dict[str, Any]], hedge_notional: float, direction: str) -> list[dict[str, Any]]:
+    weights = _weights_for_direction(direction)
+    rows: list[dict[str, Any]] = []
+    remaining = 1.0
+    unweighted: list[dict[str, Any]] = []
+    for leg in hedge_basket:
+        slug = _text(leg.get("slug")).upper()
+        if slug in weights:
+            remaining -= abs(weights[slug])
+        else:
+            unweighted.append(leg)
+    fallback_weight = max(0.0, remaining) / len(unweighted) if unweighted else 0.0
+    for leg in hedge_basket:
+        slug = _text(leg.get("slug")).upper()
+        raw_weight = weights.get(slug, fallback_weight)
+        price = _num(leg.get("last_price"))
+        if price <= 0 or raw_weight == 0:
+            continue
+        leg_notional = hedge_notional * abs(raw_weight)
+        side = "long" if raw_weight > 0 else "short"
+        rows.append({
+            "surface": leg.get("surface", "public_market"),
+            "slug": leg.get("slug"),
+            "title": leg.get("title"),
+            "side": side,
+            "weight": round(raw_weight, 4),
+            "last_price": _round_money(price),
+            "currency": leg.get("currency") or "USD",
+            "notional_usdc": _round_money(leg_notional),
+            "units": _round_units(leg_notional / price),
+            "role": leg.get("role"),
+            "pricing_status": leg.get("pricing_status"),
+        })
+    total_abs = sum(abs(_num(row.get("weight"))) for row in rows) or 1.0
+    if abs(total_abs - 1.0) > 0.0001:
+        for row in rows:
+            row["weight"] = round(_num(row.get("weight")) / total_abs, 4)
+            row["notional_usdc"] = _round_money(hedge_notional * abs(_num(row["weight"])))
+            row["units"] = _round_units(_num(row["notional_usdc"]) / _num(row["last_price"]))
+    return rows
+
+
+def _mock_hedge_construction(
+    *,
+    direction: str,
+    spread_latest: dict[str, Any],
+    signal_latest: dict[str, Any],
+    hedge_basket: list[dict[str, Any]],
+    direct_legs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    compute_per_gpu_hr = _num(spread_latest.get("compute_per_gpu_hr"), _num(signal_latest.get("compute_per_gpu_hr")))
+    electricity_per_mwh = _num(spread_latest.get("electricity_per_mwh"), _num(signal_latest.get("electricity_per_mwh")))
+    gpu_hours = max(1.0, _num(spread_latest.get("demo_gpu_hours"), DEFAULT_DEMO_GPU_HOURS))
+    gpu_kwh = max(0.01, _num(spread_latest.get("kWh_per_gpu_hr"), _num(signal_latest.get("kWh_per_gpu_hr"), DEFAULT_GPU_KWH)))
+    receivable = compute_per_gpu_hr * gpu_hours
+    power_cost = electricity_per_mwh / 1000.0 * gpu_kwh * gpu_hours
+    margin = receivable - power_cost
+    hedge_notional = max(100.0, receivable * DEFAULT_HEDGE_RATIO)
+    weighted_legs = _weighted_hedge_legs(hedge_basket, hedge_notional, direction)
+    direct_event_budget = max(2, len(direct_legs) or 2) * DIRECT_EVENT_LEG_BUDGET_USDC
+    liquidity_buffer = hedge_notional * LIQUIDITY_BUFFER_RATE
+    circle_ask = hedge_notional + direct_event_budget + liquidity_buffer + ARC_SETTLEMENT_BUFFER_USDC
+    circle_ask = float(int((circle_ask + 9.99) // 10 * 10))
+    power_stress_loss = -(power_cost * 0.25 + receivable * 0.05)
+    hedge_offset = hedge_notional * 0.10
+    compute_relief_gain = receivable * 0.08
+    hedge_drag = -hedge_notional * 0.04
+    return {
+        "demo": True,
+        "label": "Mock testnet hedge construction",
+        "based_on": "live public quote snapshots plus current electricity and compute inputs",
+        "demo_gpu_hours": _round_units(gpu_hours),
+        "gpu_kwh_per_hr": _round_units(gpu_kwh),
+        "receivable_usdc": _round_money(receivable),
+        "estimated_power_cost_usdc": _round_money(power_cost),
+        "estimated_compute_margin_usdc": _round_money(margin),
+        "hedge_ratio": DEFAULT_HEDGE_RATIO,
+        "hedge_notional_usdc": _round_money(hedge_notional),
+        "direct_event_budget_usdc": _round_money(direct_event_budget),
+        "liquidity_buffer_usdc": _round_money(liquidity_buffer),
+        "arc_settlement_buffer_usdc": _round_money(ARC_SETTLEMENT_BUFFER_USDC),
+        "circle_testnet_usdc_request": _round_money(circle_ask),
+        "circle_request_note": "Request test USDC from Circle/faucet for demo funding only; do not transfer or wrap until judge.classify() returns EXECUTE.",
+        "weighted_legs": weighted_legs,
+        "scenario_checks": [
+            {
+                "name": "Power +25%, compute -5%",
+                "unhedged_pnl_usdc": _round_money(power_stress_loss),
+                "mock_hedge_offset_usdc": _round_money(hedge_offset),
+                "net_pnl_usdc": _round_money(power_stress_loss + hedge_offset),
+            },
+            {
+                "name": "Compute +8%, power flat",
+                "unhedged_pnl_usdc": _round_money(compute_relief_gain),
+                "mock_hedge_offset_usdc": _round_money(hedge_drag),
+                "net_pnl_usdc": _round_money(compute_relief_gain + hedge_drag),
+            },
+        ],
+        "limitations": [
+            "Mock weights are deterministic demo weights, not executed orders.",
+            "Public-market proxies are not direct claims on compute sale collateral.",
+            "Circle USDC request is testnet funding guidance, not an automatic transfer.",
+        ],
+    }
+
+
 def propose_synthetic_instrument(
     *,
     spread: dict[str, Any],
@@ -424,7 +581,14 @@ def propose_synthetic_instrument(
     hedge_basket = _dedupe_legs([*priced_public_hedges, *proxy_source], limit=8)
     collateral_status = "asset_backed" if any(_text((pos or {}).get("collateral_hash")) for pos in (positions or [])) else "not_asset_backed_v0"
     tenor_days = max(1, int(_num((package or {}).get("ttl_hours"), 24.0) / 24.0) if package else 30)
-    build_instructions = _build_instructions(direct_legs, hedge_basket, discovery_gaps, collateral_status)
+    mock_construction = _mock_hedge_construction(
+        direction=direction,
+        spread_latest=spread_latest,
+        signal_latest=signal_latest,
+        hedge_basket=hedge_basket,
+        direct_legs=direct_legs,
+    )
+    build_instructions = _build_instructions(direct_legs, hedge_basket, discovery_gaps, collateral_status, mock_construction)
     schematic_steps = _schematic_steps(
         collateral_status=collateral_status,
         hedge_basket=hedge_basket,
@@ -505,6 +669,7 @@ def propose_synthetic_instrument(
             "direct_reference_legs": direct_legs,
             "proxy_reference_legs": proxy_legs,
             "priced_hedge_basket": hedge_basket,
+            "mock_hedge_construction": mock_construction,
             "discovery_gaps": discovery_gaps,
             "build_instructions": build_instructions,
             "agent_search_plan": agent_search_plan,

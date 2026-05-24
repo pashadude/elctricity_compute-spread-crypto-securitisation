@@ -286,6 +286,22 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
           <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '6px' }}>
             Priced hedges: {((data.syntheticInstrument.outputs?.priced_hedge_basket || []).slice(0, 3).map(leg => leg.slug || leg.title).join(', ')) || 'needs live Yahoo/public prices'}
           </div>
+          {data.syntheticInstrument.outputs?.mock_hedge_construction && (
+            <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '6px' }}>
+              <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Mock hedge funding</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'baseline', marginTop: '4px' }}>
+                <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700 }}>
+                  ${Number(data.syntheticInstrument.outputs.mock_hedge_construction.hedge_notional_usdc || 0).toLocaleString()} notional
+                </div>
+                <div style={{ fontSize: '13px', color: TG_THEME.orange, fontWeight: 700 }}>
+                  ${Number(data.syntheticInstrument.outputs.mock_hedge_construction.circle_testnet_usdc_request || 0).toLocaleString()} test USDC
+                </div>
+              </div>
+              <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                {((data.syntheticInstrument.outputs.mock_hedge_construction.weighted_legs || []).slice(0, 3).map(leg => `${leg.side} ${leg.slug} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`).join(', '))}
+              </div>
+            </div>
+          )}
           {(data.syntheticInstrument.structure?.schematic_steps || []).length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
               {data.syntheticInstrument.structure.schematic_steps.slice(0, 4).map((step, i) => (

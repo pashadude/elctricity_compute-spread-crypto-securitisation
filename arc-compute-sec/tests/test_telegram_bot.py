@@ -108,6 +108,14 @@ def test_latest_includes_direct_inventory_watchlist():
             "outputs": {
                 "agent_next_actions": ["Find one direct regional energy/grid-stress leg."],
                 "priced_hedge_basket": [{"slug": "NVDA"}, {"slug": "CEG"}],
+                "mock_hedge_construction": {
+                    "hedge_notional_usdc": 1500.0,
+                    "circle_testnet_usdc_request": 1630.0,
+                    "weighted_legs": [
+                        {"slug": "NVDA", "side": "short", "weight": -0.2},
+                        {"slug": "CEG", "side": "long", "weight": 0.2},
+                    ],
+                },
                 "discovery_gaps": [{"slug": "retxc-ec", "status_label": "Needs live venue price"}],
                 "agent_search_plan": [{"surface": "opoint_nebius", "target": "news-grounded spread drivers"}],
             },
@@ -125,6 +133,8 @@ def test_latest_includes_direct_inventory_watchlist():
     assert "direct watchlist:" in text
     assert "proposal: ERCOT power compute receivable hedge note abc123 (not_asset_backed_v0)" in text
     assert "priced hedges: NVDA, CEG" in text
+    assert "mock hedge: 1500.00 USDC notional, Circle ask 1630.00 test USDC" in text
+    assert "weights: short NVDA -20.0%, long CEG +20.0%" in text
     assert "pricing gaps: retxc-ec (Needs live venue price)" in text
     assert "search next: opoint_nebius:news-grounded spread drivers" in text
     assert "next: Find one direct regional energy/grid-stress leg." in text

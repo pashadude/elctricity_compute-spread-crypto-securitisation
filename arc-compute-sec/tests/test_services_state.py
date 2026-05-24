@@ -283,6 +283,8 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "ai-data-center-moratorium-passed-before-2027"
     assert proposal["outputs"]["discovery_gaps"][0]["slug"] == "retxc-ec"
     assert proposal["outputs"]["priced_hedge_basket"][0]["slug"] == "NVDA"
+    assert proposal["outputs"]["mock_hedge_construction"]["weighted_legs"][0]["last_price"] == 180.25
+    assert proposal["outputs"]["mock_hedge_construction"]["circle_testnet_usdc_request"] > 0
     assert "No Arc action unless verdict is EXECUTE." in proposal["outputs"]["guardrails"]
 
 

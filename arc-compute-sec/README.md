@@ -109,6 +109,9 @@ between "we watch slugs" and "we can structure a product":
   legs, and pricing gaps that still need live venue quotes;
 - it exposes a schematic build path: compute sale, priced hedge basket, direct
   event references, judge gates, and Arc wrap;
+- it includes a testnet mock construction that uses current public quote
+  snapshots to size hedge weights, units, scenario checks, and a Circle test
+  USDC funding request;
 - it exposes an agent search queue for Opoint/Nebius evidence, Polymarket
   direct events, IBKR ForecastTrader pricing, public-market hedges, and
   walk-forward validation;
@@ -136,11 +139,14 @@ strategy.
    hedge, and optional escrow proof.
 3. Freeze the priced hedge basket from public quotes; these are liquid proxies,
    not the asset-backed claim.
-4. Promote only priced direct event references from Polymarket, IBKR
+4. Use the mock construction to calculate weighted hedge units and the Circle
+   test USDC request. This request covers hedge notional, direct-event budget,
+   liquidity buffer, and Arc settlement buffer.
+5. Promote only priced direct event references from Polymarket, IBKR
    ForecastTrader, or another approved venue.
-5. Run the premium scorer and `judge.classify()`. No Arc action happens unless
+6. Run the premium scorer and `judge.classify()`. No Arc action happens unless
    the verdict is `EXECUTE`.
-6. Backtest the exact basket and count every tested slug/symbol/model for
+7. Backtest the exact basket and count every tested slug/symbol/model for
    FDR-style promotion control.
 
 ## Evidence So Far

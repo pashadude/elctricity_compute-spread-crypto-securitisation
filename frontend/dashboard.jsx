@@ -804,6 +804,9 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   const schematic = structure.schematic_steps || [];
   const buildInstructions = proposal.outputs?.build_instructions || [];
   const searchPlan = proposal.outputs?.agent_search_plan || [];
+  const mockConstruction = proposal.outputs?.mock_hedge_construction || null;
+  const weightedLegs = mockConstruction?.weighted_legs || [];
+  const fmtMoney = value => `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   const statusColor = (status = '') => {
     const low = String(status).toLowerCase();
     if (low.includes('ready') || low.includes('clear')) return 'primary';
@@ -910,13 +913,71 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           )}
         </div>
       </div>
+      {mockConstruction && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '10px', marginTop: '10px' }}>
+          <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.primary[400]}20` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '8px' }}>
+              <div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '3px' }}>Mock hedge construction</div>
+                <div style={{ fontFamily: THEME.font.heading, fontSize: '18px', color: THEME.text.primary, fontWeight: 800 }}>
+                  {fmtMoney(mockConstruction.hedge_notional_usdc)} notional
+                </div>
+              </div>
+              <Badge color="amber">TESTNET MOCK</Badge>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+              {[
+                ['GPU-hours', Number(mockConstruction.demo_gpu_hours || 0).toLocaleString()],
+                ['Receivable', fmtMoney(mockConstruction.receivable_usdc)],
+                ['Power cost', fmtMoney(mockConstruction.estimated_power_cost_usdc)],
+                ['Margin', fmtMoney(mockConstruction.estimated_compute_margin_usdc)],
+              ].map(([label, value]) => (
+                <div key={label} style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted }}>{label}</div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '12px', color: THEME.text.primary, marginTop: '2px' }}>{value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '9px', borderRadius: '6px', background: THEME.amber[400] + '10', border: `1px solid ${THEME.amber[400]}25` }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>Circle test USDC request</div>
+              <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.amber[400], fontWeight: 800 }}>
+                {fmtMoney(mockConstruction.circle_testnet_usdc_request)}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '3px' }}>
+                Hedge + direct-event budget + liquidity buffer + Arc settlement buffer. No transfer before EXECUTE.
+              </div>
+            </div>
+          </div>
+          <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Real-price mock weights</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {weightedLegs.slice(0, 7).map((leg, i) => (
+                <div key={`${leg.slug}-${i}`} style={{ display: 'grid', gridTemplateColumns: '52px 1fr 76px', gap: '8px', alignItems: 'center' }}>
+                  <Badge color={leg.side === 'short' ? 'amber' : 'primary'}>{leg.side}</Badge>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {leg.slug} · {Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 1 })}
+                    </div>
+                    <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.muted }}>
+                      {Number(leg.units || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} units @ {fmtMoney(leg.last_price)}
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.secondary, textAlign: 'right' }}>
+                    {fmtMoney(leg.notional_usdc)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {(buildInstructions.length > 1 || searchPlan.length > 0) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '10px', marginTop: '10px' }}>
           {buildInstructions.length > 1 && (
             <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
               <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '8px' }}>Operator build path</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                {buildInstructions.slice(0, 5).map((step, i) => (
+                {buildInstructions.map((step, i) => (
                   <div key={`${step.title}-${i}`} style={{ display: 'grid', gridTemplateColumns: '86px 1fr', gap: '8px', alignItems: 'start' }}>
                     <Badge color={statusColor(step.status)}>{step.status}</Badge>
                     <div>

@@ -54,8 +54,17 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert "Reconnect IBKR" in proposal["outputs"]["discovery_gaps"][0]["next_step"]
     assert proposal["outputs"]["proxy_reference_legs"][0]["slug"] == "BTC/USD"
     assert proposal["outputs"]["priced_hedge_basket"][0]["slug"] == "NVDA"
+    construction = proposal["outputs"]["mock_hedge_construction"]
+    assert construction["demo"] is True
+    assert construction["receivable_usdc"] == 7500.0
+    assert construction["hedge_notional_usdc"] == 2625.0
+    assert construction["circle_testnet_usdc_request"] == 2820.0
+    assert construction["weighted_legs"][0]["slug"] == "NVDA"
+    assert construction["weighted_legs"][0]["side"] == "short"
+    assert "test USDC" in construction["circle_request_note"]
     assert proposal["structure"]["schematic_steps"][0]["label"] == "1. Compute sale"
     assert proposal["outputs"]["build_instructions"][0]["title"] == "Attach compute sale"
+    assert proposal["outputs"]["build_instructions"][2]["title"] == "Request Circle test USDC"
     assert proposal["outputs"]["agent_search_plan"][0]["surface"] == "opoint_nebius"
     assert "ERCOT" in proposal["outputs"]["agent_search_plan"][0]["query"]
     assert proposal["inputs"]["underlying_contract"]["type"] == "forward_compute_sale"

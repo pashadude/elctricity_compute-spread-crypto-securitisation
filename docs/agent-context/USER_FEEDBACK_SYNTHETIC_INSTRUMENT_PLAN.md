@@ -53,6 +53,8 @@ shaped object that says what the agent would try to securitize next:
 - real-world inputs: electricity, compute, z-score, power stack, oracle role;
 - outputs: priced hedge basket, direct reference legs, proxy reference legs,
   pricing gaps, guardrails, schematic build steps, and next agent actions;
+- mock hedge construction: live public prices feed deterministic demo weights,
+  units, scenario checks, and a Circle test USDC funding request;
 - agent search plan: Opoint/Nebius evidence, Polymarket direct-event slugs,
   IBKR ForecastTrader pricing refresh, public hedge basket expansion, and
   walk-forward validation;

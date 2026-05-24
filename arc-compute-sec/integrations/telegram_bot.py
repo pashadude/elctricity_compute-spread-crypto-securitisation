@@ -174,8 +174,21 @@ def format_latest(snap: dict[str, Any]) -> str:
         hedges = (((proposal.get("outputs") or {}).get("priced_hedge_basket")) or [])
         gaps = (((proposal.get("outputs") or {}).get("discovery_gaps")) or [])
         search_plan = (((proposal.get("outputs") or {}).get("agent_search_plan")) or [])
+        construction = (((proposal.get("outputs") or {}).get("mock_hedge_construction")) or {})
         if hedges:
             lines.append("priced hedges: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in hedges[:4]))
+        if construction:
+            lines.append(
+                "mock hedge: "
+                f"{float(construction.get('hedge_notional_usdc') or 0):.2f} USDC notional, "
+                f"Circle ask {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
+            )
+            weighted = construction.get("weighted_legs") or []
+            if weighted:
+                lines.append("weights: " + ", ".join(
+                    f"{leg.get('side')} {leg.get('slug')} {float(leg.get('weight') or 0):+.1%}"
+                    for leg in weighted[:4]
+                ))
         if gaps:
             lines.append("pricing gaps: " + ", ".join(
                 f"{gap.get('slug') or gap.get('title')} ({gap.get('status_label') or 'Needs price'})"
