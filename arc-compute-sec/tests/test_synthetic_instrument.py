@@ -30,16 +30,31 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
             "direction": "short",
             "label": "EXECUTE",
         }],
+        public_hedges=[{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
     )
 
-    assert proposal["proposal_type"] == "synthetic_reference_instrument"
+    assert proposal["proposal_type"] == "compute_receivable_hedge_note"
     assert proposal["asset_backed"] is False
     assert proposal["collateral_status"] == "not_asset_backed_v0"
     assert proposal["region_profile"]["short_name"] == "ERCOT power"
     assert "gas-fired" in proposal["region_profile"]["source_note"]
-    assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "retxc-ec"
+    assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "ai-data-center-moratorium-passed-before-2027"
+    assert proposal["outputs"]["discovery_gaps"][0]["slug"] == "retxc-ec"
     assert proposal["outputs"]["proxy_reference_legs"][0]["slug"] == "BTC/USD"
+    assert proposal["outputs"]["priced_hedge_basket"][0]["slug"] == "NVDA"
+    assert proposal["inputs"]["underlying_contract"]["type"] == "forward_compute_sale"
     assert "not legal ABS" in proposal["structure"]["securitization_style"]
+    assert "FDR-style" in proposal["inputs"]["search_adjustment"]["rule"]
     assert any("real collateral" in action for action in proposal["outputs"]["agent_next_actions"])
 
 
@@ -122,6 +137,7 @@ def test_research_proposal_still_explains_missing_signal():
         direct_inventory=[],
         packages=[],
         verdicts=[],
+        public_hedges=[],
     )
 
     assert proposal["status"] == "RESEARCH"

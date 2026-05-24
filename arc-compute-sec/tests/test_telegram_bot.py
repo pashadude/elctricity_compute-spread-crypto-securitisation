@@ -103,9 +103,13 @@ def test_latest_includes_direct_inventory_watchlist():
         "verdicts": [],
         "positions": [],
         "synthetic_instrument": {
-            "instrument_name": "ERCOT power / AI compute spread note abc123",
+            "instrument_name": "ERCOT power compute receivable hedge note abc123",
             "collateral_status": "not_asset_backed_v0",
-            "outputs": {"agent_next_actions": ["Find one direct regional energy/grid-stress leg."]},
+            "outputs": {
+                "agent_next_actions": ["Find one direct regional energy/grid-stress leg."],
+                "priced_hedge_basket": [{"slug": "NVDA"}, {"slug": "CEG"}],
+                "discovery_gaps": [{"slug": "retxc-ec"}],
+            },
         },
         "direct_inventory": [{
             "surface": "ibkr_prediction",
@@ -117,7 +121,9 @@ def test_latest_includes_direct_inventory_watchlist():
     })
 
     assert "direct watchlist:" in text
-    assert "proposal: ERCOT power / AI compute spread note abc123 (not_asset_backed_v0)" in text
+    assert "proposal: ERCOT power compute receivable hedge note abc123 (not_asset_backed_v0)" in text
+    assert "priced hedges: NVDA, CEG" in text
+    assert "unpriced discovery: retxc-ec" in text
     assert "next: Find one direct regional energy/grid-stress leg." in text
     assert "Texas Commercial Electricity Generation Sales Revenue" in text
     assert "unpriced_snapshot" in text

@@ -68,11 +68,17 @@ The router then expresses that package on available surfaces:
   v1. IBKR event contracts are a different surface from IBKR stocks.
 - **Direct-event inventory:** the dashboard and Telegram mini app also show a
   sanitized `WATCHLIST` inventory from `IBKR_DIRECT_EVENT_SYMBOLS` and
-  `POLYMARKET_DIRECT_EVENT_SLUGS`. Set `POLYMARKET_DIRECT_EVENT_FETCH=1` to
-  refresh slug metadata from Gamma; otherwise the app uses the committed
-  watchlist labels. These rows explain the actual energy and compute-demand
-  legs being monitored. They are not judge candidates and cannot hit Arc until
-  the normal priced/gated route emits an `EXECUTE` candidate.
+  `POLYMARKET_DIRECT_EVENT_SLUGS`. `POLYMARKET_DIRECT_EVENT_FETCH=1` refreshes
+  slug metadata and available prices from Gamma; set it to `0` only for offline
+  tests or demos. These rows explain the actual energy and compute-demand
+  legs being monitored. Unpriced rows stay in discovery gaps; they are not the
+  hedge basket, are not judge candidates, and cannot hit Arc until the normal
+  priced/gated route emits an `EXECUTE` candidate.
+- **Priced public hedge basket:** when direct events are missing or unpriced,
+  the proposal uses read-only public quote snapshots from
+  `PUBLIC_HEDGE_SYMBOLS` such as `NVDA`, `VRT`, `ETN`, `CEG`, `NRG`,
+  `BTC-USD`, and `ETH-USD`. These Yahoo-style public market rows are liquid
+  hedge proxies, not direct claims on compute or electricity.
 - **Crypto miner-margin proxies:** BTC/USD and ETH/USD paper/live-read legs
   are used only on `electricity_expensive` signals and are labelled as proxy
   evidence, not the spread claim.
@@ -89,27 +95,33 @@ returns `EXECUTE`.
 
 ## Agent-Proposed Synthetic Instruments
 
-The dashboard and Telegram `/latest` now include an agent-authored synthetic
-instrument proposal for the current snapshot. This is the bridge between "we
-watch slugs" and "we can structure a product":
+The dashboard and Telegram `/latest` now include an agent-authored compute
+receivable hedge note proposal for the current snapshot. This is the bridge
+between "we watch slugs" and "we can structure a product":
 
-- it names the proposed compute/energy spread note and assigns a deterministic
-  proposal id;
+- it starts with a commercial exposure: a forward GPU-hour sale where the
+  seller wants to hedge power, utilization, and compute-capacity cost risk;
+- it names the proposed hedge note and assigns a deterministic proposal id;
 - it states the regional power profile, including whether the exposure is more
   about nuclear baseload, gas marginal power, renewables, congestion, PPAs, or
   another local input;
-- it separates direct reference legs from proxy reference legs;
+- it separates priced public hedge legs, direct reference legs, proxy reference
+  legs, and unpriced discovery gaps;
 - it states the collateral status. v1 is `not_asset_backed_v0`; it becomes
   asset-backed only if real collateral such as GPU rental receivables, compute
   invoices, power purchase agreements, miner power hedges, escrowed USDC, or a
   tokenized collateral claim is attached;
 - it gives the next agent action: find missing direct energy/compute legs, run
-  premium scoring and judge, request collateral files, or backtest the exact
-  leg pair.
+  premium scoring and judge, request collateral files, fetch priced hedges, or
+  backtest the exact leg pair.
 
 This keeps the public claim precise. A compute index is a benchmark. This desk
-is a discovery, scoring, and settlement layer for synthetic reference packages
-whose legs should be proven to move with the compute/energy spread.
+is a discovery, scoring, hedging, and settlement layer for compute-sale
+cashflows whose hedge legs should be proven to move with the compute/energy
+spread. The design borrows two controls from public commodity-index practice:
+daily direction/quantum/tenor decisions with transparent weights, and
+search-adjusted promotion so testing many slugs does not create a false
+strategy.
 
 ## Evidence So Far
 

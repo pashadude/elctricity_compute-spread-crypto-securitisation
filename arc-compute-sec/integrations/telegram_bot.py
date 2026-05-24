@@ -171,6 +171,12 @@ def format_latest(snap: dict[str, Any]) -> str:
             f"({proposal.get('collateral_status', 'not_asset_backed_v0')})"
         )
         actions = (((proposal.get("outputs") or {}).get("agent_next_actions")) or [])
+        hedges = (((proposal.get("outputs") or {}).get("priced_hedge_basket")) or [])
+        gaps = (((proposal.get("outputs") or {}).get("discovery_gaps")) or [])
+        if hedges:
+            lines.append("priced hedges: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in hedges[:4]))
+        if gaps:
+            lines.append("unpriced discovery: " + ", ".join(str(leg.get("slug") or leg.get("title")) for leg in gaps[:4]))
         if actions:
             lines.append(f"next: {actions[0]}")
     inventory = [row for row in (snap.get("direct_inventory") or []) if isinstance(row, dict)]

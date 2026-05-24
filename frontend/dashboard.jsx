@@ -791,7 +791,8 @@ const PredictionLegsPanel = ({ candidates }) => (
 const SyntheticInstrumentPanel = ({ proposal }) => {
   if (!proposal) return null;
   const direct = proposal.outputs?.direct_reference_legs || [];
-  const proxy = proposal.outputs?.proxy_reference_legs || [];
+  const hedge = proposal.outputs?.priced_hedge_basket || [];
+  const gaps = proposal.outputs?.discovery_gaps || [];
   const actions = proposal.outputs?.agent_next_actions || [];
   const structure = proposal.structure || {};
   const inputs = proposal.inputs || {};
@@ -804,7 +805,7 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
             {proposal.instrument_name || 'Compute/energy spread note'}
           </div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '3px' }}>
-            {proposal.proposal_type || 'synthetic reference instrument'} · {proposal.region || 'multi-region'}
+            {proposal.proposal_type || 'compute receivable hedge note'} · {proposal.region || 'multi-region'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -835,12 +836,12 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           </div>
         </div>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Reference legs</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Priced hedge basket</div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.45 }}>
-            Direct: {direct.length ? direct.map(leg => leg.slug || leg.title).slice(0, 2).join(', ') : 'needed'}
+            {hedge.length ? hedge.map(leg => `${leg.slug || leg.title}${leg.last_price ? ` ${Number(leg.last_price).toFixed(2)}${leg.currency ? ` ${leg.currency}` : ''}` : ''}`).slice(0, 3).join(', ') : 'needs live prices'}
           </div>
-          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.45 }}>
-            Proxy: {proxy.length ? proxy.map(leg => leg.slug || leg.title).slice(0, 2).join(', ') : 'none'}
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+            Direct refs: {direct.length ? direct.map(leg => leg.slug || leg.title).slice(0, 2).join(', ') : 'none priced yet'}
           </div>
         </div>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
@@ -848,6 +849,11 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
             {actions[0] || 'Wait for a stronger spread signal.'}
           </div>
+          {gaps.length > 0 && (
+            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.amber[400], lineHeight: 1.35, marginTop: '6px' }}>
+              Unpriced discovery: {gaps.map(gap => gap.slug || gap.title).slice(0, 2).join(', ')}
+            </div>
+          )}
         </div>
       </div>
     </Card>

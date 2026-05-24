@@ -283,6 +283,14 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
           <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '8px' }}>
             {data.syntheticInstrument.thesis}
           </div>
+          <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '6px' }}>
+            Priced hedges: {((data.syntheticInstrument.outputs?.priced_hedge_basket || []).slice(0, 3).map(leg => leg.slug || leg.title).join(', ')) || 'needs live Yahoo/public prices'}
+          </div>
+          {(data.syntheticInstrument.outputs?.discovery_gaps || []).length > 0 && (
+            <div style={{ fontSize: '12px', color: TG_THEME.orange, lineHeight: 1.4, marginBottom: '6px' }}>
+              Unpriced discovery: {data.syntheticInstrument.outputs.discovery_gaps.slice(0, 2).map(gap => gap.slug || gap.title).join(', ')}
+            </div>
+          )}
           <div style={{ fontSize: '12px', color: TG_THEME.tertiary, lineHeight: 1.4 }}>
             Next: {(data.syntheticInstrument.outputs?.agent_next_actions || [])[0] || 'wait for stronger signal'}
           </div>

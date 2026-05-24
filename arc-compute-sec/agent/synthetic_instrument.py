@@ -128,6 +128,9 @@ def _leg_summary(row: dict[str, Any]) -> dict[str, Any]:
         "direction": _first_nonempty(row.get("direction"), row.get("dir"), default="watch"),
         "status": _first_nonempty(row.get("label"), row.get("status"), row.get("pricing_status"), default="WATCHLIST"),
         "resolution": _first_nonempty(row.get("leg_end_date"), row.get("end_date")),
+        "pricing_status": _first_nonempty(row.get("pricing_status"), row.get("status"), row.get("label")),
+        "last_price": row.get("last_price", ""),
+        "currency": _text(row.get("currency")),
         "directness": "direct" if surface in DIRECT_SURFACES or "direct" in role.lower() else "proxy",
     }
 
@@ -151,12 +154,35 @@ def _dedupe_legs(rows: Iterable[dict[str, Any]], limit: int = 6) -> list[dict[st
 
 def _proposal_visible_leg(row: dict[str, Any]) -> bool:
     label = _text(row.get("label")).upper()
+    pricing = _text(row.get("pricing_status")).lower()
+    surface = _text(row.get("surface"))
+    if row.get("inventory") and surface in DIRECT_SURFACES and label != "EXECUTE":
+        return pricing == "priced_watchlist"
     return (
         label != "REJECT"
+        and "unpriced" not in pricing
+        and pricing != "metadata_watchlist"
+        and pricing != "price_unavailable"
         and not row.get("is_mock")
         and not row.get("is_thesis_mismatch")
         and not row.get("is_legacy_artifact")
     )
+
+
+def _discovery_gap(row: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    pricing = _text(row.get("pricing_status")).lower()
+    label = _text(row.get("label")).upper()
+    if label == "REJECT" or "unpriced" in pricing or pricing in {"metadata_watchlist", "price_unavailable"}:
+        return {
+            "surface": _text(row.get("surface")),
+            "title": _leg_title(row),
+            "slug": _leg_slug(row),
+            "role": _leg_role(row),
+            "reason": _first_nonempty(row.get("reason_code"), row.get("pricing_status"), row.get("label"), default="not priced"),
+        }
+    return None
 
 
 def _best_package(packages: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
@@ -167,7 +193,12 @@ def _best_package(packages: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
     return sorted(valid, key=lambda pkg: (ranked.get(_text(pkg.get("label")), 9), -_num(pkg.get("ts"))))[0]
 
 
-def _agent_actions(direct_legs: list[dict[str, Any]], proxy_legs: list[dict[str, Any]], collateral_status: str) -> list[str]:
+def _agent_actions(
+    direct_legs: list[dict[str, Any]],
+    hedge_basket: list[dict[str, Any]],
+    discovery_gaps: list[dict[str, Any]],
+    collateral_status: str,
+) -> list[str]:
     actions = []
     has_energy = any("energy" in leg["role"].lower() or "power" in leg["role"].lower() or "grid" in leg["role"].lower() for leg in direct_legs)
     has_compute = any("compute" in leg["role"].lower() or "ai" in leg["role"].lower() or "nvidia" in leg["title"].lower() for leg in direct_legs)
@@ -175,12 +206,17 @@ def _agent_actions(direct_legs: list[dict[str, Any]], proxy_legs: list[dict[str,
         actions.append("Find one direct regional energy/grid-stress leg with slug, venue, tenor, and pricing.")
     if not has_compute:
         actions.append("Find one direct AI compute-demand or GPU-infrastructure leg with slug, venue, tenor, and pricing.")
+    if not hedge_basket:
+        actions.append("Fetch priced public hedge proxies before showing a tradable basket.")
     if direct_legs:
         actions.append("Run the premium scorer and judge on the matched direct pair before any Arc action.")
-    if proxy_legs:
-        actions.append("Keep BTC/ETH/equity rows labelled as proxies and exclude them from asset-backed claims.")
+    if hedge_basket:
+        actions.append("Size the priced public hedge basket by volatility and liquidity, then freeze direction/quantum/tenor for the next run.")
+    if discovery_gaps:
+        actions.append("Keep unpriced IBKR/Polymarket rows in discovery gaps, not in the hedge basket.")
     if collateral_status != "asset_backed":
         actions.append("Request real collateral files: GPU rental receivables, compute invoices, PPAs, power hedges, or escrow proof.")
+    actions.append("Apply FDR/search-adjusted promotion: count every tested slug/model before calling a strategy robust.")
     actions.append("Backtest the exact leg pair against historical spread moves before promoting it to channel alerts.")
     return actions
 
@@ -193,6 +229,7 @@ def propose_synthetic_instrument(
     packages: list[dict[str, Any]],
     verdicts: list[dict[str, Any]],
     positions: list[dict[str, Any]] | None = None,
+    public_hedges: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return the current agent-authored instrument proposal.
 
@@ -212,17 +249,28 @@ def propose_synthetic_instrument(
     package_direct = [leg for leg in (package.get("direct_legs", []) if package else []) if _proposal_visible_leg(leg)]
     package_proxy = [leg for leg in (package.get("proxy_legs", []) if package else []) if _proposal_visible_leg(leg)]
     visible_inventory = [leg for leg in direct_inventory if _proposal_visible_leg(leg)]
+    discovery_gaps = [
+        gap for gap in (_discovery_gap(leg) for leg in direct_inventory)
+        if gap is not None
+    ][:6]
     direct_legs = _dedupe_legs([*package_direct, *visible_inventory])
     proxy_source = package_proxy or [
         row for row in verdicts
         if _text(row.get("surface")) not in DIRECT_SURFACES and _proposal_visible_leg(row)
     ]
     proxy_legs = _dedupe_legs(proxy_source)
+    priced_public_hedges = [
+        row for row in (public_hedges or [])
+        if _proposal_visible_leg(row) and row.get("last_price") not in ("", None)
+    ]
+    hedge_basket = _dedupe_legs([*priced_public_hedges, *proxy_source], limit=8)
     collateral_status = "asset_backed" if any(_text((pos or {}).get("collateral_hash")) for pos in (positions or [])) else "not_asset_backed_v0"
+    tenor_days = max(1, int(_num((package or {}).get("ttl_hours"), 24.0) / 24.0) if package else 30)
 
     thesis = (
-        f"Reference {region_profile['short_name']} against AI compute demand. "
+        f"Hedge a forward compute sale in {region_profile['short_name']} against AI compute demand. "
         f"{direction_profile['payoff']} Target direct pair: {direction_profile['direct_pair']}. "
+        "Like hedging a physical shipment, the product starts from a commercial cashflow, then wraps a priced hedge basket. "
         "The agent must prove the selected legs are driven by the spread, not by a generic top-down compute index."
     )
     payload = {
@@ -232,6 +280,7 @@ def propose_synthetic_instrument(
         "reference_package_id": (package or {}).get("package_id") or (package or {}).get("id") or signal_latest.get("signal_id", ""),
         "direct_leg_slugs": [leg["slug"] for leg in direct_legs],
         "proxy_leg_slugs": [leg["slug"] for leg in proxy_legs],
+        "hedge_leg_slugs": [leg["slug"] for leg in hedge_basket],
         "z": _num(signal_latest.get("z")),
         "S_t": _num(signal_latest.get("S_t"), _num(spread_latest.get("S_t"))),
     }
@@ -239,18 +288,26 @@ def propose_synthetic_instrument(
     return {
         **payload,
         "proposal_id": instrument_hash[:12],
-        "instrument_name": f"{region_profile['short_name']} / AI compute spread note {instrument_hash[:6]}",
+        "instrument_name": f"{region_profile['short_name']} compute receivable hedge note {instrument_hash[:6]}",
         "status": "PROPOSED" if direction != "no_signal" else "RESEARCH",
-        "proposal_type": "synthetic_reference_instrument",
+        "proposal_type": "compute_receivable_hedge_note",
         "asset_backed": collateral_status == "asset_backed",
         "collateral_status": collateral_status,
         "thesis": thesis,
         "region_profile": region_profile,
         "structure": {
-            "securitization_style": "synthetic reference package, not legal ABS",
-            "reference_obligation": "canonical compute/energy spread package plus selected venue legs",
+            "securitization_style": "synthetic hedge note around a compute sale; not legal ABS until collateral is attached",
+            "reference_obligation": "forward GPU-hour sale receivable plus priced public hedge basket",
             "settlement_rail": "Arc ERC-8183 only after judge.classify() returns EXECUTE",
-            "cashflow_model": "external venue leg payoff; no fixed coupon in v1",
+            "cashflow_model": "fixed compute-sale revenue minus floating power/compute hedge basket PnL; no fixed coupon in v1",
+            "tenor_days": tenor_days,
+            "index_governance": {
+                "direction": "agent chooses long/short exposure from the spread signal",
+                "quantum": "weights sized from volatility, liquidity, and judge-approved notional",
+                "tenor": "proposal tenor must match commercial compute sale tenor and signal TTL",
+                "rebalance": "daily review; no channel alert unless priced basket and judge gate pass",
+                "input_hierarchy": ["commercial compute exposure", "public priced hedges", "direct event contracts", "oracle/news evidence"],
+            },
             "rwa_upgrade_path": [
                 "GPU rental receivables",
                 "compute invoices",
@@ -261,22 +318,34 @@ def propose_synthetic_instrument(
         },
         "inputs": {
             "spread_formula": "S_t = compute_per_gpu_hr - k * electricity_per_MWh / 1000 * kWh_per_gpu_hr",
+            "underlying_contract": {
+                "type": "forward_compute_sale",
+                "seller_risk": "seller delivers GPU-hours and is short power/availability/capacity cost inflation",
+                "buyer_risk": "buyer wants predictable compute cost and delivery evidence",
+                "required_for_asset_backing": ["signed compute invoice or receivable", "delivery meter", "PPA or power hedge", "escrow or collateral proof"],
+            },
             "electricity_per_mwh": _num(spread_latest.get("electricity_per_mwh"), _num(signal_latest.get("electricity_per_mwh"))),
             "compute_per_gpu_hr": _num(spread_latest.get("compute_per_gpu_hr"), _num(signal_latest.get("compute_per_gpu_hr"))),
             "z": _num(signal_latest.get("z")),
             "energy_stack": region_profile["energy_stack"],
             "oracle_role": "Opoint/Nebius evidence can propose or criticize links, but cannot replace scorer or judge gates.",
+            "search_adjustment": {
+                "tested_candidates": len(direct_inventory) + len(public_hedges or []) + len(verdicts),
+                "rule": "FDR-style search penalty: every tested slug/model counts before promoting a robust product.",
+            },
         },
         "outputs": {
             "direct_reference_legs": direct_legs,
             "proxy_reference_legs": proxy_legs,
+            "priced_hedge_basket": hedge_basket,
+            "discovery_gaps": discovery_gaps,
             "guardrails": [
                 "No on-chain action before judge.classify().",
                 "No Arc action unless verdict is EXECUTE.",
                 "Polymarket premium gate remains required when Polymarket is used.",
                 "Proxy legs must not be marketed as asset-backed compute or power claims.",
             ],
-            "agent_next_actions": _agent_actions(direct_legs, proxy_legs, collateral_status),
+            "agent_next_actions": _agent_actions(direct_legs, hedge_basket, discovery_gaps, collateral_status),
         },
         "monetization_path": [
             "paid discovery/watchlist feed",

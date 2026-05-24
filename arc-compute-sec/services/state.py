@@ -19,7 +19,9 @@ from typing import Any
 
 from services.env import load_project_env
 from agent.synthetic_instrument import propose_synthetic_instrument
+from adapters.yahoo_finance import fetch_chart_quote
 from contracts.arc_addresses import EXPLORER
+from feeds import cache
 from templates.energy.classifier import classify_energy
 
 load_project_env()
@@ -34,6 +36,7 @@ DEFAULT_POLYMARKET_DIRECT_EVENT_SLUGS = (
     "ai-data-center-moratorium-passed-before-2027",
     "ai-bubble-burst-by",
 )
+DEFAULT_PUBLIC_HEDGE_SYMBOLS = ("NVDA", "VRT", "ETN", "CEG", "NRG", "BTC-USD", "ETH-USD")
 IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
     "RETXC": {
         "title": "Texas Commercial Electricity Generation Sales Revenue",
@@ -89,6 +92,50 @@ POLYMARKET_WATCHLIST_META: dict[str, dict[str, str]] = {
         "end_date": "2026-12-31T00:00:00Z",
         "pair_role": "AI compute-demand leg",
         "direction": "short",
+    },
+}
+PUBLIC_HEDGE_META: dict[str, dict[str, str]] = {
+    "NVDA": {
+        "title": "NVIDIA",
+        "role": "AI compute-demand equity proxy",
+        "direction": "long_compute_short_power",
+        "description": "Public equity proxy for GPU demand and AI infrastructure capex.",
+    },
+    "VRT": {
+        "title": "Vertiv",
+        "role": "data-center power/cooling infrastructure proxy",
+        "direction": "long_compute_load_growth",
+        "description": "Public equity proxy for data-center power, cooling, and electrical infrastructure demand.",
+    },
+    "ETN": {
+        "title": "Eaton",
+        "role": "grid/electrification equipment proxy",
+        "direction": "long_grid_upgrade_demand",
+        "description": "Public equity proxy for electrification and grid equipment demand.",
+    },
+    "CEG": {
+        "title": "Constellation Energy",
+        "role": "nuclear baseload power proxy",
+        "direction": "long_clean_baseload_power",
+        "description": "Public equity proxy for nuclear-heavy baseload power exposed to data-center procurement.",
+    },
+    "NRG": {
+        "title": "NRG Energy",
+        "role": "merchant power proxy",
+        "direction": "long_power_price_exposure",
+        "description": "Public equity proxy for merchant power exposure and retail load sensitivity.",
+    },
+    "BTC-USD": {
+        "title": "Bitcoin",
+        "role": "miner-margin proxy",
+        "direction": "short_when_power_expensive",
+        "description": "Liquid proxy for proof-of-work miner margin sensitivity to electricity costs.",
+    },
+    "ETH-USD": {
+        "title": "Ether",
+        "role": "crypto beta proxy",
+        "direction": "watch",
+        "description": "Liquid crypto proxy retained for beta context; not a direct power claim.",
     },
 }
 
@@ -452,6 +499,66 @@ def _env_csv(name: str, default: tuple[str, ...] = ()) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _fetch_public_quote(symbol: str) -> dict[str, Any] | None:
+    cache_key = str(symbol or "").strip().upper()
+    if not cache_key:
+        return None
+    cached = cache.get("public_yahoo_quote", cache_key)
+    if isinstance(cached, dict):
+        return cached
+    try:
+        quote = fetch_chart_quote(cache_key)
+    except Exception as exc:
+        quote = {
+            "symbol": cache_key,
+            "price": None,
+            "source": "yahoo_finance_chart",
+            "error": exc.__class__.__name__,
+        }
+    if quote:
+        cache.put("public_yahoo_quote", cache_key, quote, ttl_seconds=900 if quote.get("price") is not None else 300)
+    return quote
+
+
+def public_hedge_state(*, logs: Path | str | None = None) -> list[dict[str, Any]]:
+    """Priced public-market proxies used when direct event contracts are unpriced.
+
+    These are not direct claims on compute or electricity. They are liquid,
+    priced hedge references for the commercial compute-sale package.
+    """
+    now = time.time()
+    rows: list[dict[str, Any]] = []
+    fetch_live = bool_env("PUBLIC_HEDGE_FETCH", True)
+    for symbol in _env_csv("PUBLIC_HEDGE_SYMBOLS", DEFAULT_PUBLIC_HEDGE_SYMBOLS):
+        clean = symbol.strip().upper()
+        if not clean:
+            continue
+        meta = PUBLIC_HEDGE_META.get(clean, {})
+        quote = _fetch_public_quote(clean) if fetch_live else None
+        price = quote.get("price") if isinstance(quote, dict) else None
+        row = sanitize_row({
+            "ts": now,
+            "surface": "public_market",
+            "instrument": clean,
+            "leg_slug": clean,
+            "leg_title": meta.get("title") or clean,
+            "display_label": meta.get("title") or clean,
+            "leg_role": "priced_public_hedge",
+            "direct_pair_role": meta.get("role") or "public hedge proxy",
+            "direction": meta.get("direction") or "watch",
+            "label": "PRICED" if price is not None else "PRICE_MISSING",
+            "pricing_status": "priced_public_market" if price is not None else "price_unavailable",
+            "last_price": price if price is not None else "",
+            "currency": quote.get("currency", "") if isinstance(quote, dict) else "",
+            "exchange": quote.get("exchange", "") if isinstance(quote, dict) else "",
+            "source": quote.get("source", "yahoo_finance_chart") if isinstance(quote, dict) else "yahoo_finance_chart",
+            "leg_description": meta.get("description") or "",
+            "inventory": True,
+        })
+        rows.append(row)
+    return rows
+
+
 def _forecast_inventory_path(*, logs: Path | str | None = None) -> Path:
     return log_dir(logs) / "ibkr_forecast_inventory.json"
 
@@ -527,7 +634,7 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
 def _polymarket_inventory_rows() -> list[dict[str, Any]]:
     slugs = _env_csv("POLYMARKET_DIRECT_EVENT_SLUGS", DEFAULT_POLYMARKET_DIRECT_EVENT_SLUGS)
     rows: list[dict[str, Any]] = []
-    fetch_live = bool_env("POLYMARKET_DIRECT_EVENT_FETCH", False)
+    fetch_live = bool_env("POLYMARKET_DIRECT_EVENT_FETCH", True)
     for slug in slugs:
         fallback = POLYMARKET_WATCHLIST_META.get(slug, {})
         event = _fetch_polymarket_event(slug) if fetch_live else {}
@@ -806,12 +913,14 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
     verdicts = verdict_state(logs=logs)
     positions = position_state(logs=logs)
     direct_inventory = direct_inventory_state(logs=logs)
+    public_hedges = public_hedge_state(logs=logs)
     verdict_rollups = rollup_leg_rows(_visible_leg_rows(verdicts))
     packages = package_state(verdicts, positions)
     synthetic_instrument = propose_synthetic_instrument(
         spread=spread,
         signal=signal,
         direct_inventory=direct_inventory,
+        public_hedges=public_hedges,
         packages=packages,
         verdicts=verdict_rollups,
         positions=positions,
@@ -846,6 +955,7 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         "packages": packages,
         "synthetic_instrument": synthetic_instrument,
         "direct_inventory": direct_inventory,
+        "public_hedges": public_hedges,
         "positions": positions,
         "arc_txs": arc_tx_state(logs=logs),
         "pnl": pnl,

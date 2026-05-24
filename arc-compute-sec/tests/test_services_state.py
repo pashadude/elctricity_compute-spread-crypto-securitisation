@@ -230,6 +230,16 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "RETXC,ITNVD")
     monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "ai-data-center-moratorium-passed-before-2027")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_FETCH", "1")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "1")
+    monkeypatch.setenv("PUBLIC_HEDGE_SYMBOLS", "NVDA")
+    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol: {
+        "symbol": symbol,
+        "price": 180.25,
+        "currency": "USD",
+        "exchange": "NMS",
+        "source": "yahoo_finance_chart",
+    })
     (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
         "generated_at": 123,
         "events": [{
@@ -262,11 +272,15 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert by_surface[("ibkr_prediction", "itnvd-ec")]["direct_pair_role"] == "AI compute-demand leg"
     assert by_surface[("polymarket", "ai-data-center-moratorium-passed-before-2027")]["label"] == "WATCHLIST"
     assert all(not row["is_mock"] for row in snap["direct_inventory"])
+    assert snap["public_hedges"][0]["leg_slug"] == "NVDA"
+    assert snap["public_hedges"][0]["pricing_status"] == "priced_public_market"
     proposal = snap["synthetic_instrument"]
-    assert proposal["proposal_type"] == "synthetic_reference_instrument"
+    assert proposal["proposal_type"] == "compute_receivable_hedge_note"
     assert proposal["asset_backed"] is False
     assert proposal["collateral_status"] == "not_asset_backed_v0"
-    assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "retxc-ec"
+    assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "ai-data-center-moratorium-passed-before-2027"
+    assert proposal["outputs"]["discovery_gaps"][0]["slug"] == "retxc-ec"
+    assert proposal["outputs"]["priced_hedge_basket"][0]["slug"] == "NVDA"
     assert "No Arc action unless verdict is EXECUTE." in proposal["outputs"]["guardrails"]
 
 

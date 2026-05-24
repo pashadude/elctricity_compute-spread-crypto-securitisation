@@ -15,7 +15,9 @@ if str(_ROOT) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def _clear_feed_cache():
+def _clear_feed_cache(monkeypatch):
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_FETCH", "0")
     from feeds import cache
     cache.clear()
     yield
