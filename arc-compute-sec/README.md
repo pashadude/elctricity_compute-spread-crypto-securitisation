@@ -87,6 +87,30 @@ electricity-compute signal, the preserved premium gate when prediction markets
 are used, and `judge.classify()` refusing to spend USDC unless the candidate
 returns `EXECUTE`.
 
+## Agent-Proposed Synthetic Instruments
+
+The dashboard and Telegram `/latest` now include an agent-authored synthetic
+instrument proposal for the current snapshot. This is the bridge between "we
+watch slugs" and "we can structure a product":
+
+- it names the proposed compute/energy spread note and assigns a deterministic
+  proposal id;
+- it states the regional power profile, including whether the exposure is more
+  about nuclear baseload, gas marginal power, renewables, congestion, PPAs, or
+  another local input;
+- it separates direct reference legs from proxy reference legs;
+- it states the collateral status. v1 is `not_asset_backed_v0`; it becomes
+  asset-backed only if real collateral such as GPU rental receivables, compute
+  invoices, power purchase agreements, miner power hedges, escrowed USDC, or a
+  tokenized collateral claim is attached;
+- it gives the next agent action: find missing direct energy/compute legs, run
+  premium scoring and judge, request collateral files, or backtest the exact
+  leg pair.
+
+This keeps the public claim precise. A compute index is a benchmark. This desk
+is a discovery, scoring, and settlement layer for synthetic reference packages
+whose legs should be proven to move with the compute/energy spread.
+
 ## Evidence So Far
 
 The Phase 3 backward-window check against historical fills is intentionally
@@ -283,6 +307,9 @@ npm run docker:telegram
 
 Telegram uses the Bot API via `TELEGRAM_BOT_TOKEN`, posts channel updates to
 `TELEGRAM_CHANNEL_ID`, and only lets `TELEGRAM_ADMIN_USER_IDS` trigger scans.
+Bot commands are private-chat only. The public channel is broadcast-only:
+`/status`, `/latest`, `/scan`, and `/scan_live` are ignored when posted in the
+channel or a group.
 Channel posts are intentionally sparse: runtime errors, Arc positions, and
 one grouped `EXECUTE` spread-package brief. `REJECT`, `DEFER`, and
 watchlist-only rows are muted in the channel so repeated premium-gate failures

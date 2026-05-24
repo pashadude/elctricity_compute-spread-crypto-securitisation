@@ -102,6 +102,11 @@ def test_latest_includes_direct_inventory_watchlist():
         "signal": {"latest": {"direction": "electricity_expensive", "z": -2}},
         "verdicts": [],
         "positions": [],
+        "synthetic_instrument": {
+            "instrument_name": "ERCOT power / AI compute spread note abc123",
+            "collateral_status": "not_asset_backed_v0",
+            "outputs": {"agent_next_actions": ["Find one direct regional energy/grid-stress leg."]},
+        },
         "direct_inventory": [{
             "surface": "ibkr_prediction",
             "leg_title": "Texas Commercial Electricity Generation Sales Revenue",
@@ -112,6 +117,8 @@ def test_latest_includes_direct_inventory_watchlist():
     })
 
     assert "direct watchlist:" in text
+    assert "proposal: ERCOT power / AI compute spread note abc123 (not_asset_backed_v0)" in text
+    assert "next: Find one direct regional energy/grid-stress leg." in text
     assert "Texas Commercial Electricity Generation Sales Revenue" in text
     assert "unpriced_snapshot" in text
 
@@ -120,6 +127,7 @@ def test_about_explains_watchlist_and_channel_policy(tmp_path):
     text = telegram_bot.handle_command("/start", 7, logs=tmp_path)
 
     assert "/latest and the Mini App show IBKR ForecastTrader and Polymarket slugs" in text
+    assert "The agent proposes a synthetic instrument" in text
     assert "The channel posts only EXECUTE spread packages" in text
     assert "premium_gate_fail rows stay out of the channel" in text
     assert "judge.classify() returns EXECUTE" in text
@@ -262,6 +270,54 @@ def test_set_webhook_passes_secret(monkeypatch):
     assert telegram_bot.set_webhook() == {"ok": True}
     assert calls == [("setWebhook", {
         "url": "https://example.ngrok-free.app/api/telegram/webhook",
-        "allowed_updates": ["message", "channel_post"],
+        "allowed_updates": ["message"],
         "secret_token": "abc",
     })]
+
+
+def test_process_update_ignores_channel_post_commands(monkeypatch):
+    monkeypatch.setattr(
+        telegram_bot,
+        "send_message",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no channel reply")),
+    )
+
+    telegram_bot.process_update({
+        "channel_post": {
+            "chat": {"id": "@desk", "type": "channel"},
+            "text": "/scan",
+        }
+    })
+
+
+def test_process_update_ignores_group_commands(monkeypatch):
+    monkeypatch.setattr(
+        telegram_bot,
+        "send_message",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no group reply")),
+    )
+
+    telegram_bot.process_update({
+        "message": {
+            "chat": {"id": -100, "type": "supergroup"},
+            "from": {"id": 42},
+            "text": "/status",
+        }
+    })
+
+
+def test_process_update_allows_private_command(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+    monkeypatch.setenv("TELEGRAM_ADMIN_USER_IDS", "42")
+
+    telegram_bot.process_update({
+        "message": {
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 42},
+            "text": "/scan",
+        }
+    }, logs=tmp_path)
+
+    assert sent and sent[0][0] == 42
+    assert "Dry-run scan queued" in sent[0][1]

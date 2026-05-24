@@ -262,6 +262,12 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert by_surface[("ibkr_prediction", "itnvd-ec")]["direct_pair_role"] == "AI compute-demand leg"
     assert by_surface[("polymarket", "ai-data-center-moratorium-passed-before-2027")]["label"] == "WATCHLIST"
     assert all(not row["is_mock"] for row in snap["direct_inventory"])
+    proposal = snap["synthetic_instrument"]
+    assert proposal["proposal_type"] == "synthetic_reference_instrument"
+    assert proposal["asset_backed"] is False
+    assert proposal["collateral_status"] == "not_asset_backed_v0"
+    assert proposal["outputs"]["direct_reference_legs"][0]["slug"] == "retxc-ec"
+    assert "No Arc action unless verdict is EXECUTE." in proposal["outputs"]["guardrails"]
 
 
 def test_snapshot_rolls_up_repeated_rejects_and_groups_package(tmp_path, monkeypatch):

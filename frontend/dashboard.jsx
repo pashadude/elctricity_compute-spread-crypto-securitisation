@@ -146,6 +146,7 @@ const emptyDashboardData = (status = 'loading', error = '') => ({
   directInventory: [],
   packages: [],
   currentPackage: null,
+  syntheticInstrument: null,
   pnl: {
     total: 0, totalDisplay: 'Pending', winRate: 0, trades: 0,
     tradesDisplay: 'Pending', wrappedJobs: 0, executes: 0, hasReconciled: false,
@@ -328,6 +329,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
     directInventory,
     packages,
     currentPackage,
+    syntheticInstrument: snapshot?.synthetic_instrument || null,
     pnl: {
       total: numberOr(pnl.total),
       totalDisplay: hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'Pending',
@@ -786,6 +788,72 @@ const PredictionLegsPanel = ({ candidates }) => (
   />
 );
 
+const SyntheticInstrumentPanel = ({ proposal }) => {
+  if (!proposal) return null;
+  const direct = proposal.outputs?.direct_reference_legs || [];
+  const proxy = proposal.outputs?.proxy_reference_legs || [];
+  const actions = proposal.outputs?.agent_next_actions || [];
+  const structure = proposal.structure || {};
+  const inputs = proposal.inputs || {};
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '12px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Agent-Proposed Synthetic Instrument</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '22px', fontWeight: 800, color: THEME.text.primary, marginTop: '3px', overflowWrap: 'anywhere' }}>
+            {proposal.instrument_name || 'Compute/energy spread note'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '3px' }}>
+            {proposal.proposal_type || 'synthetic reference instrument'} · {proposal.region || 'multi-region'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <Badge color={proposal.status === 'PROPOSED' ? 'primary' : 'amber'}>{proposal.status || 'RESEARCH'}</Badge>
+          <Badge color={proposal.asset_backed ? 'primary' : 'amber'}>{proposal.asset_backed ? 'ASSET BACKED' : 'NOT ASSET BACKED'}</Badge>
+        </div>
+      </div>
+      <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.secondary, lineHeight: 1.45, marginBottom: '12px' }}>
+        {proposal.thesis}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+        <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Real-world inputs</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
+            {(inputs.energy_stack || []).join(', ') || 'regional power mix'}
+          </div>
+          <MonoText style={{ display: 'block', fontSize: '11px', marginTop: '6px', color: THEME.text.faint }}>
+            z={Number(inputs.z || proposal.z || 0).toFixed(2)} · elec ${Number(inputs.electricity_per_mwh || 0).toFixed(2)}/MWh · compute ${Number(inputs.compute_per_gpu_hr || 0).toFixed(4)}/GPU-hr
+          </MonoText>
+        </div>
+        <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Securitization shape</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
+            {structure.securitization_style || 'synthetic reference package'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+            {structure.settlement_rail || 'Judge then Arc wrap'}
+          </div>
+        </div>
+        <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Reference legs</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.45 }}>
+            Direct: {direct.length ? direct.map(leg => leg.slug || leg.title).slice(0, 2).join(', ') : 'needed'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.45 }}>
+            Proxy: {proxy.length ? proxy.map(leg => leg.slug || leg.title).slice(0, 2).join(', ') : 'none'}
+          </div>
+        </div>
+        <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Next agent action</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
+            {actions[0] || 'Wait for a stronger spread signal.'}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
 const PositionsPanel = ({ positions }) => (
   <Card>
     <SectionLabel>Arc ERC-8183 Positions</SectionLabel>
@@ -921,6 +989,8 @@ const DashboardPage = ({ refreshRate }) => {
         <SignalPanel data={data} />
         <PackageBundlePanel bundle={data.currentPackage} direction={data.direction} />
       </div>
+
+      <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px' }}>
         <CandidatesPanel

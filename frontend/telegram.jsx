@@ -265,6 +265,30 @@ const TgDashboard = ({ setScreen, goBack, data }) => (
         </div>
       </div>
 
+      {data.syntheticInstrument && (
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', marginBottom: '8px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '4px' }}>
+                Agent Synthetic Proposal
+              </div>
+              <div style={{ fontSize: '15px', color: TG_THEME.text, fontWeight: 700, lineHeight: 1.25, overflowWrap: 'anywhere' }}>
+                {data.syntheticInstrument.instrument_name}
+              </div>
+            </div>
+            <TgBadge color={data.syntheticInstrument.asset_backed ? TG_THEME.green : TG_THEME.orange}>
+              {data.syntheticInstrument.asset_backed ? 'ASSET BACKED' : 'SYNTHETIC'}
+            </TgBadge>
+          </div>
+          <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '8px' }}>
+            {data.syntheticInstrument.thesis}
+          </div>
+          <div style={{ fontSize: '12px', color: TG_THEME.tertiary, lineHeight: 1.4 }}>
+            Next: {(data.syntheticInstrument.outputs?.agent_next_actions || [])[0] || 'wait for stronger signal'}
+          </div>
+        </div>
+      )}
+
       {/* Package legs */}
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
         <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>

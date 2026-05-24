@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from services.env import load_project_env
+from agent.synthetic_instrument import propose_synthetic_instrument
 from contracts.arc_addresses import EXPLORER
 from templates.energy.classifier import classify_energy
 
@@ -800,11 +801,21 @@ def runtime_status(*, logs: Path | str | None = None) -> dict[str, Any]:
 
 def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
     now = time.time()
+    spread = spread_state(logs=logs)
+    signal = signal_state(logs=logs)
     verdicts = verdict_state(logs=logs)
     positions = position_state(logs=logs)
     direct_inventory = direct_inventory_state(logs=logs)
     verdict_rollups = rollup_leg_rows(_visible_leg_rows(verdicts))
     packages = package_state(verdicts, positions)
+    synthetic_instrument = propose_synthetic_instrument(
+        spread=spread,
+        signal=signal,
+        direct_inventory=direct_inventory,
+        packages=packages,
+        verdicts=verdict_rollups,
+        positions=positions,
+    )
     pnl = pnl_state(logs=logs)
     real_positions = _visible_leg_rows(positions)
     real_verdicts = _visible_leg_rows(verdicts)
@@ -828,11 +839,12 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
             "telegram_enabled": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
         },
         "runtime": runtime_status(logs=logs),
-        "spread": spread_state(logs=logs),
-        "signal": signal_state(logs=logs),
+        "spread": spread,
+        "signal": signal,
         "verdicts": verdicts,
         "verdict_rollups": verdict_rollups,
         "packages": packages,
+        "synthetic_instrument": synthetic_instrument,
         "direct_inventory": direct_inventory,
         "positions": positions,
         "arc_txs": arc_tx_state(logs=logs),

@@ -65,7 +65,7 @@ def webhook_url() -> str:
 
 
 def set_webhook() -> dict[str, Any]:
-    payload: dict[str, Any] = {"url": webhook_url(), "allowed_updates": ["message", "channel_post"]}
+    payload: dict[str, Any] = {"url": webhook_url(), "allowed_updates": ["message"]}
     secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if secret:
         payload["secret_token"] = secret
@@ -86,6 +86,7 @@ def bot_description() -> str:
         "",
         "/latest and the Mini App show direct IBKR ForecastTrader and Polymarket watchlist slugs.",
         "The public channel posts only EXECUTE packages, Arc job updates, and runtime errors.",
+        "Commands are private-chat only; the channel ignores inbound /status or /scan commands.",
         "REJECT, DEFER, and premium_gate_fail rows are intentionally muted.",
         "",
         "No Arc action can happen unless judge.classify() returns EXECUTE.",
@@ -163,6 +164,15 @@ def format_latest(snap: dict[str, Any]) -> str:
         f"verdict: {verdict.get('label', 'none')} {verdict.get('reason_code', '')}",
         f"position: #{position.get('job_id', '')} {position.get('surface', '')}/{position.get('instrument', '')}".strip(),
     ]
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    if proposal:
+        lines.append(
+            f"proposal: {proposal.get('instrument_name', 'synthetic spread note')} "
+            f"({proposal.get('collateral_status', 'not_asset_backed_v0')})"
+        )
+        actions = (((proposal.get("outputs") or {}).get("agent_next_actions")) or [])
+        if actions:
+            lines.append(f"next: {actions[0]}")
     inventory = [row for row in (snap.get("direct_inventory") or []) if isinstance(row, dict)]
     if inventory:
         lines.append("direct watchlist:")
@@ -184,8 +194,10 @@ def format_about() -> str:
         "How to read the feed:",
         "- /latest and the Mini App show IBKR ForecastTrader and Polymarket slugs as direct watchlist inventory.",
         "- Watchlist rows are research surfaces, not public channel alerts.",
+        "- The agent proposes a synthetic instrument from the latest spread, legs, collateral status, and next actions.",
         "- The channel posts only EXECUTE spread packages, Arc job updates, and runtime errors.",
         "- REJECT, DEFER, and premium_gate_fail rows stay out of the channel.",
+        "- Commands work in the private bot chat only; channel commands are ignored.",
         "- BTC/ETH are miner-margin proxies; the securitized object is the judged spread package.",
         "- No Arc action can happen unless judge.classify() returns EXECUTE.",
         "",
@@ -242,13 +254,17 @@ def handle_command(text: str, user_id: str | int | None, *, logs: Path | str | N
 
 
 def process_update(update: dict[str, Any], *, logs: Path | str | None = None) -> None:
-    message = update.get("message") or update.get("channel_post") or {}
+    if update.get("channel_post"):
+        return
+    message = update.get("message") or {}
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
     text = message.get("text") or ""
     if not text.startswith("/"):
         return
     if "id" not in chat:
+        return
+    if chat.get("type") != "private":
         return
     reply = handle_command(text, sender.get("id"), logs=logs)
     send_message(chat["id"], reply, reply_markup=mini_app_markup() if text.startswith("/start") else None)
@@ -497,7 +513,7 @@ def notify_channel_once(*, logs: Path | str | None = None) -> int:
 
 
 def poll_once(offset: int | None = None, *, logs: Path | str | None = None) -> int | None:
-    payload: dict[str, Any] = {"timeout": 20, "allowed_updates": ["message", "channel_post"]}
+    payload: dict[str, Any] = {"timeout": 20, "allowed_updates": ["message"]}
     if offset is not None:
         payload["offset"] = offset
     data = telegram_call("getUpdates", payload)
