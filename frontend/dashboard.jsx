@@ -676,54 +676,6 @@ const PrimaryExposurePanel = ({ exposure }) => (
   </Card>
 );
 
-const VerdictTable = ({ verdicts }) => (
-  <Card style={{ gridColumn: 'span 2' }}>
-    <SectionLabel>Actionable Judge Decisions</SectionLabel>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '12px' }}>
-      <div style={{
-        display: 'grid', gridTemplateColumns: '100px 80px minmax(180px, 1fr) minmax(160px, 1fr) 60px 80px',
-        gap: '12px', padding: '8px 12px',
-        fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted,
-        textTransform: 'uppercase', letterSpacing: '0.08em',
-      }}>
-        <span>Last</span><span>Surface</span><span>Leg</span><span>Reason</span><span>Scans</span><span>Verdict</span>
-      </div>
-      {verdicts.length === 0 && (
-        <div style={{ padding: '12px', fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted }}>
-          No actionable judge decisions in this snapshot.
-        </div>
-      )}
-      {verdicts.slice(0, 8).map((v, i) => (
-        <div key={i} style={{
-          display: 'grid', gridTemplateColumns: '100px 80px minmax(180px, 1fr) minmax(160px, 1fr) 60px 80px',
-          gap: '12px', padding: '10px 12px', borderRadius: '6px',
-          background: i % 2 === 0 ? THEME.bg.elevated + '60' : 'transparent',
-          fontFamily: THEME.font.mono, fontSize: '12px',
-          animation: i === 0 ? 'fadeIn 0.5s ease' : 'none',
-        }}>
-          <span style={{ color: THEME.text.muted }}>{new Date(v.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-          <span style={{ color: THEME.text.secondary }}>{surfaceIcon(v.surface)} {v.surface}</span>
-          <span style={{ color: THEME.text.primary, minWidth: 0 }}>
-            <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {v.displayName || v.instrument}
-            </span>
-            {(v.slug || v.endDate) && (
-              <span style={{ display: 'block', color: THEME.text.faint, fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {v.slug || v.instrument}{v.endDate ? ` · ${formatEventDate(v.endDate)}` : ''}
-              </span>
-            )}
-          </span>
-          <span style={{ color: THEME.text.muted }}>{v.reason}</span>
-          <span style={{ color: v.repeatCount > 1 ? THEME.amber[400] : THEME.text.muted }}>
-            {v.repeatCount > 1 ? `${v.repeatCount}x` : '1x'}
-          </span>
-          <Badge color={verdictColor(v.label)}>{v.label}</Badge>
-        </div>
-      ))}
-    </div>
-  </Card>
-);
-
 const CandidatesPanel = ({ candidates, title = 'Liquid Proxy Legs', emptyText = 'No active liquid proxy legs.' }) => (
   <Card>
     <SectionLabel>{title}</SectionLabel>
@@ -1152,66 +1104,6 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   );
 };
 
-const PositionsPanel = ({ positions }) => (
-  <Card>
-    <SectionLabel>Arc ERC-8183 Positions</SectionLabel>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
-      {positions.length === 0 && (
-        <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted }}>
-          No real Arc positions in this snapshot.
-        </div>
-      )}
-      {positions.map((p, i) => (
-        <div key={i} style={{
-          padding: '12px', borderRadius: '8px', background: THEME.bg.elevated,
-          border: `1px solid ${THEME.border.subtle}`,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <MonoText style={{ fontWeight: 700 }}>Job #{p.jobId}</MonoText>
-              <Badge color={p.status === 'completed' ? 'primary' : 'amber'}>{p.status}</Badge>
-            </div>
-            <span style={{
-              fontFamily: THEME.font.mono, fontSize: '14px', fontWeight: 700,
-              color: p.pnl.startsWith('+') ? THEME.primary[400] : p.pnl === '-' ? THEME.text.muted : THEME.red[400],
-            }}>{p.pnl === '-' ? '—' : p.pnl}</span>
-          </div>
-          <div style={{ display: 'flex', gap: '16px', fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.text.muted }}>
-            <span>{surfaceIcon(p.surface)} {p.surface}</span>
-            <span>{p.role || roleLabel('', p.surface)}</span>
-            <span>{p.sizing} USDC</span>
-          </div>
-          <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, marginTop: '8px', fontWeight: 700 }}>
-            {p.displayName || p.instrument}
-          </div>
-          {(p.slug || p.endDate) && (
-            <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '3px' }}>
-              {p.slug || p.instrument}{p.endDate ? ` · resolves ${formatEventDate(p.endDate)}` : ''}
-            </div>
-          )}
-          {p.description && (
-            <div style={{
-              fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted,
-              lineHeight: 1.35, marginTop: '6px', display: '-webkit-box',
-              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-            }}>
-              {p.description}
-            </div>
-          )}
-          {p.connection && (
-            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
-              {p.connection}
-            </div>
-          )}
-          <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '6px' }}>
-            tx: {p.txHash}
-          </div>
-        </div>
-      ))}
-    </div>
-  </Card>
-);
-
 const OraclePanel = ({ oracle }) => (
   <Card>
     <SectionLabel>Oracle Backtest — 280K Sources · 200 Languages</SectionLabel>
@@ -1237,12 +1129,9 @@ const DashboardPage = ({ refreshRate }) => {
   const data = useLiveData(refreshRate);
   const isMobile = useIsMobile(820);
   const isNarrow = useIsMobile(520);
-  const pnlHistory = React.useRef(Array.from({ length: 30 }, (_, i) => 100 + i * 1.5 + Math.random() * 5));
-  React.useEffect(() => {
-    if (data.pnl.hasReconciled) {
-      pnlHistory.current = [...pnlHistory.current.slice(1), data.pnl.total];
-    }
-  }, [data.pnl.total, data.pnl.hasReconciled]);
+  const construction = data.syntheticInstrument?.outputs?.mock_hedge_construction || {};
+  const quoteSources = construction.quote_sources || [];
+  const recommendation = construction.recommended_action === 'BUY_CONTRACT' ? 'Buy' : 'Monitor';
 
   return (
     <div style={{ padding: isMobile ? '18px 14px 32px' : '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -1269,12 +1158,12 @@ const DashboardPage = ({ refreshRate }) => {
         </div>
       </div>
 
-      {/* Top stats */}
+      {/* Top mock contract stats */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? (isNarrow ? '1fr' : 'repeat(2, minmax(0, 1fr))') : 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
-        <StatCard label="Reconciled PnL" value={data.pnl.totalDisplay} sparkData={data.pnl.hasReconciled ? pnlHistory.current : null} />
-        <StatCard label="Wrapped Jobs" value={data.pnl.wrappedJobs} color={THEME.primary[400]} />
-        <StatCard label="Judge EXECUTEs" value={data.pnl.executes} color={THEME.primary[400]} />
-        <StatCard label="Reconciled Trades" value={data.pnl.tradesDisplay} />
+        <StatCard label="Mock Notional" value={construction.hedge_notional_usdc ? `$${Number(construction.hedge_notional_usdc).toLocaleString()}` : 'Pending'} />
+        <StatCard label="Circle Ask" value={construction.circle_testnet_usdc_request ? `${Number(construction.circle_testnet_usdc_request).toLocaleString()} USDC` : 'Pending'} color={THEME.amber[400]} />
+        <StatCard label="Agent Recommendation" value={recommendation} color={recommendation === 'Buy' ? THEME.primary[400] : THEME.amber[400]} />
+        <StatCard label="Quote Source" value={quoteSources.join(', ') || 'Pending'} />
       </div>
 
       {/* Signal + Candidates */}
@@ -1284,12 +1173,6 @@ const DashboardPage = ({ refreshRate }) => {
       </div>
 
       <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />
-
-      {/* Verdicts */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
-        <VerdictTable verdicts={data.verdicts} />
-        <PositionsPanel positions={data.positions} />
-      </div>
 
       {/* Oracle */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
