@@ -2,6 +2,32 @@ from integrations import telegram_bot
 from services import scan_requests
 
 
+def test_telegram_http_error_redacts_bot_token(monkeypatch):
+    class Resp:
+        status_code = 429
+        text = '{"ok":false,"description":"Too Many Requests"}'
+
+        def raise_for_status(self):
+            err = telegram_bot.requests.HTTPError(
+                "429 Client Error: Too Many Requests for url: https://api.telegram.org/botSECRET/sendMessage"
+            )
+            err.response = self
+            raise err
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "SECRET")
+    monkeypatch.setattr(telegram_bot.requests, "post", lambda *args, **kwargs: Resp())
+
+    try:
+        telegram_bot.telegram_call("sendMessage", {})
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert "SECRET" not in message
+    assert "Too Many Requests" in message
+
+
 def test_scan_command_requires_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM_ADMIN_USER_IDS", "42")
 

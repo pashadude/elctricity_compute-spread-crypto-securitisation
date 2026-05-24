@@ -38,8 +38,16 @@ def bot_token() -> str:
 
 
 def telegram_call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
-    resp = requests.post(TELEGRAM_API.format(token=bot_token(), method=method), json=payload, timeout=20)
-    resp.raise_for_status()
+    try:
+        resp = requests.post(TELEGRAM_API.format(token=bot_token(), method=method), json=payload, timeout=20)
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", "unknown")
+        detail = str(getattr(response, "text", "") or "")[:300]
+        raise RuntimeError(f"Telegram {method} HTTP {status}: {detail}") from None
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Telegram {method} request failed: {exc.__class__.__name__}") from None
     data = resp.json()
     if not data.get("ok"):
         raise RuntimeError(f"Telegram {method} failed: {data}")
