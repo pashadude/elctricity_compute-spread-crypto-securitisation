@@ -18,54 +18,61 @@ Hi, this is Power by Botozen.
 The thesis is simple: all is compute, compute is energy, and hedging compute
 means hedging the compute/energy spread.
 
-AI infrastructure is turning compute into a commodity-like input, but it is not
-yet standardized enough to trade like wheat, oil, or power. A GPU-hour is
-different across chips, regions, workloads, cooling, and power contracts. So
-instead of pretending that raw compute is already a perfect futures market, we
-wrap judged compute/energy spread packages.
+AI infrastructure is becoming commodity-like, but raw GPU-hours are not yet
+standardized enough to trade like oil, power, or wheat. A GPU-hour changes by
+chip, region, workload, cooling setup, software stack, and power contract. So
+instead of pretending compute is already a clean futures market, we wrap judged
+compute/energy spread packages.
 
 Here is the live desk. The system estimates the spread between compute dollars
-per GPU-hour and electricity dollars per megawatt-hour. When electricity is
-expensive or compute is expensive, the agent builds a package with direct event
-legs and clearly labelled proxy hedge legs.
+per GPU-hour and electricity dollars per megawatt-hour. When the spread moves,
+the agent builds a package with direct event legs and clearly labelled proxy
+hedge legs.
 
 Direct legs can be prediction or forecast contracts about grid stress, data
-center constraints, or AI compute demand. Public equities and BTC or ETH are
-not the securitized asset. They are labelled proxies. For example, BTC can
-represent miner-margin stress because mining revenue is crypto-linked and
+center constraints, AI capex, or compute demand. Public equities, BTC, and ETH
+are not the securitized asset. They are proxy hedge legs. For example, BTC can
+represent miner-margin stress because mining revenue is crypto-linked while
 electricity is the main variable cost.
 
-Now look at the proposed note. It starts from a real commercial exposure: a
-forward compute sale or GPU-hour receivable. The dashboard shows what
-collateral is missing, which hedge basket is priced, which event refs are
-matched, and what the agent still needs before promotion.
+Now look at the proposed note. It starts from a commercial exposure: a forward
+compute sale or GPU-hour receivable. The dashboard shows the build path. The
+compute sale still needs collateral: an invoice, receivable, delivery meter, or
+buyer and seller terms. The priced hedge basket is ready. Some direct event
+refs may be matched. The judge gates are still pending. The Arc wrap stays
+locked until the judge returns EXECUTE.
 
-The key safety rule is here: judge first, Arc second. The premium scorer and
-`judge.classify()` run before any settlement action. If the verdict is REJECT
-or DEFER, nothing touches Circle or Arc. Only EXECUTE can create an ERC-8183
-job.
+That distinction matters. This is not claiming a legal asset-backed security is
+already live. It is showing how an agent assembles the package, identifies the
+missing collateral, prices the hedge basket, and prepares an auditable route to
+settlement.
 
-Here is the Arc side. The approved package becomes an ERC-8183 job with USDC
+The key safety rule is judge first, Arc second. The premium scorer and
+`judge.classify()` run before any settlement action. If the verdict is REJECT,
+DEFER, or CHALLENGE, nothing touches Circle or Arc. Only EXECUTE can create an
+ERC-8183 job.
+
+Here is the Arc side. An approved package becomes an ERC-8183 job with USDC
 escrow, a deliverable hash, completion, and ERC-8004 reputation feedback. Arc
 is not the alpha source. Arc is the settlement, escrow, identity, reputation,
 and audit rail.
 
-The Telegram surface mirrors the same product. It does not spam rejected rows.
-It posts grouped EXECUTE packages, Arc job updates, and operator-relevant
-alerts. The Mini App gives a mobile version of the same spread desk.
+The Telegram surface mirrors the same product. It does not spam repeated
+rejects. It posts grouped EXECUTE packages, Arc job updates, and alerts that
+need operator attention. The Mini App gives a mobile version of the same spread
+desk.
 
-Finally, the repo includes an Arc OSS starter-kit folder for other builders.
-It exposes ERC-8004 identity, ERC-8183 escrow, Circle SCA wallets, USDC
-six-decimal helpers, example EXECUTE and REJECT verdict blobs, and a verifier
-that proves the verdict guard runs before any Circle or Arc call.
+Finally, the repo includes an Arc OSS starter-kit folder for other builders. It
+exposes ERC-8004 identity, ERC-8183 escrow, Circle SCA wallets, USDC
+six-decimal helpers, EXECUTE and REJECT verdict fixtures, and a verifier that
+proves the verdict guard runs before any Circle or Arc call.
 
 So the product story is: all is compute, compute is energy, and Power by
-Botozen is the first audited path toward hedging compute as a financial
-primitive on Arc.
+Botozen is an audited path toward hedging compute as a financial primitive on
+Arc.
 
 ## Subtitles
 
 Use the voiceover text above as subtitles. Keep the screen text sparse and let
 the dashboard, Arc job state, Telegram Mini App, and GitHub starter kit carry
 the proof.
-
