@@ -23,6 +23,7 @@ test-results/
 # But keep the checked-in template
 !.env.template
 !arc-compute-sec/.env.template
+!arc-oss-builder-starter-kit/.env.example
 
 # Private keys, certs, recovery material
 *.pem
