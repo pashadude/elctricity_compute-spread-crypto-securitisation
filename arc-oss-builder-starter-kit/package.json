@@ -11,7 +11,8 @@
     "directory": "arc-oss-builder-starter-kit"
   },
   "scripts": {
-    "check": "tsc --noEmit && node scripts/verify-starter-kit.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run verify",
     "verify": "node scripts/verify-starter-kit.mjs",
     "submission-link": "node scripts/submission-link.mjs",
     "register-agent": "tsx --env-file=.env src/scripts/register-agent.ts",

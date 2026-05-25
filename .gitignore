@@ -12,6 +12,7 @@ build/
 .coverage
 .DS_Store
 *.log
+test-results/
 
 # ============================================================
 # Secrets — env files, anything named like a key or recovery

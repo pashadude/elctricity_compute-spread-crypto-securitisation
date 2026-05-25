@@ -134,8 +134,14 @@ const TgWebLinks = () => {
   );
 };
 
+const TG_SCREEN_IDS = new Set(['home', 'dashboard', 'scouting', 'alerts', 'billing', 'scan']);
+
 const useTgScreenRouter = () => {
-  const [history, setHistory] = React.useState(['home']);
+  const [history, setHistory] = React.useState(() => {
+    const params = new URLSearchParams(window.location.search || '');
+    const requested = params.get('tg_screen') || params.get('screen');
+    return TG_SCREEN_IDS.has(requested) ? ['home', requested] : ['home'];
+  });
   const screen = history[history.length - 1] || 'home';
   const setScreen = React.useCallback((next) => {
     setHistory(prev => {
@@ -705,7 +711,11 @@ const TelegramPage = () => {
       flexDirection: isMobile ? 'column' : 'row',
     }}>
       {/* Description */}
-      <div style={{ flex: 1, paddingTop: isMobile ? '4px' : '20px' }}>
+      <div style={{
+        flex: 1,
+        paddingTop: isMobile ? '4px' : '20px',
+        order: isMobile ? 2 : 1,
+      }}>
         <SectionLabel>Telegram Mini App</SectionLabel>
         <h2 style={{
           fontFamily: THEME.font.heading, fontSize: isMobile ? '30px' : '36px', fontWeight: 800,
@@ -741,7 +751,12 @@ const TelegramPage = () => {
       </div>
 
       {/* Phone frame */}
-      <div style={{ flexShrink: 0, alignSelf: isMobile ? 'center' : 'flex-start', maxWidth: '100%' }}>
+      <div style={{
+        flexShrink: 0,
+        alignSelf: isMobile ? 'center' : 'flex-start',
+        maxWidth: '100%',
+        order: isMobile ? 1 : 2,
+      }}>
         <IOSDevice width={deviceWidth} height={deviceHeight} dark>
           <Screen setScreen={setScreen} goBack={goBack} data={data} requestScan={requestBackendScan} />
         </IOSDevice>
