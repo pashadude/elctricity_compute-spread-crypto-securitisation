@@ -42,6 +42,18 @@ Arc is used as the settlement and audit rail: approved packages can become ERC-8
 
    The agent proposes a synthetic compute receivable hedge note. It starts from a commercial exposure such as a forward GPU-hour sale, invoice, or receivable, then attaches a priced hedge basket and matched direct event refs.
 
+   The frontend shows the build path explicitly:
+
+   ```text
+   1. Compute sale / GPU-hour receivable: needs collateral
+   2. Priced hedge basket: ready
+   3. Direct event refs: ready or pending, depending on live discovery
+   4. Judge gates: pending until scorer and judge.classify() run
+   5. Arc wrap: locked until the judge returns EXECUTE
+   ```
+
+   This is the important securitization nuance. The demo is not claiming a legal ABS is already live. It is showing how an agent builds the package, identifies what collateral is missing, prices the hedge basket, and keeps Arc settlement locked until the evidentiary and judge gates pass.
+
 5. Explain the legs:
 
    Direct event legs are Polymarket or IBKR ForecastTrader-style claims about grid stress, data center constraints, AI capex, or compute demand. Public stocks, BTC, and ETH are labelled as proxy hedge legs. BTC/ETH are miner-margin proxies, not the securitized asset.
@@ -76,6 +88,8 @@ Arc is used as the settlement and audit rail: approved packages can become ERC-8
 
 - This is not "BTC securitizes energy." BTC/ETH are only miner-margin proxy legs.
 - The actual object is a judged compute/energy spread package.
+- The current note is proposed / synthetic until collateral is attached.
+- Missing collateral means no legal asset-backed claim yet: the operator must attach or hash the GPU-hour invoice, receivable, delivery meter, and buyer/seller terms.
 - Arc is the settlement, escrow, identity, reputation, and audit rail.
 - The alpha/risk decision happens offchain through evidence, scoring, and judge verdicts.
 - No chain action happens unless `judge.classify()` returns EXECUTE.

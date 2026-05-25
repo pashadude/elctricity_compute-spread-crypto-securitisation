@@ -59,33 +59,7 @@ hedging compute means hedging the compute/energy spread
 
 ## Research Basis
 
-This submission builds on the user's research paper,
-`The Securitization of Compute: AI Infrastructure, Energy Spreads, and the New Commodity Frontier.pdf`,
-plus external financial and market-structure references:
-
-- Larry Fink / compute futures framing:
-  https://finance.yahoo.com/sectors/technology/articles/blackrock-reveals-surprising-asset-class-022000793.html
-- Goldman Sachs, data center power demand and AI infrastructure electricity
-  growth:
-  https://www.goldmansachs.com/images/migrated/insights/pages/gs-research/gs-sustain-generational-growth-ai-data-centers-global-power-surge-and-the-sustainability-impact/sustain-data-center-redaction.pdf
-- TierPoint data center ABS precedent:
-  https://www.tierpoint.com/news/tierpoint-completes-new-550-million-securitization-financing/
-- Stordal, Ewald, Lien, and Haugom, trading-time seasonality in electricity
-  futures:
-  https://www.sciencedirect.com/science/article/pii/S2405851322000484
-- Luxor / Bitnomial hashrate futures contract details:
-  https://docs.luxor.tech/platform/derivatives/luxor-contract-and-market-details/luxors-bitcoin-hashrate-futures-on-bitnomial-exchange
-- Bhambhwani, Delikouras, and Korniotis, computing-power and network factors in
-  cryptocurrency pricing:
-  https://prodgrp.cepr.org/publications/discussion-paper/do-fundamentals-drive-cryptocurrency-prices-2
-- Colak, Della Vedova, Foley, and Mai, financial uncertainty and crypto return
-  cross-section:
-  https://www.sciencedirect.com/science/article/pii/S0378426626000919
-- CFTC explanation of prediction markets and event contracts as instruments
-  that can hedge real-world risk:
-  https://www.cftc.gov/LearnandProtect/PredictionMarkets
-- New York Fed work on tokenized markets and settlement uncertainty:
-  https://www.newyorkfed.org/research/staff_reports/sr1121.html
+le
 
 ## 2. Video Script
 
