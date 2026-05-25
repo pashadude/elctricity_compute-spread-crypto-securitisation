@@ -130,5 +130,8 @@ mixing in the product-specific compute/energy desk.
 
 - Product technical details: `arc-compute-sec/README.md`
 - Arc OSS starter kit docs: `arc-oss-builder-starter-kit/README.md`
+- Final hackathon submission packet: `docs/submission/final_submission.md`
+- Three-minute demo script: `docs/submission/demo_script.md`
+- Programmatic submission packet: `scripts/print_submission_packet.py`
 - Canonical agent task context: `docs/agent-context/TASK.md`
 - Product marketing notes: `docs/marketing/`

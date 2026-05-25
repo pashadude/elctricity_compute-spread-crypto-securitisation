@@ -1,0 +1,7 @@
+Final submission materials are live. Power by Botozen wraps judged compute/energy spread packages as Arc ERC-8183 jobs after premium scoring and judge.classify(); no chain call can happen unless the verdict is EXECUTE.
+
+Repo: https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation
+Arc OSS starter kit folder: https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit
+Demo: https://power.botozen.com
+
+The OSS folder exposes reusable ERC-8004 identity + ERC-8183 escrow + Circle SCA wallet scripts, USDC 6-decimal helpers, example EXECUTE/REJECT verdict blobs, and a verifier proving the Arc guard runs before Circle/Arc calls.

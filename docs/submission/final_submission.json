@@ -1,0 +1,32 @@
+{
+  "project": "Power by Botozen",
+  "demo_url": "https://power.botozen.com",
+  "repository_url": "https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation",
+  "arc_oss_starter_kit_url": "https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit",
+  "video_url": "TODO: add final Loom / YouTube / Vimeo link",
+  "problem": "AI infrastructure is turning compute into a commodity-like input, but raw compute is not yet standardized enough to securitize directly. Power by Botozen builds audited compute/energy spread packages around the relationship between GPU-hour economics and electricity cost, routes direct event legs and labelled proxy hedge legs, and only wraps a package on Arc after premium scoring and judge.classify() return EXECUTE.",
+  "why_compelling": "Data center real estate can already be financed, but compute service flow remains exposed to utilization, chip obsolescence, power price, grid approvals, and AI demand uncertainty. The market needs a bridge between physical compute cashflows and hedgeable financial instruments.",
+  "demo_script_file": "docs/submission/demo_script.md",
+  "arc_oss_answer": "The repo exposes a self-contained Arc OSS starter-kit folder that combines ERC-8004 identity, ERC-8183 escrow, Circle Developer-Controlled SCA wallets, USDC 6-decimal helpers, example EXECUTE/REJECT verdict blobs, and a verifier proving that the verdict guard runs before Circle or Arc calls. Compared with generic quickstarts, it teaches evidence first, verdict second, escrow third.",
+  "circle_arc_feedback": {
+    "worked": [
+      "Arc Testnet was fast enough for create, fund, submit, complete, and reputation feedback in a demo.",
+      "USDC-as-gas made the economics legible.",
+      "Circle Developer-Controlled Wallets fit backend-driven agentic execution.",
+      "ERC-8183 maps naturally to paid agent work and escrow.",
+      "ERC-8004 identity/reputation adds a useful audit trail.",
+      "arc-canteen is useful for hackathon visibility and authenticated RPC."
+    ],
+    "improve": [
+      "Ship a canonical Arc Testnet addresses, ABI, USDC decimals, and chain-config package.",
+      "Add a combined ERC-8004 plus ERC-8183 builder flow.",
+      "Keep SDK examples aligned with current TypeScript signatures.",
+      "Document an official no-chain-before-policy-gate pattern.",
+      "Improve faucet and SCA funding UX.",
+      "Expose ERC-8183 job state as one explorer object.",
+      "Add edit/delete for queued arc-canteen updates.",
+      "Add a deterministic local simulator for ERC-8183 lifecycle tests."
+    ]
+  },
+  "arc_cli_update_file": "docs/submission/arc_cli_update.txt"
+}
