@@ -1,5 +1,8 @@
 # arc-compute-sec
 
+Product subproject for the root workspace. Start at `../README.md` for the
+public project overview and use this file for the detailed desk runbook.
+
 Arc-wrapped compute/energy spread package desk.
 
 v1 is deliberately narrow. Arc is the settlement, escrow, identity,

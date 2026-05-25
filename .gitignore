@@ -81,3 +81,7 @@ arc-compute-sec/adapters/__pycache__/
 arc-compute-sec/tests/__pycache__/
 arc-compute-sec/templates/energy/__pycache__/
 arc-compute-sec/contracts/__pycache__/
+
+# Standalone Arc OSS starter-kit repo. Keep it separate from the product repo
+# so it cannot be accidentally committed as a nested gitlink or vendored copy.
+arc-oss-builder-starter-kit/
