@@ -1,0 +1,6 @@
+{
+  "job": "example",
+  "result": "deliverable accepted by offchain validator",
+  "canonical_source_hash": "0xreplace",
+  "notes": "Replace this with a canonical blob for the work/output being settled."
+}

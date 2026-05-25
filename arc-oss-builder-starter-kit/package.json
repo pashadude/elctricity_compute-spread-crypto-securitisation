@@ -1,0 +1,40 @@
+{
+  "name": "arc-oss-builder-starter-kit",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Standalone Arc Testnet starter kit for ERC-8004 identity and ERC-8183 job escrow builders.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation.git",
+    "directory": "arc-oss-builder-starter-kit"
+  },
+  "scripts": {
+    "check": "tsc --noEmit && node scripts/verify-starter-kit.mjs",
+    "verify": "node scripts/verify-starter-kit.mjs",
+    "submission-link": "node scripts/submission-link.mjs",
+    "register-agent": "tsx --env-file=.env src/scripts/register-agent.ts",
+    "open-job": "tsx --env-file=.env src/scripts/open-job.ts",
+    "submit-deliverable": "tsx --env-file=.env src/scripts/submit-deliverable.ts",
+    "settle-job": "tsx --env-file=.env src/scripts/settle-job.ts"
+  },
+  "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.3.1",
+    "viem": "^2.48.11"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  },
+  "keywords": [
+    "arc",
+    "arc-testnet",
+    "erc-8004",
+    "erc-8183",
+    "circle",
+    "usdc",
+    "starter-kit"
+  ]
+}

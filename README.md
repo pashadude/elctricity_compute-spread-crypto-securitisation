@@ -7,10 +7,8 @@ This repository has two distinct surfaces:
 - `arc-compute-sec/` is the product demo: the live website, API, worker,
   Telegram integration, Opoint/Nebius/IBKR/Polymarket routing, backtests, and
   Arc settlement path.
-- `arc-oss-builder-starter-kit/` is a separate local git repository for the
-  Arc OSS starter kit. It is not part of the product runtime and should be
-  published independently at
-  `https://github.com/pashadude/arc-oss-builder-starter-kit`.
+- `arc-oss-builder-starter-kit/` is a self-contained Arc OSS starter kit
+  folder tracked in this same repo. It is not part of the product runtime.
 
 The separation is intentional. The product repo explains the compute/energy
 spread desk. The starter kit explains reusable Arc builder primitives without
@@ -89,7 +87,7 @@ unless the judge verdict is EXECUTE.
 
 ## Arc OSS Starter Kit
 
-The standalone starter kit exists locally at:
+The Arc OSS starter kit lives in this repo at:
 
 ```bash
 cd arc-oss-builder-starter-kit
@@ -111,23 +109,17 @@ npm run check
 npm run submission-link
 ```
 
-Publish it as a separate GitHub repository:
-
-```bash
-git push -u origin main
-```
-
-Then include this link in the Arc OSS submission form and Arc CLI update:
+Include this folder link in the Arc OSS submission form and Arc CLI update:
 
 ```text
-https://github.com/pashadude/arc-oss-builder-starter-kit
+https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit
 ```
 
 Suggested CLI update:
 
 ```text
-Spun out a standalone Arc OSS builder starter kit:
-https://github.com/pashadude/arc-oss-builder-starter-kit
+Added a self-contained Arc OSS builder starter kit folder:
+https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit
 
 It teaches ERC-8004 identity, ERC-8183 job escrow, Circle SCA wallets,
 USDC 6-decimal handling, and the no-chain-unless-EXECUTE invariant without

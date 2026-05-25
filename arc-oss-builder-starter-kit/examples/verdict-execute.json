@@ -1,0 +1,8 @@
+{
+  "label": "EXECUTE",
+  "reason_code": "all_gates_passed",
+  "action_payload_hash": "0x6b7a0e3f0b8b8d5d3e8845f8d2a5bb6e087c4ed63a3c5a4d7b3e7b8f84b2e001",
+  "max_notional_usdc": 1,
+  "confidence": 0.91,
+  "evidence_uri": "ipfs://replace-with-your-evidence"
+}
