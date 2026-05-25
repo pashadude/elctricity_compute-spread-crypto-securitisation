@@ -133,6 +133,31 @@ def _latest_verdict(snap: dict[str, Any]) -> dict[str, Any] | None:
     return verdicts[0] if verdicts else None
 
 
+def _quote_source_label(source: Any) -> str:
+    low = str(source or "").strip().lower()
+    labels = {
+        "public_quote": "public quote adapter",
+        "ibkr_energy_history_csv": "IBKR paper CSV",
+        "ibkr_tws_front_future": "IBKR paper TWS front future",
+        "ibkr_tws_stock": "IBKR paper TWS stock",
+        "ibkr_tws": "IBKR paper TWS",
+        "yahoo_finance_chart": "Yahoo fallback",
+        "alpaca_market_data": "Alpaca fallback",
+    }
+    return labels.get(low, str(source or "public quotes"))
+
+
+def _quote_source_list(sources: Any, *, limit: int = 3) -> list[str]:
+    out: list[str] = []
+    for source in sources or []:
+        label = _quote_source_label(source)
+        if label and label not in out:
+            out.append(label)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def format_status(snap: dict[str, Any]) -> str:
     runtime = snap.get("runtime") or {}
     mode = snap.get("mode") or {}
@@ -151,7 +176,7 @@ def format_status(snap: dict[str, Any]) -> str:
         )
         sources = construction.get("quote_sources") or []
         if sources:
-            parts.append("quotes: " + ", ".join(str(src) for src in sources[:3]))
+            parts.append("quotes: " + ", ".join(_quote_source_list(sources)))
     if runtime.get("last_success_at"):
         parts.append(f"last_success: {int(float(runtime['last_success_at']))}")
     if runtime.get("last_error"):
@@ -184,7 +209,7 @@ def format_latest(snap: dict[str, Any]) -> str:
                 lines.append(f"agent recommendation: {construction.get('recommended_action')} while profitable")
             sources = construction.get("quote_sources") or []
             if sources:
-                lines.append("quote source: " + ", ".join(str(src) for src in sources[:3]))
+                lines.append("quote source: " + ", ".join(_quote_source_list(sources)))
             weighted = construction.get("weighted_legs") or []
             if weighted:
                 lines.append("weights: " + ", ".join(
@@ -523,7 +548,7 @@ def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
         for leg in weighted[:5]
         if isinstance(leg, dict)
     )
-    sources = ", ".join(str(src) for src in (construction.get("quote_sources") or [])[:3]) or "public quotes"
+    sources = ", ".join(_quote_source_list(construction.get("quote_sources") or [])) or "public quotes"
     key = f"mock-contract:{proposal_id}:{action}:{round(circle, 2)}"
     text = "\n".join([
         f"{action} mock compute/energy contract",

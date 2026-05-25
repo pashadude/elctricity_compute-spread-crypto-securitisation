@@ -51,6 +51,7 @@ const pricingStatusLabel = (status) => {
 
 const proxySourceLabel = (source, stale = false) => {
   const low = String(source || '').toLowerCase();
+  if (low === 'public_quote') return 'Public quote adapter';
   if (low === 'ibkr_energy_history_csv') return `IBKR paper CSV${stale ? ' · stale' : ''}`;
   if (low === 'ibkr_tws_front_future') return 'IBKR paper TWS front future';
   if (low === 'ibkr_tws_stock') return 'IBKR paper TWS stock';
@@ -59,6 +60,13 @@ const proxySourceLabel = (source, stale = false) => {
   if (low === 'ibkr_tws') return 'IBKR paper TWS';
   return source || 'external proxy';
 };
+
+const quoteSourceLabels = (sources = []) => {
+  const labels = [...new Set((sources || []).map(src => proxySourceLabel(src)).filter(Boolean))];
+  return labels;
+};
+
+const quoteSourceSummary = (sources = []) => quoteSourceLabels(sources).join(', ');
 
 const proxyMarkMeta = (leg = {}) => {
   const parts = [proxySourceLabel(leg.externalProxySource, leg.externalProxyStale)];
@@ -484,12 +492,16 @@ function genOracleResults() {
 
 /* ── Dashboard Components ── */
 
-const StatCard = ({ label, value, suffix, prefix, change, sparkData, color }) => (
-  <Card style={{ padding: '20px' }}>
+const StatCard = ({ label, value, suffix, prefix, change, sparkData, color, valueSize = 28 }) => (
+  <Card style={{ padding: '20px' }} title={typeof value === 'string' ? value : undefined}>
     <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.muted, marginBottom: '8px' }}>{label}</div>
     <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-      <div>
-        <span style={{ fontFamily: THEME.font.heading, fontSize: '28px', fontWeight: 800, color: THEME.text.primary, letterSpacing: 0 }}>
+      <div style={{ minWidth: 0 }}>
+        <span style={{
+          fontFamily: THEME.font.heading, fontSize: valueSize, fontWeight: 800,
+          color: THEME.text.primary, letterSpacing: 0, lineHeight: 1.05,
+          overflowWrap: 'anywhere',
+        }}>
           {prefix}{typeof value === 'number' ? <AnimatedNumber value={value} decimals={value > 10 ? 2 : 4} /> : value}{suffix}
         </span>
         {change !== undefined && (
@@ -923,7 +935,7 @@ const useMockContractTicket = (proposal, construction, weightedLegs) => {
 
 const MockContractSummaryPanel = ({ proposal }) => {
   const construction = proposal?.outputs?.mock_hedge_construction || {};
-  const sources = construction.quote_sources || [];
+  const sourceSummary = quoteSourceSummary(construction.quote_sources || []);
   const score = Number(construction.profitability_score || 0);
   const color = construction.recommended_action === 'BUY_CONTRACT' ? THEME.primary[400] : THEME.amber[400];
   return (
@@ -936,7 +948,7 @@ const MockContractSummaryPanel = ({ proposal }) => {
               {proposal.instrument_name || 'Compute/energy hedge contract'}
             </div>
             <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginTop: '4px' }}>
-              Real-price mock · {sources.join(' / ') || 'public quotes'} · updates with backend refresh
+              Real-price mock · {sourceSummary || 'public quotes'} · updates with backend refresh
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
@@ -1028,7 +1040,7 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
             {hedge.length ? hedge.map(leg => `${leg.slug || leg.title}${leg.last_price ? ` ${Number(leg.last_price).toFixed(2)}${leg.currency ? ` ${leg.currency}` : ''}` : ''}`).slice(0, 3).join(', ') : 'needs live prices'}
           </div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
-            Sources: {(mockConstruction?.quote_sources || []).join(', ') || 'public quote adapter'}.
+            Sources: {quoteSourceSummary(mockConstruction?.quote_sources || []) || 'public quote adapter'}.
           </div>
         </div>
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
@@ -1216,7 +1228,7 @@ const DashboardPage = ({ refreshRate }) => {
   const isMobile = useIsMobile(820);
   const isNarrow = useIsMobile(520);
   const construction = data.syntheticInstrument?.outputs?.mock_hedge_construction || {};
-  const quoteSources = construction.quote_sources || [];
+  const quoteSourceText = quoteSourceSummary(construction.quote_sources || []);
   const recommendation = construction.recommended_action === 'BUY_CONTRACT' ? 'Buy' : 'Monitor';
 
   return (
@@ -1249,7 +1261,7 @@ const DashboardPage = ({ refreshRate }) => {
         <StatCard label="Mock Notional" value={construction.hedge_notional_usdc ? `$${Number(construction.hedge_notional_usdc).toLocaleString()}` : 'Pending'} />
         <StatCard label="Circle Ask" value={construction.circle_testnet_usdc_request ? `${Number(construction.circle_testnet_usdc_request).toLocaleString()} USDC` : 'Pending'} color={THEME.amber[400]} />
         <StatCard label="Agent Recommendation" value={recommendation} color={recommendation === 'Buy' ? THEME.primary[400] : THEME.amber[400]} />
-        <StatCard label="Quote Source" value={quoteSources.join(', ') || 'Pending'} />
+        <StatCard label="Quote Source" value={quoteSourceText || 'Pending'} valueSize={16} />
       </div>
 
       {/* Signal + Candidates */}

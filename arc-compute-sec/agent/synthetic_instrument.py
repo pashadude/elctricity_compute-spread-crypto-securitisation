@@ -507,6 +507,7 @@ def _weighted_hedge_legs(hedge_basket: list[dict[str, Any]], hedge_notional: flo
             "role": leg.get("role"),
             "pricing_status": leg.get("pricing_status"),
             "source": leg.get("source") or "public_quote",
+            "source_priority": leg.get("source_priority") or "",
             "exchange": leg.get("exchange") or "",
             "description": explanation.get("what") or leg.get("description") or "",
             "risk_driver": explanation.get("driver") or leg.get("direct_pair_role") or leg.get("role") or "",
