@@ -936,7 +936,10 @@ const useMockContractTicket = (proposal, construction, weightedLegs) => {
 const MockContractSummaryPanel = ({ proposal }) => {
   const construction = proposal?.outputs?.mock_hedge_construction || {};
   const sourceSummary = quoteSourceSummary(construction.quote_sources || []);
-  const score = Number(construction.profitability_score || 0);
+  const score = Number(construction.entry_signal_score ?? construction.profitability_score ?? 0);
+  const label = construction.recommendation_label || (construction.recommended_action === 'BUY_CONTRACT' ? 'Hedge now' : 'Monitor');
+  const reason = construction.recommendation_reason || 'Recommendation refreshes from the latest spread, quote, and leg state.';
+  const judgeVerdict = construction.judge_verdict || {};
   const color = construction.recommended_action === 'BUY_CONTRACT' ? THEME.primary[400] : THEME.amber[400];
   return (
     <Card glow>
@@ -965,10 +968,23 @@ const MockContractSummaryPanel = ({ proposal }) => {
           </div>
           <div style={{ padding: '10px', borderRadius: '6px', background: `${color}12`, border: `1px solid ${color}30` }}>
             <div style={{ fontFamily: THEME.font.mono, fontSize: '12px', color, fontWeight: 800 }}>
-              {construction.recommended_action === 'BUY_CONTRACT' ? 'Recommended: buy mock contract' : 'Recommended: monitor only'}
+              Recommended: {label}
             </div>
             <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '4px' }}>
-              score {score.toFixed(2)} · buy only freezes a local entry ticket; Arc stays gated by judge.classify().
+              Edge strength {Math.round(score)}/100 · {reason}
+            </div>
+            {construction.decision_basis_hash && (
+              <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '5px' }}>
+                decision refresh: {construction.decision_basis_hash}
+              </div>
+            )}
+            {judgeVerdict.label && (
+              <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: judgeVerdict.label === 'EXECUTE' ? THEME.primary[400] : THEME.amber[400], lineHeight: 1.35, marginTop: '5px' }}>
+                judge: {judgeVerdict.label}/{judgeVerdict.reason_code || 'checked'}
+              </div>
+            )}
+            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
+              Buy freezes a local entry ticket only; Arc stays gated by judge.classify().
             </div>
           </div>
         </div>
@@ -1046,11 +1062,18 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
         <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>Agent action loop</div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
-            {mockConstruction?.profitability_note || actions[0] || 'Refresh quotes, monitor spread confirmation, then recommend buy or sell.'}
+            {mockConstruction?.recommendation_reason || mockConstruction?.profitability_note || actions[0] || 'Refresh quotes, monitor spread confirmation, then recommend buy or sell.'}
           </div>
           <div style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.primary[400], lineHeight: 1.35, marginTop: '6px' }}>
-            {mockConstruction?.recommended_action === 'BUY_CONTRACT' ? 'agent says: buy while profitable' : 'agent says: monitor until edge improves'}
+            {mockConstruction?.recommendation_label
+              ? `agent says: ${mockConstruction.recommendation_label.toLowerCase()}`
+              : (mockConstruction?.recommended_action === 'BUY_CONTRACT' ? 'agent says: hedge now' : 'agent says: monitor until edge improves')}
           </div>
+          {mockConstruction?.judge_verdict?.label && (
+            <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '4px' }}>
+              spread judge: {mockConstruction.judge_verdict.label}/{mockConstruction.judge_verdict.reason_code || 'checked'}
+            </div>
+          )}
         </div>
       </div>
       {mockConstruction && (
@@ -1229,7 +1252,7 @@ const DashboardPage = ({ refreshRate }) => {
   const isNarrow = useIsMobile(520);
   const construction = data.syntheticInstrument?.outputs?.mock_hedge_construction || {};
   const quoteSourceText = quoteSourceSummary(construction.quote_sources || []);
-  const recommendation = construction.recommended_action === 'BUY_CONTRACT' ? 'Buy' : 'Monitor';
+  const recommendation = construction.recommendation_label || (construction.recommended_action === 'BUY_CONTRACT' ? 'Hedge now' : 'Monitor');
 
   return (
     <div style={{ padding: isMobile ? '18px 14px 32px' : '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -1260,7 +1283,7 @@ const DashboardPage = ({ refreshRate }) => {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? (isNarrow ? '1fr' : 'repeat(2, minmax(0, 1fr))') : 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
         <StatCard label="Mock Notional" value={construction.hedge_notional_usdc ? `$${Number(construction.hedge_notional_usdc).toLocaleString()}` : 'Pending'} />
         <StatCard label="Circle Ask" value={construction.circle_testnet_usdc_request ? `${Number(construction.circle_testnet_usdc_request).toLocaleString()} USDC` : 'Pending'} color={THEME.amber[400]} />
-        <StatCard label="Agent Recommendation" value={recommendation} color={recommendation === 'Buy' ? THEME.primary[400] : THEME.amber[400]} />
+        <StatCard label="Agent Recommendation" value={recommendation} color={construction.recommended_action === 'BUY_CONTRACT' ? THEME.primary[400] : THEME.amber[400]} />
         <StatCard label="Quote Source" value={quoteSourceText || 'Pending'} valueSize={16} />
       </div>
 

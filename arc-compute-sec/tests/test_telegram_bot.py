@@ -74,6 +74,10 @@ def test_channel_notify_dedupes_messages(tmp_path, monkeypatch):
                     "hedge_notional_usdc": 1500.0,
                     "circle_testnet_usdc_request": 1630.0,
                     "recommended_action": "BUY_CONTRACT",
+                    "recommendation_label": "Hedge now",
+                    "recommendation_summary": "Hedge now, then monitor leg PnL.",
+                    "entry_signal_score": 83.0,
+                    "judge_verdict": {"label": "EXECUTE", "reason_code": "all_gates_passed", "confidence": 0.95},
                     "quote_sources": ["yahoo_finance_chart"],
                     "weighted_legs": [{"slug": "NVDA", "side": "short", "weight": -0.2}],
                 },
@@ -86,7 +90,9 @@ def test_channel_notify_dedupes_messages(tmp_path, monkeypatch):
     assert telegram_bot.notify_channel_once(logs=tmp_path) == 1
     assert telegram_bot.notify_channel_once(logs=tmp_path) == 0
     assert len(sent) == 1
-    assert "BUY_CONTRACT mock compute/energy contract" in sent[0][1]
+    assert "Hedge now mock compute/energy contract" in sent[0][1]
+    assert "edge: 83/100" in sent[0][1]
+    assert "judge: EXECUTE/all_gates_passed" in sent[0][1]
 
 
 def test_channel_messages_mute_rejects():
@@ -121,6 +127,10 @@ def test_latest_includes_direct_inventory_watchlist():
                     "hedge_notional_usdc": 1500.0,
                     "circle_testnet_usdc_request": 1630.0,
                     "recommended_action": "BUY_CONTRACT",
+                    "recommendation_label": "Hedge now",
+                    "recommendation_summary": "Hedge now, then monitor leg PnL.",
+                    "entry_signal_score": 83.0,
+                    "judge_verdict": {"label": "EXECUTE", "reason_code": "all_gates_passed", "confidence": 0.95},
                     "weighted_legs": [
                         {"slug": "NVDA", "side": "short", "weight": -0.2},
                         {"slug": "CEG", "side": "long", "weight": 0.2},
@@ -145,7 +155,9 @@ def test_latest_includes_direct_inventory_watchlist():
     assert "contract: ERCOT power compute receivable hedge note abc123" in text
     assert "live-priced basket: NVDA, CEG" in text
     assert "funding: 1500.00 USDC notional, Circle ask 1630.00 test USDC" in text
-    assert "agent recommendation: BUY_CONTRACT while profitable" in text
+    assert "agent recommendation: Hedge now — Hedge now, then monitor leg PnL." in text
+    assert "edge: 83/100" in text
+    assert "judge: EXECUTE/all_gates_passed" in text
     assert "weights: short NVDA -20.0%, long CEG +20.0%" in text
     assert "pricing gaps:" not in text
     assert "agent scouting: opoint_nebius:news-grounded spread drivers" in text
@@ -176,6 +188,10 @@ def test_channel_messages_post_mock_contract_recommendation():
                     "hedge_notional_usdc": 1500.0,
                     "circle_testnet_usdc_request": 1630.0,
                     "recommended_action": "BUY_CONTRACT",
+                    "recommendation_label": "Hedge now",
+                    "recommendation_summary": "Hedge now, then monitor leg PnL.",
+                    "entry_signal_score": 83.0,
+                    "judge_verdict": {"label": "EXECUTE", "reason_code": "all_gates_passed", "confidence": 0.95},
                     "quote_sources": ["yahoo_finance_chart"],
                     "weighted_legs": [
                         {"slug": "NVDA", "side": "short", "weight": -0.2},
@@ -191,8 +207,10 @@ def test_channel_messages_post_mock_contract_recommendation():
     assert len(messages) == 1
     key, text = messages[0]
     assert key == "mock-contract:abc123:BUY_CONTRACT:1630.0"
-    assert "BUY_CONTRACT mock compute/energy contract" in text
+    assert "Hedge now mock compute/energy contract" in text
     assert "Circle ask: 1630.00 test USDC" in text
+    assert "edge: 83/100" in text
+    assert "judge: EXECUTE/all_gates_passed" in text
     assert "weights: short NVDA -20%, long CEG +20%" in text
 
 

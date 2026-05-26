@@ -197,7 +197,7 @@ const tgUsdc = (value, fallback = 'Pending') => {
   const n = Number(value || 0);
   return n > 0 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : fallback;
 };
-const tgRecommendation = (construction) => construction.recommended_action === 'BUY_CONTRACT' ? 'Buy' : 'Monitor';
+const tgRecommendation = (construction) => construction.recommendation_label || (construction.recommended_action === 'BUY_CONTRACT' ? 'Hedge now' : 'Monitor');
 const tgWeightLabel = (leg) => `${leg.side || 'hold'} ${leg.slug || leg.symbol || 'leg'} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`;
 
 /* ── Mini App Screens ── */
@@ -206,6 +206,7 @@ const TgHome = ({ setScreen, data, requestScan }) => {
   const construction = tgMockConstruction(data);
   const searchCount = tgSearchPlan(data).length + (data.directInventory?.length || 0);
   const recommendation = tgRecommendation(construction);
+  const recommendationColor = construction.recommended_action === 'BUY_CONTRACT' ? TG_THEME.green : TG_THEME.orange;
   return (
   <TgScreen title="Botozen Power" subtitle="Compute/Energy Spread Desk">
     <div style={{ padding: '16px' }}>
@@ -239,7 +240,7 @@ const TgHome = ({ setScreen, data, requestScan }) => {
           {[
             { label: 'Notional', value: tgUsdc(construction.hedge_notional_usdc), color: TG_THEME.text },
             { label: 'Circle Ask', value: tgUsdc(construction.circle_testnet_usdc_request), color: TG_THEME.orange },
-            { label: 'Action', value: recommendation, color: recommendation === 'Buy' ? TG_THEME.green : TG_THEME.orange },
+            { label: 'Action', value: recommendation, color: recommendationColor },
           ].map((s, i) => (
             <div key={i} style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '18px', fontWeight: 700, color: s.color, fontFamily: 'SF Mono, monospace', overflowWrap: 'anywhere' }}>{s.value}</div>
@@ -357,8 +358,25 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                 {((data.syntheticInstrument.outputs.mock_hedge_construction.weighted_legs || []).slice(0, 3).map(leg => `${leg.side} ${leg.slug} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`).join(', '))}
               </div>
               <div style={{ fontSize: '11px', color: TG_THEME.green, lineHeight: 1.35, marginTop: '4px' }}>
-                {data.syntheticInstrument.outputs.mock_hedge_construction.recommended_action === 'BUY_CONTRACT' ? 'Agent says buy while profitable; close if a leg drags package PnL red.' : 'Agent says monitor until edge improves.'}
+                {data.syntheticInstrument.outputs.mock_hedge_construction.recommendation_summary || (
+                  data.syntheticInstrument.outputs.mock_hedge_construction.recommended_action === 'BUY_CONTRACT'
+                    ? 'Agent says hedge now; close if a leg drags package PnL red.'
+                    : 'Agent says monitor until edge improves.'
+                )}
               </div>
+              {data.syntheticInstrument.outputs.mock_hedge_construction.decision_basis_hash && (
+                <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, lineHeight: 1.35, marginTop: '4px' }}>
+                  refresh {data.syntheticInstrument.outputs.mock_hedge_construction.decision_basis_hash}
+                </div>
+              )}
+              <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginTop: '4px' }}>
+                Edge {Math.round(Number(data.syntheticInstrument.outputs.mock_hedge_construction.entry_signal_score || data.syntheticInstrument.outputs.mock_hedge_construction.profitability_score || 0))}/100; Arc stays gated by judge.classify().
+              </div>
+              {data.syntheticInstrument.outputs.mock_hedge_construction.judge_verdict?.label && (
+                <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, lineHeight: 1.35, marginTop: '4px' }}>
+                  judge {data.syntheticInstrument.outputs.mock_hedge_construction.judge_verdict.label}/{data.syntheticInstrument.outputs.mock_hedge_construction.judge_verdict.reason_code || 'checked'}
+                </div>
+              )}
             </div>
           )}
           {(data.syntheticInstrument.outputs?.agent_search_plan || []).length > 0 && (

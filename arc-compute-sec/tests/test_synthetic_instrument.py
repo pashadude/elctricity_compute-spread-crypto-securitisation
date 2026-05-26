@@ -1,3 +1,4 @@
+from agent import synthetic_instrument
 from agent.synthetic_instrument import propose_synthetic_instrument
 
 
@@ -61,6 +62,16 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert construction["circle_testnet_usdc_request"] == 2770.0
     assert construction["direct_event_budget_usdc"] == 0.0
     assert construction["recommended_action"] == "BUY_CONTRACT"
+    assert construction["recommendation_label"] == "Hedge now"
+    assert "Arc remains gated" in construction["recommendation_reason"]
+    assert 0 <= construction["entry_signal_score"] <= 100
+    assert construction["score_scale"] == "0-100 capped edge score; raw z-score is not shown to users"
+    assert len(construction["decision_basis_hash"]) == 16
+    assert construction["decision_basis"]["signal"]["z"] == -2.2
+    assert construction["judge_verdict"]["label"] == "EXECUTE"
+    assert construction["judge_verdict"]["reason_code"] == "all_gates_passed"
+    assert len(construction["judge_candidate_hash"]) == 16
+    assert "Non-logging spread-decision judge pass" in construction["judge_scope"]
     assert construction["weighted_legs"][0]["slug"] == "NVDA"
     assert construction["weighted_legs"][0]["side"] == "short"
     assert construction["weighted_legs"][0]["description"] == "GPU supply and AI accelerator capex proxy."
@@ -76,6 +87,111 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert "not legal ABS" in proposal["structure"]["securitization_style"]
     assert "FDR-style" in proposal["inputs"]["search_adjustment"]["rule"]
     assert any("real collateral" in action for action in proposal["outputs"]["agent_next_actions"])
+
+
+def test_mock_recommendation_refresh_key_changes_with_spread_state():
+    base_kwargs = {
+        "signal": {"latest": {"signal_id": "sig-1", "direction": "compute_expensive", "region": "PJM", "z": "2.4"}},
+        "direct_inventory": [],
+        "packages": [],
+        "verdicts": [],
+        "public_hedges": [{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
+    }
+    first = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "0.84", "S_t": "0.82"}},
+        **base_kwargs,
+    )
+    second = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "88.0", "compute_per_gpu_hr": "0.84", "S_t": "0.78"}},
+        **base_kwargs,
+    )
+
+    first_decision = first["outputs"]["mock_hedge_construction"]
+    second_decision = second["outputs"]["mock_hedge_construction"]
+
+    assert first_decision["decision_basis_hash"] != second_decision["decision_basis_hash"]
+    assert first_decision["judge_candidate_hash"] != second_decision["judge_candidate_hash"]
+    assert first_decision["recommended_action"] == "BUY_CONTRACT"
+    assert first_decision["profitability_score"] == first_decision["entry_signal_score"]
+
+
+def test_mock_recommendation_calls_judge_on_decision_basis(monkeypatch):
+    calls = []
+
+    def fake_classify(candidate, state, scorer_result=None):
+        calls.append((candidate, state, scorer_result))
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "0.84", "S_t": "0.82"}},
+        signal={"latest": {"signal_id": "sig-judge", "direction": "compute_expensive", "region": "PJM", "z": "2.4"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
+    )
+
+    construction = proposal["outputs"]["mock_hedge_construction"]
+
+    assert calls
+    candidate, state, scorer_result = calls[0]
+    assert scorer_result is None
+    assert candidate["metadata"]["decision_basis_hash"] == construction["decision_basis_hash"]
+    assert candidate["surface"] == "mock_contract"
+    assert candidate["sizing_usdc"] <= state["max_position_usdc"]
+    assert construction["judge_verdict"]["label"] == "EXECUTE"
+
+
+def test_mock_recommendation_blocks_buy_when_judge_defers(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_DEFER, "stale_data", 0.9)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "0.84", "S_t": "0.82"}},
+        signal={"latest": {"signal_id": "sig-defer", "direction": "compute_expensive", "region": "PJM", "z": "4.0"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
+    )
+
+    construction = proposal["outputs"]["mock_hedge_construction"]
+
+    assert construction["recommended_action"] == "MONITOR_ONLY"
+    assert construction["recommendation_label"] == "Monitor: judge defer"
+    assert construction["judge_verdict"] == {"label": "DEFER", "reason_code": "stale_data", "confidence": 0.9}
 
 
 def test_proposal_prefers_execute_package_legs_over_watchlist():

@@ -169,11 +169,17 @@ def format_status(snap: dict[str, Any]) -> str:
         f"live_chain: {'enabled' if mode.get('live_chain_enabled') else 'disabled'}; no Arc before EXECUTE",
     ]
     if construction:
-        parts.append(f"mock_contract: {construction.get('recommended_action', 'MONITOR_ONLY')}")
+        label = construction.get("recommendation_label") or construction.get("recommended_action", "MONITOR_ONLY")
+        parts.append(f"mock_contract: {label}")
         parts.append(
             f"notional: {float(construction.get('hedge_notional_usdc') or 0):.2f} USDC; "
             f"Circle ask: {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
         )
+        if construction.get("entry_signal_score") not in ("", None):
+            parts.append(f"edge: {float(construction.get('entry_signal_score') or 0):.0f}/100")
+        judge_verdict = construction.get("judge_verdict") if isinstance(construction.get("judge_verdict"), dict) else {}
+        if judge_verdict.get("label"):
+            parts.append(f"judge: {judge_verdict.get('label')}/{judge_verdict.get('reason_code', 'checked')}")
         sources = construction.get("quote_sources") or []
         if sources:
             parts.append("quotes: " + ", ".join(_quote_source_list(sources)))
@@ -206,7 +212,14 @@ def format_latest(snap: dict[str, Any]) -> str:
                 f"Circle ask {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
             )
             if construction.get("recommended_action"):
-                lines.append(f"agent recommendation: {construction.get('recommended_action')} while profitable")
+                label = construction.get("recommendation_label") or construction.get("recommended_action")
+                summary = construction.get("recommendation_summary") or "Arc stays gated by judge.classify()."
+                lines.append(f"agent recommendation: {label} — {summary}")
+                if construction.get("entry_signal_score") not in ("", None):
+                    lines.append(f"edge: {float(construction.get('entry_signal_score') or 0):.0f}/100")
+                judge_verdict = construction.get("judge_verdict") if isinstance(construction.get("judge_verdict"), dict) else {}
+                if judge_verdict.get("label"):
+                    lines.append(f"judge: {judge_verdict.get('label')}/{judge_verdict.get('reason_code', 'checked')}")
             sources = construction.get("quote_sources") or []
             if sources:
                 lines.append("quote source: " + ", ".join(_quote_source_list(sources)))
@@ -539,6 +552,7 @@ def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     if not construction:
         return None
     action = str(construction.get("recommended_action") or "MONITOR_ONLY")
+    label = str(construction.get("recommendation_label") or action)
     proposal_id = str(proposal.get("proposal_id") or proposal.get("reference_package_id") or proposal.get("instrument_name") or "mock")
     circle = float(construction.get("circle_testnet_usdc_request") or 0)
     notional = float(construction.get("hedge_notional_usdc") or 0)
@@ -551,12 +565,20 @@ def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     sources = ", ".join(_quote_source_list(construction.get("quote_sources") or [])) or "public quotes"
     key = f"mock-contract:{proposal_id}:{action}:{round(circle, 2)}"
     text = "\n".join([
-        f"{action} mock compute/energy contract",
+        f"{label} mock compute/energy contract",
         f"instrument: {proposal.get('instrument_name', 'compute/energy hedge note')}",
         f"notional: {notional:.2f} USDC",
         f"Circle ask: {circle:.2f} test USDC",
+        f"edge: {float(construction.get('entry_signal_score') or 0):.0f}/100",
+        "judge: "
+        + (
+            f"{construction.get('judge_verdict', {}).get('label')}/{construction.get('judge_verdict', {}).get('reason_code', 'checked')}"
+            if isinstance(construction.get("judge_verdict"), dict) and construction.get("judge_verdict", {}).get("label")
+            else "pending"
+        ),
         f"weights: {weights or 'waiting for live prices'}",
         f"quotes: {sources}",
+        f"reason: {construction.get('recommendation_summary') or 'Arc stays gated by judge.classify().'}",
         "Open Mini App to buy/monitor/sell the local testnet ticket.",
     ])
     return key, text

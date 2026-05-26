@@ -12,6 +12,7 @@ import hashlib
 import json
 from typing import Any, Iterable
 
+from agent import judge
 from agent.arb_identifier import DIRECTION_COMPUTE_EXPENSIVE, DIRECTION_ELEC_EXPENSIVE
 
 SYNTHETIC_INSTRUMENT_VERSION = "synthetic_instrument_v1"
@@ -97,6 +98,10 @@ def _round_money(value: Any) -> float:
 def _round_units(value: Any) -> float:
     out = _num(value)
     return round(out, 8 if abs(out) < 1 else 4)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -523,6 +528,168 @@ def _weighted_hedge_legs(hedge_basket: list[dict[str, Any]], hedge_notional: flo
     return rows
 
 
+def _mock_recommendation(
+    *,
+    direction: str,
+    spread_latest: dict[str, Any],
+    signal_latest: dict[str, Any],
+    direct_legs: list[dict[str, Any]],
+    weighted_legs: list[dict[str, Any]],
+    receivable: float,
+    power_cost: float,
+    margin: float,
+    hedge_notional: float,
+    circle_ask: float,
+) -> dict[str, Any]:
+    z_score = _num(signal_latest.get("z"))
+    abs_z = abs(z_score)
+    margin_ratio = margin / receivable if receivable > 0 else 0.0
+    live_prices = [row for row in weighted_legs if _num(row.get("last_price")) > 0]
+    z_component = min(abs_z, 4.0) / 4.0 * 60.0
+    margin_component = _clamp(margin_ratio, -0.25, 0.50) * 50.0
+    quote_component = 15.0 if live_prices else 0.0
+    direct_component = 5.0 if direct_legs else 0.0
+    edge_score = _clamp(z_component + margin_component + quote_component + direct_component, 0.0, 100.0)
+    basis = {
+        "direction": direction,
+        "spread": {
+            "region": spread_latest.get("region") or signal_latest.get("region") or "",
+            "electricity_per_mwh": _round_units(spread_latest.get("electricity_per_mwh")),
+            "compute_per_gpu_hr": _round_units(spread_latest.get("compute_per_gpu_hr")),
+            "S_t": _round_units(spread_latest.get("S_t")),
+            "kWh_per_gpu_hr": _round_units(spread_latest.get("kWh_per_gpu_hr")),
+        },
+        "signal": {
+            "z": _round_units(z_score),
+            "direction": signal_latest.get("direction") or direction,
+        },
+        "economics": {
+            "receivable_usdc": _round_money(receivable),
+            "power_cost_usdc": _round_money(power_cost),
+            "margin_usdc": _round_money(margin),
+            "hedge_notional_usdc": _round_money(hedge_notional),
+            "circle_ask_usdc": _round_money(circle_ask),
+        },
+        "legs": [
+            {
+                "slug": row.get("slug"),
+                "side": row.get("side"),
+                "price": row.get("last_price"),
+                "source": row.get("source"),
+            }
+            for row in weighted_legs
+        ],
+        "direct_leg_slugs": [leg.get("slug") for leg in direct_legs],
+    }
+    basis_hash = _hash_payload(basis)[:16]
+    state = judge.default_state()
+    state["surface_resolutions_30d"] = {
+        **(state.get("surface_resolutions_30d") or {}),
+        "mock_contract": 1,
+    }
+    candidate = {
+        "arb_signal_id": _text(signal_latest.get("signal_id"), basis_hash),
+        "surface": "mock_contract",
+        "instrument": "compute_energy_spread_mock_contract",
+        "direction": direction,
+        "sizing_usdc": min(5.0, max(1.0, _round_money(hedge_notional))),
+        "est_pnl_per_dollar": _round_units(edge_score / 10000.0),
+        "action_kind": "mock_contract_recommendation",
+        "data_age_seconds": _num(signal_latest.get("data_age_seconds"), _num(spread_latest.get("data_age_seconds"))),
+        "metadata": {
+            "decision_basis_hash": basis_hash,
+            "scope": "local_mock_contract_recommendation",
+            "circle_request_usdc": _round_money(circle_ask),
+            "full_mock_notional_usdc": _round_money(hedge_notional),
+        },
+    }
+    verdict = judge.classify(candidate, state)
+    judge_verdict = {
+        "label": verdict.label,
+        "reason_code": verdict.reason_code,
+        "confidence": _round_units(verdict.confidence),
+    }
+    judge_candidate_hash = _hash_payload(candidate)[:16]
+    judge_scope = (
+        "Non-logging spread-decision judge pass for the local mock recommendation. "
+        "Runtime venue candidates are still re-judged before any Circle or Arc action."
+    )
+
+    def with_judge(payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **payload,
+            "judge_verdict": judge_verdict,
+            "judge_candidate_hash": judge_candidate_hash,
+            "judge_scope": judge_scope,
+        }
+
+    if not live_prices:
+        return with_judge({
+            "recommended_action": "MONITOR_ONLY",
+            "recommendation_label": "Wait for prices",
+            "recommendation_reason": "No live-priced hedge legs are available, so a buy would not give the user a defensible entry mark.",
+            "recommendation_summary": "Monitor only until the basket has fresh prices.",
+            "entry_signal_score": 0.0,
+            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
+    if margin <= 0:
+        return with_judge({
+            "recommended_action": "MONITOR_ONLY",
+            "recommendation_label": "Avoid new exposure",
+            "recommendation_reason": "The underlying compute sale is not profitable at current compute and power marks; buying a new mock ticket would hide bad unit economics.",
+            "recommendation_summary": "Avoid a new ticket until compute margin turns positive.",
+            "entry_signal_score": _round_units(edge_score),
+            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
+    if verdict.label != judge.LABEL_EXECUTE:
+        return with_judge({
+            "recommended_action": "MONITOR_ONLY",
+            "recommendation_label": f"Monitor: judge {verdict.label.lower()}",
+            "recommendation_reason": (
+                f"The spread-decision judge refreshed on the latest inputs and returned "
+                f"{verdict.label}/{verdict.reason_code}; the user should not open a new mock ticket yet."
+            ),
+            "recommendation_summary": "Monitor only; the judge gate did not clear on the latest spread state.",
+            "entry_signal_score": _round_units(edge_score),
+            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
+    if edge_score >= 70.0:
+        return with_judge({
+            "recommended_action": "BUY_CONTRACT",
+            "recommendation_label": "Hedge now",
+            "recommendation_reason": "The spread dislocation is strong, the compute sale has positive margin, and the hedge basket has live marks. Buying only freezes a local mock entry ticket; Arc remains gated by judge.classify().",
+            "recommendation_summary": "Hedge now, then monitor leg PnL and close if the basket stops confirming the spread.",
+            "entry_signal_score": _round_units(edge_score),
+            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
+    if edge_score >= 45.0:
+        reason = "The spread is present, but the capped edge score is not strong enough after quote and funding checks."
+    else:
+        reason = "The spread is too weak for a user-facing buy recommendation."
+    return with_judge({
+        "recommended_action": "MONITOR_ONLY",
+        "recommendation_label": "Monitor",
+        "recommendation_reason": reason,
+        "recommendation_summary": "Monitor only; wait for a stronger spread move or better-priced hedge basket.",
+        "entry_signal_score": _round_units(edge_score),
+        "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+        "decision_basis_hash": basis_hash,
+        "decision_basis": basis,
+    })
+
+
 def _mock_hedge_construction(
     *,
     direction: str,
@@ -548,11 +715,18 @@ def _mock_hedge_construction(
     hedge_offset = hedge_notional * 0.10
     compute_relief_gain = receivable * 0.08
     hedge_drag = -hedge_notional * 0.04
-    z_score = _num(signal_latest.get("z"))
-    margin_ratio = margin / receivable if receivable > 0 else 0.0
-    live_prices = [row for row in weighted_legs if _num(row.get("last_price")) > 0]
-    profitability_score = abs(z_score) * 0.55 + max(-0.5, min(margin_ratio, 0.5))
-    recommended_action = "BUY_CONTRACT" if live_prices and profitability_score >= 0.65 else "MONITOR_ONLY"
+    recommendation = _mock_recommendation(
+        direction=direction,
+        spread_latest=spread_latest,
+        signal_latest=signal_latest,
+        direct_legs=direct_legs,
+        weighted_legs=weighted_legs,
+        receivable=receivable,
+        power_cost=power_cost,
+        margin=margin,
+        hedge_notional=hedge_notional,
+        circle_ask=circle_ask,
+    )
     quote_sources = sorted({
         _text(row.get("source"), "public_quote")
         for row in weighted_legs
@@ -563,12 +737,19 @@ def _mock_hedge_construction(
         "label": "Mock testnet hedge construction",
         "based_on": "live public quote snapshots plus current electricity and compute inputs",
         "quote_sources": quote_sources,
-        "recommended_action": recommended_action,
-        "profitability_score": _round_units(profitability_score),
-        "profitability_note": (
-            "Buy the mock contract while the spread z-score is strong and the priced hedge basket confirms the thesis; "
-            "monitor live leg drift and close when the biggest contributor turns the package negative."
-        ),
+        "recommended_action": recommendation["recommended_action"],
+        "recommendation_label": recommendation["recommendation_label"],
+        "recommendation_reason": recommendation["recommendation_reason"],
+        "recommendation_summary": recommendation["recommendation_summary"],
+        "entry_signal_score": recommendation["entry_signal_score"],
+        "profitability_score": recommendation["entry_signal_score"],
+        "score_scale": recommendation["score_scale"],
+        "decision_basis_hash": recommendation["decision_basis_hash"],
+        "decision_basis": recommendation["decision_basis"],
+        "judge_verdict": recommendation["judge_verdict"],
+        "judge_candidate_hash": recommendation["judge_candidate_hash"],
+        "judge_scope": recommendation["judge_scope"],
+        "profitability_note": recommendation["recommendation_summary"],
         "demo_gpu_hours": _round_units(gpu_hours),
         "gpu_kwh_per_hr": _round_units(gpu_kwh),
         "receivable_usdc": _round_money(receivable),
