@@ -7,7 +7,7 @@
 - Telegram bot / Mini App: https://t.me/BotozenPowerBot
 - Repository: https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation
 - Arc OSS starter kit folder: https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit
-- Loom / YouTube / Vimeo: `TODO: add final video link`
+- Loom / YouTube / Vimeo: https://www.youtube.com/watch?v=GEgcJz-lDso
 
 ## 1. What Problem Is Your Project Solving?
 

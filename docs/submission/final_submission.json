@@ -3,7 +3,7 @@
   "demo_url": "https://power.botozen.com",
   "repository_url": "https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation",
   "arc_oss_starter_kit_url": "https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit",
-  "video_url": "TODO: add final Loom / YouTube / Vimeo link",
+  "video_url": "https://www.youtube.com/watch?v=GEgcJz-lDso",
   "problem": "AI infrastructure is turning compute into a commodity-like input, but raw compute is not yet standardized enough to securitize directly. Power by Botozen builds audited compute/energy spread packages around the relationship between GPU-hour economics and electricity cost, routes direct event legs and labelled proxy hedge legs, and only wraps a package on Arc after premium scoring and judge.classify() return EXECUTE.",
   "why_compelling": "Data center real estate can already be financed, but compute service flow remains exposed to utilization, chip obsolescence, power price, grid approvals, and AI demand uncertainty. The market needs a bridge between physical compute cashflows and hedgeable financial instruments.",
   "demo_script_file": "docs/submission/demo_script.md",
