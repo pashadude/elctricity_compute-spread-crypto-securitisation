@@ -59,11 +59,30 @@ hedging compute means hedging the compute/energy spread
 
 ## Research Basis
 
-le
+This submission builds on the user's research paper,
+`The Securitization of Compute: AI Infrastructure, Energy Spreads, and the New Commodity Frontier.pdf`,
+plus the market precedents used in the demo narrative:
+
+- Larry Fink / compute futures framing:
+  https://finance.yahoo.com/sectors/technology/articles/blackrock-reveals-surprising-asset-class-022000793.html
+- Goldman Sachs research on AI data-center electricity demand:
+  https://www.goldmansachs.com/images/migrated/insights/pages/gs-research/gs-sustain-generational-growth-ai-data-centers-global-power-surge-and-the-sustainability-impact/sustain-data-center-redaction.pdf
+- TierPoint data-center ABS financing precedent:
+  https://www.tierpoint.com/news/tierpoint-completes-new-550-million-securitization-financing/
+- Electricity futures seasonality and hedgeability:
+  https://www.sciencedirect.com/science/article/pii/S2405851322000484
+- Luxor / Bitnomial hashrate futures as standardized compute-output hedge:
+  https://docs.luxor.tech/platform/derivatives/luxor-contract-and-market-details/luxors-bitcoin-hashrate-futures-on-bitnomial-exchange
+- CFTC explanation of event contracts and prediction markets:
+  https://www.cftc.gov/LearnandProtect/PredictionMarkets
+- New York Fed work on tokenized markets and settlement uncertainty:
+  https://www.newyorkfed.org/research/staff_reports/sr1121
 
 ## 2. Video Script
 
-Use `docs/submission/demo_script.md`.
+Use `docs/submission/demo_script.md`; the file now includes a 90-second cut
+for the final recording. Use `docs/submission/demo_description.md` for the
+video upload description.
 
 ## 3. Arc OSS: Why Should Arc Choose This Project?
 
@@ -154,4 +173,3 @@ Demo: https://power.botozen.com
 
 The OSS folder exposes reusable ERC-8004 identity + ERC-8183 escrow + Circle SCA wallet scripts, USDC 6-decimal helpers, example EXECUTE/REJECT verdict blobs, and a verifier proving the Arc guard runs before Circle/Arc calls.
 ```
-

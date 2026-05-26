@@ -2,6 +2,56 @@
 
 Target length: 2:30-3:00.
 
+## 90-Second Cut
+
+Hi, this is Power by Botozen.
+
+The thesis is simple: all is compute, compute is energy, and hedging compute
+means hedging the compute/energy spread.
+
+AI infrastructure is becoming commodity-like, but raw GPU-hours are not yet
+standardized enough to trade directly. A GPU-hour changes by chip, region,
+workload, cooling, software stack, and power contract. So the product does not
+pretend compute is already a clean futures market. It wraps judged
+compute/energy spread packages.
+
+Here is the live desk. The system estimates compute revenue per GPU-hour,
+electricity cost per MWh, the spread, and the z-score. From that, the agent
+builds a proposed hedge note with direct event refs and clearly labelled proxy
+legs.
+
+The important part is the build path. The compute sale or GPU-hour receivable
+still needs collateral: invoice, receivable, delivery meter, and buyer or
+seller terms. The priced hedge basket can be ready, but the note is still
+proposed until collateral and judge gates are complete.
+
+BTC, ETH, and public equities are not the securitized asset. They are proxy
+hedge legs. The asset is the judged compute/energy spread package.
+
+The safety rule is judge first, Arc second. The premium scorer and
+`judge.classify()` run before settlement. If the verdict is REJECT, DEFER, or
+CHALLENGE, nothing touches Circle or Arc. Only EXECUTE can create an Arc
+ERC-8183 job with USDC escrow and ERC-8004 reputation.
+
+Telegram mirrors the same desk without spamming rejects. And the repo includes
+an Arc OSS starter kit exposing identity, escrow, Circle wallets, USDC
+six-decimal helpers, verdict fixtures, and the no-chain-unless-EXECUTE guard.
+
+## 30-Second Cut
+
+Hi, this is Power by Botozen.
+
+All is compute, compute is energy, and hedging compute means hedging the
+compute/energy spread.
+
+The desk builds a judged package around a GPU-hour receivable: priced hedge
+legs, direct event refs, and a visible collateral gap. BTC, ETH, and equities
+are proxies, not the asset.
+
+Nothing touches Circle or Arc until `judge.classify()` returns EXECUTE. Then it
+can become an Arc ERC-8183 job with USDC escrow, ERC-8004 reputation, and a
+reusable OSS starter kit for builders.
+
 ## Screen Plan
 
 1. Open `https://power.botozen.com`
