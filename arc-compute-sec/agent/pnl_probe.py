@@ -9,6 +9,7 @@ PnL models per surface:
 
   polymarket       →  sum(yes_prices) - 1                 (NO-overlay arb)
   ibkr_prediction  →  sum(yes_prices) - 1                 (event contract overlay)
+  kalshi           →  sum(yes_prices) - 1                 (event contract overlay)
   ibkr             →  |z| * basis_per_z_for_equity        (stock proxy)
   crypto           →  |z| * basis_per_z_for_crypto
 
@@ -82,7 +83,7 @@ def estimate(
     z: float | None = None,
 ) -> PnLEstimate:
     """Dispatch on surface."""
-    if surface in {"polymarket", "ibkr_prediction"}:
+    if surface in {"polymarket", "ibkr_prediction", "kalshi"}:
         if not yes_prices:
             raise ValueError(f"{surface} surface requires yes_prices")
         est = event_contract_pnl_per_dollar(yes_prices)

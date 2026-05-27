@@ -62,10 +62,11 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert construction["circle_testnet_usdc_request"] == 2770.0
     assert construction["direct_event_budget_usdc"] == 0.0
     assert construction["recommended_action"] == "BUY_CONTRACT"
-    assert construction["recommendation_label"] == "Hedge now"
-    assert "Arc remains gated" in construction["recommendation_reason"]
+    assert construction["recommendation_label"] == "Open paper hedge"
+    assert "not guaranteed profit" in construction["recommendation_reason"]
     assert 0 <= construction["entry_signal_score"] <= 100
-    assert construction["score_scale"] == "0-100 capped edge score; raw z-score is not shown to users"
+    assert construction["entry_threshold_score"] == 70.0
+    assert construction["score_scale"] == "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users"
     assert len(construction["decision_basis_hash"]) == 16
     assert construction["decision_basis"]["signal"]["z"] == -2.2
     assert construction["judge_verdict"]["label"] == "EXECUTE"

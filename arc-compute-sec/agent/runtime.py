@@ -259,6 +259,25 @@ def _ibkr_prediction_events_for_signal(signal: arb_identifier.ArbSignal) -> list
     return fetch_prediction_events()
 
 
+def _kalshi_events_for_signal(signal: arb_identifier.ArbSignal) -> list[dict]:
+    from adapters.kalshi import fetch_ai_events
+    return fetch_ai_events()
+
+
+def _optional_kalshi_events_for_signal(
+    signal: arb_identifier.ArbSignal,
+    *,
+    allow_failure: bool,
+) -> list[dict]:
+    try:
+        return _kalshi_events_for_signal(signal)
+    except Exception as exc:
+        if not allow_failure:
+            raise
+        print(f"[runtime] Kalshi research surface unavailable; continuing without Kalshi legs: {exc}")
+        return []
+
+
 def _polymarket_candidates(
     signal: arb_identifier.ArbSignal,
     *,
@@ -274,10 +293,12 @@ def _polymarket_candidates(
         signal,
         polymarket_events=events,
         ibkr_prediction_events=(),
+        kalshi_events=(),
         sizing_per_equity_usdc=0.0,
         sizing_crypto_usdc=0.0,
         sizing_polymarket_usdc=sizing_usdc,
         sizing_ibkr_prediction_usdc=0.0,
+        sizing_kalshi_usdc=0.0,
     )
     return [c for c in candidates if c.surface == "polymarket"]
 
@@ -291,6 +312,7 @@ def _candidates_for_signal(
     sizing_crypto: float,
     sizing_polymarket: float,
     sizing_ibkr_prediction: float,
+    sizing_kalshi: float,
 ) -> list[surface_router.Candidate]:
     events = _optional_polymarket_events_for_signal(
         signal,
@@ -298,14 +320,17 @@ def _candidates_for_signal(
         allow_failure=multi_surface,
     )
     ibkr_prediction_events = _ibkr_prediction_events_for_signal(signal) if multi_surface else []
+    kalshi_events = _optional_kalshi_events_for_signal(signal, allow_failure=True) if multi_surface else []
     candidates = surface_router.route(
         signal,
         polymarket_events=events,
         ibkr_prediction_events=ibkr_prediction_events,
+        kalshi_events=kalshi_events,
         sizing_per_equity_usdc=sizing_equity if multi_surface else 0.0,
         sizing_crypto_usdc=sizing_crypto if multi_surface else 0.0,
         sizing_polymarket_usdc=sizing_polymarket,
         sizing_ibkr_prediction_usdc=sizing_ibkr_prediction if multi_surface else 0.0,
+        sizing_kalshi_usdc=sizing_kalshi if multi_surface else 0.0,
     )
     if multi_surface:
         return candidates
@@ -364,8 +389,13 @@ def execute_candidate(
                         notional_usdc=candidate.sizing_usdc)
     elif surf == "kalshi":
         from adapters.kalshi import paper_fill as kalshi_fill
-        fr = kalshi_fill(candidate.instrument, candidate.direction,
-                          notional_usdc=candidate.sizing_usdc)
+        fr = kalshi_fill(
+            candidate.instrument,
+            candidate.direction,
+            notional_usdc=candidate.sizing_usdc,
+            yes_prices=md.get("yes_prices") or [],
+            metadata=md,
+        )
     else:
         raise ValueError(f"unknown surface {surf!r}")
     return fr
@@ -638,6 +668,7 @@ def run_once(args: argparse.Namespace) -> int:
         sizing_crypto=args.sizing_crypto,
         sizing_polymarket=args.sizing_polymarket,
         sizing_ibkr_prediction=args.sizing_ibkr_prediction,
+        sizing_kalshi=getattr(args, "sizing_kalshi", 1.0),
     )
     if args.multi_surface:
         surfaces = ", ".join(sorted({c.surface for c in candidates})) or "none"
@@ -710,6 +741,7 @@ def scan_once(
     sizing_crypto: float = 1.0,
     sizing_polymarket: float = 1.0,
     sizing_ibkr_prediction: float = 1.0,
+    sizing_kalshi: float = 1.0,
     z_threshold: float = arb_identifier.DEFAULT_Z_THRESHOLD,
     multi_surface: bool = True,
 ) -> int:
@@ -725,6 +757,7 @@ def scan_once(
         sizing_crypto=sizing_crypto if multi_surface else 0.0,
         sizing_polymarket=sizing_polymarket,
         sizing_ibkr_prediction=sizing_ibkr_prediction if multi_surface else 0.0,
+        sizing_kalshi=sizing_kalshi if multi_surface else 0.0,
         multi_surface=multi_surface,
         max_actions=max_positions,
         expires=600,
@@ -753,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sizing-crypto", type=float, default=1.0)
     parser.add_argument("--sizing-polymarket", type=float, default=1.0)
     parser.add_argument("--sizing-ibkr-prediction", type=float, default=1.0)
+    parser.add_argument("--sizing-kalshi", type=float, default=1.0)
     parser.set_defaults(multi_surface=True)
     parser.add_argument("--multi-surface", dest="multi_surface", action="store_true",
                         help="Route the canonical spread package across direct and proxy legs (default)")

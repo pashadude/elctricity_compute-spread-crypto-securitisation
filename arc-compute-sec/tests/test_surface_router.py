@@ -43,6 +43,18 @@ def test_runtime_multi_surface_keeps_all_surfaces(monkeypatch):
             "scorer_result": {"passes_gate": True, "premium": 0.05},
         }],
     )
+    monkeypatch.setattr(
+        runtime,
+        "_kalshi_events_for_signal",
+        lambda signal: [{
+            "id": "KXOPENAI-26",
+            "event_ticker": "KXOPENAI-26",
+            "slug": "kxopenai-26",
+            "title": "Will OpenAI release GPT-6 before 2027?",
+            "yes_prices": [0.54, 0.5],
+            "mutually_exclusive": True,
+        }],
+    )
 
     cands = runtime._candidates_for_signal(
         sig,
@@ -52,9 +64,10 @@ def test_runtime_multi_surface_keeps_all_surfaces(monkeypatch):
         sizing_crypto=1.0,
         sizing_polymarket=1.0,
         sizing_ibkr_prediction=1.0,
+        sizing_kalshi=1.0,
     )
     surfaces = {c.surface for c in cands}
-    assert {"polymarket", "ibkr", "crypto"} <= surfaces
+    assert {"polymarket", "ibkr", "crypto", "kalshi"} <= surfaces
 
 
 def test_runtime_default_scan_remains_polymarket_only(monkeypatch):
@@ -81,6 +94,7 @@ def test_runtime_default_scan_remains_polymarket_only(monkeypatch):
         sizing_crypto=1.0,
         sizing_polymarket=1.0,
         sizing_ibkr_prediction=1.0,
+        sizing_kalshi=1.0,
     )
     assert {c.surface for c in cands} == {"polymarket"}
 
@@ -134,6 +148,58 @@ def test_ibkr_prediction_market_is_direct_event_leg():
     assert ibkr_pred.metadata["spread_leg"]["role"] == "direct_prediction_event"
     assert ibkr_pred.metadata["spread_leg"]["venue"] == "IBKR ForecastTrader"
     assert ibkr_pred.metadata["exchange"] == "FORECASTX"
+
+
+def test_kalshi_market_is_direct_event_leg():
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE)
+    events = [{
+        "id": "KXOPENAI-26",
+        "event_ticker": "KXOPENAI-26",
+        "slug": "kxopenai-26",
+        "title": "Will OpenAI release GPT-6 before 2027?",
+        "description": "Kalshi AI frontier model event.",
+        "yes_prices": [0.54, 0.5],
+        "mutually_exclusive": True,
+        "category": "Science and Technology",
+        "market_tickers": ["KXOPENAI-26"],
+    }]
+    cands = sr.route(sig, polymarket_events=[], ibkr_prediction_events=[], kalshi_events=events)
+    kalshi = next(c for c in cands if c.surface == "kalshi")
+
+    assert kalshi.instrument == "kalshi:KXOPENAI-26"
+    assert round(kalshi.est_pnl_per_dollar, 4) == 0.04
+    assert kalshi.metadata["spread_leg"]["role"] == "direct_prediction_event"
+    assert kalshi.metadata["spread_leg"]["venue"] == "Kalshi"
+    assert kalshi.metadata["category"] == "Science and Technology"
+    assert kalshi.metadata["mutually_exclusive"] is True
+
+
+def test_kalshi_skips_non_positive_overlay():
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE)
+    cands = sr.route(
+        sig,
+        polymarket_events=[],
+        ibkr_prediction_events=[],
+        kalshi_events=[{"id": "KXONE", "yes_prices": [0.42], "mutually_exclusive": True}],
+    )
+
+    assert not any(c.surface == "kalshi" for c in cands)
+
+
+def test_kalshi_skips_non_exclusive_overlay():
+    sig = _signal(ai.DIRECTION_ELEC_EXPENSIVE)
+    cands = sr.route(
+        sig,
+        polymarket_events=[],
+        ibkr_prediction_events=[],
+        kalshi_events=[{
+            "id": "KXAGICO-COMP",
+            "yes_prices": [0.04, 0.08, 0.14, 0.23],
+            "mutually_exclusive": False,
+        }],
+    )
+
+    assert not any(c.surface == "kalshi" for c in cands)
 
 
 def test_ibkr_stock_remains_proxy_leg():

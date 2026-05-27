@@ -62,6 +62,12 @@ def test_estimate_dispatch_ibkr_prediction():
     assert math.isclose(est.est_pnl_per_dollar, 0.03, abs_tol=1e-9)
 
 
+def test_estimate_dispatch_kalshi():
+    est = estimate(surface="kalshi", instrument="kalshi:KXOPENAI-26", direction="short",
+                   yes_prices=[0.54, 0.50])
+    assert math.isclose(est.est_pnl_per_dollar, 0.04, abs_tol=1e-9)
+
+
 def test_estimate_dispatch_ibkr():
     est = estimate(surface="ibkr", instrument="GOOGL", direction="short", z=2.0)
     assert est.est_pnl_per_dollar > 0

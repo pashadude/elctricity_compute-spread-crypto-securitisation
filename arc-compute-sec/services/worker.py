@@ -55,6 +55,7 @@ def _runtime_args(request: dict[str, Any]) -> argparse.Namespace:
         sizing_crypto=float(os.environ.get("SIZING_CRYPTO_USDC", "1.0")),
         sizing_polymarket=float(os.environ.get("SIZING_POLYMARKET_USDC", "1.0")),
         sizing_ibkr_prediction=float(os.environ.get("SIZING_IBKR_PREDICTION_USDC", "1.0")),
+        sizing_kalshi=float(os.environ.get("SIZING_KALSHI_USDC", "1.0")),
         multi_surface=bool(request.get("multi_surface", True)),
         max_actions=int(request.get("max_positions") or 1),
         expires=int(os.environ.get("ARC_JOB_EXPIRES_SECONDS", "600")),

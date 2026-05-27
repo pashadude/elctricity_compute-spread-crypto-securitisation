@@ -18,6 +18,7 @@ if str(_ROOT) not in sys.path:
 def _clear_feed_cache(monkeypatch):
     monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
     monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_FETCH", "0")
+    monkeypatch.setenv("KALSHI_DIRECT_EVENT_FETCH", "0")
     from feeds import cache
     cache.clear()
     yield

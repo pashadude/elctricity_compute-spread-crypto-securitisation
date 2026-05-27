@@ -62,6 +62,7 @@ def default_state() -> dict[str, Any]:
         "surface_resolutions_30d": {
             "polymarket": 1,
             "ibkr_prediction": 1,
+            "kalshi": 1,
             "ibkr": 1,
             "crypto": 1,
         },

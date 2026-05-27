@@ -36,6 +36,18 @@ DEFAULT_POLYMARKET_DIRECT_EVENT_SLUGS = (
     "ai-data-center-moratorium-passed-before-2027",
     "ai-bubble-burst-by",
 )
+DEFAULT_KALSHI_DIRECT_EVENT_TERMS = (
+    "ai",
+    "artificial intelligence",
+    "openai",
+    "anthropic",
+    "nvidia",
+    "gpu",
+    "llm",
+    "agi",
+    "data center",
+    "compute",
+)
 DEFAULT_PUBLIC_HEDGE_SYMBOLS = ("NVDA", "VRT", "ETN", "CEG", "NRG", "BTC-USD", "ETH-USD")
 DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES = ("yahoo",)
 DEFAULT_IBKR_FORECAST_PROXY_PRICE_SOURCES = ("ibkr", "yahoo")
@@ -392,6 +404,8 @@ def _instrument_lookup_key(row: dict[str, Any]) -> str:
     instrument = str(row.get("instrument") or "")
     if instrument.startswith("polymarket:"):
         return instrument.split(":", 2)[1]
+    if instrument.startswith("kalshi:"):
+        return instrument.split(":", 2)[1]
     return instrument
 
 
@@ -729,7 +743,12 @@ def _read_ibkr_forecast_inventory(*, logs: Path | str | None = None) -> dict[str
 
 
 def _inventory_sizing(surface: str) -> str:
-    env_name = "SIZING_IBKR_PREDICTION_USDC" if surface == "ibkr_prediction" else "SIZING_POLYMARKET_USDC"
+    if surface == "ibkr_prediction":
+        env_name = "SIZING_IBKR_PREDICTION_USDC"
+    elif surface == "kalshi":
+        env_name = "SIZING_KALSHI_USDC"
+    else:
+        env_name = "SIZING_POLYMARKET_USDC"
     return str(os.environ.get(env_name, "1.0"))
 
 
@@ -877,17 +896,70 @@ def _polymarket_inventory_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def _fetch_kalshi_ai_events() -> list[dict[str, Any]]:
+    if not bool_env("KALSHI_DIRECT_EVENT_FETCH", True):
+        return []
+    from adapters.kalshi import fetch_ai_events
+
+    return fetch_ai_events(
+        limit=int(os.environ.get("KALSHI_DIRECT_EVENT_LIMIT", "200")),
+        max_pages=int(os.environ.get("KALSHI_DIRECT_EVENT_MAX_PAGES", "3")),
+        max_events=int(os.environ.get("KALSHI_DIRECT_EVENT_MAX_EVENTS", "8")),
+        terms=_env_csv("KALSHI_DIRECT_EVENT_TERMS", DEFAULT_KALSHI_DIRECT_EVENT_TERMS),
+    )
+
+
+def _kalshi_inventory_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for event in _fetch_kalshi_ai_events():
+        if not isinstance(event, dict):
+            continue
+        yes_prices = event.get("yes_prices") if isinstance(event.get("yes_prices"), list) else []
+        status = "priced_watchlist" if yes_prices else "metadata_watchlist"
+        event_ticker = str(event.get("event_ticker") or event.get("id") or event.get("slug") or "")
+        if not event_ticker:
+            continue
+        rows.append({
+            "ts": time.time(),
+            "surface": "kalshi",
+            "instrument": f"kalshi:{event_ticker}",
+            "direction": "short",
+            "sizing_usdc": _inventory_sizing("kalshi"),
+            "label": "WATCHLIST",
+            "reason_code": status,
+            "leg_title": str(event.get("title") or event_ticker),
+            "leg_slug": str(event.get("slug") or event_ticker.lower()),
+            "leg_description": str(event.get("description") or ""),
+            "leg_end_date": str(event.get("end_date") or ""),
+            "leg_role": "direct_prediction_event",
+            "direct_pair_role": "AI compute-demand leg",
+            "pricing_status": status,
+            "pricing_status_label": _pricing_status_label(status),
+            "yes_prices": yes_prices,
+            "volume": event.get("volume") or "",
+            "liquidity": event.get("liquidity") or "",
+            "venue": "Kalshi",
+            "category": str(event.get("category") or ""),
+            "series_ticker": str(event.get("series_ticker") or ""),
+            "market_tickers": event.get("market_tickers") or [],
+            "mutually_exclusive": bool(event.get("mutually_exclusive")),
+            "inventory": True,
+            "source": "kalshi_direct_ai_watchlist",
+        })
+    return rows
+
+
 def direct_inventory_state(*, logs: Path | str | None = None) -> list[dict[str, Any]]:
     """Configured real direct-event surfaces shown as watchlist inventory.
 
-    Inventory rows explain currently monitored IBKR/Polymarket legs, but they
+    Inventory rows explain currently monitored IBKR/Polymarket/Kalshi legs, but they
     are not candidate rows. Polymarket still needs the preserved premium gate;
-    IBKR event contracts still need usable quote fields before either can reach
-    judge.classify() or Arc.
+    IBKR and Kalshi event contracts still need usable quote fields before either
+    can reach judge.classify() or Arc.
     """
     if not bool_env("DIRECT_EVENT_INVENTORY_ENABLED", True):
         return []
-    rows = _ibkr_inventory_rows(logs=logs) + _polymarket_inventory_rows()
+    rows = _ibkr_inventory_rows(logs=logs) + _polymarket_inventory_rows() + _kalshi_inventory_rows()
     return _visible_leg_rows(_enrich_leg_rows(rows, logs=logs))
 
 

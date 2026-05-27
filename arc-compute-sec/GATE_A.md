@@ -84,7 +84,7 @@ Arc audit rail.
 - ABIs pinned for IDENTITY_REGISTRY, VALIDATION_REGISTRY, REPUTATION_REGISTRY, AGENTIC_COMMERCE, ERC-20
 - `agent/`: arb_identifier (S_t z-score), surface_router, judge, pnl_probe, scorer_bridge, on_chain, runtime
 - `feeds/`: eia, aws_spot, coinbase, cache
-- `adapters/`: polymarket (read-only), ibkr (paper), crypto (paper), kalshi (stub)
+- `adapters/`: polymarket (read-only), ibkr (paper), crypto (paper), kalshi (read-only public events + paper snapshot)
 - `templates/energy/`: keywords.yaml, classifier.py, backward_check.txt (122 fills caught, WR 97% on AI-infra)
 - TypeScript scripts: register_agent.ts, open_position.ts, submit_outcome.ts, settle_position.ts, smoke.ts
 - Offline pytest suite present, including gate-bypass and no-chain-without-EXECUTE regressions

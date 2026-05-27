@@ -246,14 +246,75 @@ def _ibkr_prediction_candidates(
     return out
 
 
+def _kalshi_candidates(
+    signal: ArbSignal,
+    events: Sequence[dict],
+    sizing_usdc: float,
+) -> list[Candidate]:
+    """Build candidates from read-only Kalshi event snapshots."""
+    out: list[Candidate] = []
+    for ev in events:
+        ypx = ev.get("yes_prices") or []
+        if not ypx:
+            continue
+        if ev.get("mutually_exclusive") is not True:
+            continue
+        event_id = ev.get("event_ticker") or ev.get("id") or ev.get("slug") or "unknown"
+        instrument = f"kalshi:{event_id}"
+        try:
+            est = pnl_estimate(
+                surface="kalshi",
+                instrument=instrument,
+                direction=DIRECTION_SHORT,
+                yes_prices=ypx,
+            )
+        except ValueError:
+            continue
+        if est.est_pnl_per_dollar <= 0:
+            continue
+        out.append(
+            Candidate(
+                candidate_id=str(uuid.uuid4())[:12],
+                arb_signal_id=signal.signal_id,
+                surface="kalshi",
+                instrument=instrument,
+                direction=DIRECTION_SHORT,
+                sizing_usdc=sizing_usdc,
+                conviction=signal.conviction,
+                est_pnl_per_dollar=est.est_pnl_per_dollar,
+                ttl_hours=signal.ttl_hours,
+                metadata={
+                    "event_id": ev.get("id") or ev.get("event_ticker"),
+                    "slug": ev.get("slug") or ev.get("event_ticker"),
+                    "title": ev.get("title"),
+                    "description": ev.get("description") or "",
+                    "start_date": ev.get("start_date") or "",
+                    "end_date": ev.get("end_date") or "",
+                    "yes_prices": list(ypx),
+                    "venue": "Kalshi",
+                    "category": ev.get("category"),
+                    "series_ticker": ev.get("series_ticker"),
+                    "market_tickers": ev.get("market_tickers") or [],
+                    "mutually_exclusive": True,
+                    "volume": ev.get("volume"),
+                    "liquidity": ev.get("liquidity"),
+                    "proxy_only": False,
+                },
+            )
+        )
+    return out
+
+
 def route(
     signal: ArbSignal,
     polymarket_events: Sequence[dict] = (),
     ibkr_prediction_events: Sequence[dict] = (),
+    kalshi_events: Sequence[dict] = (),
     sizing_per_equity_usdc: float = 1.0,
     sizing_crypto_usdc: float = 1.0,
     sizing_polymarket_usdc: float = 1.0,
     sizing_ibkr_prediction_usdc: float = 1.0,
+    sizing_kalshi_usdc: float = 1.0,
 ) -> list[Candidate]:
     """Top-level routing. Returns package expression legs ranked by directness, then PnL."""
     cands: list[Candidate] = []
@@ -261,5 +322,6 @@ def route(
     cands.extend(_crypto_candidates(signal, sizing_crypto_usdc))
     cands.extend(_polymarket_candidates(signal, polymarket_events, sizing_polymarket_usdc))
     cands.extend(_ibkr_prediction_candidates(signal, ibkr_prediction_events, sizing_ibkr_prediction_usdc))
+    cands.extend(_kalshi_candidates(signal, kalshi_events, sizing_kalshi_usdc))
     cands.sort(key=lambda c: (_SURFACE_PRIORITY.get(c.surface, 99), -c.est_pnl_per_dollar))
     return annotate_candidates(signal, cands)

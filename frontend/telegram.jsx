@@ -197,7 +197,16 @@ const tgUsdc = (value, fallback = 'Pending') => {
   const n = Number(value || 0);
   return n > 0 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : fallback;
 };
-const tgRecommendation = (construction) => construction.recommendation_label || (construction.recommended_action === 'BUY_CONTRACT' ? 'Hedge now' : 'Monitor');
+const tgCanOpen = (construction) => {
+  const score = Number(construction.entry_signal_score ?? construction.profitability_score ?? 0);
+  const threshold = Number(construction.entry_threshold_score ?? 70);
+  return construction.recommended_action === 'BUY_CONTRACT'
+    && score >= threshold
+    && construction.judge_verdict?.label === 'EXECUTE';
+};
+const tgRecommendation = (construction) => tgCanOpen(construction)
+  ? (construction.recommendation_label || 'Open paper hedge')
+  : (construction.recommendation_label || 'Monitor');
 const tgWeightLabel = (leg) => `${leg.side || 'hold'} ${leg.slug || leg.symbol || 'leg'} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`;
 
 /* ── Mini App Screens ── */
@@ -206,7 +215,7 @@ const TgHome = ({ setScreen, data, requestScan }) => {
   const construction = tgMockConstruction(data);
   const searchCount = tgSearchPlan(data).length + (data.directInventory?.length || 0);
   const recommendation = tgRecommendation(construction);
-  const recommendationColor = construction.recommended_action === 'BUY_CONTRACT' ? TG_THEME.green : TG_THEME.orange;
+  const recommendationColor = tgCanOpen(construction) ? TG_THEME.green : TG_THEME.orange;
   return (
   <TgScreen title="Botozen Power" subtitle="Compute/Energy Spread Desk">
     <div style={{ padding: '16px' }}>
@@ -345,7 +354,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
           </div>
           {data.syntheticInstrument.outputs?.mock_hedge_construction && (
             <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '6px' }}>
-              <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Buy / monitor mock contract</div>
+              <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Mock contract entry check</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'baseline', marginTop: '4px' }}>
                 <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700 }}>
                   ${Number(data.syntheticInstrument.outputs.mock_hedge_construction.hedge_notional_usdc || 0).toLocaleString()} notional
@@ -357,7 +366,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
               <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
                 {((data.syntheticInstrument.outputs.mock_hedge_construction.weighted_legs || []).slice(0, 3).map(leg => `${leg.side} ${leg.slug} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`).join(', '))}
               </div>
-              <div style={{ fontSize: '11px', color: TG_THEME.green, lineHeight: 1.35, marginTop: '4px' }}>
+              <div style={{ fontSize: '11px', color: tgCanOpen(data.syntheticInstrument.outputs.mock_hedge_construction) ? TG_THEME.green : TG_THEME.orange, lineHeight: 1.35, marginTop: '4px' }}>
                 {data.syntheticInstrument.outputs.mock_hedge_construction.recommendation_summary || (
                   data.syntheticInstrument.outputs.mock_hedge_construction.recommended_action === 'BUY_CONTRACT'
                     ? 'Agent says hedge now; close if a leg drags package PnL red.'
@@ -370,7 +379,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                 </div>
               )}
               <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginTop: '4px' }}>
-                Edge {Math.round(Number(data.syntheticInstrument.outputs.mock_hedge_construction.entry_signal_score || data.syntheticInstrument.outputs.mock_hedge_construction.profitability_score || 0))}/100; Arc stays gated by judge.classify().
+                Entry score {Math.round(Number(data.syntheticInstrument.outputs.mock_hedge_construction.entry_signal_score || data.syntheticInstrument.outputs.mock_hedge_construction.profitability_score || 0))}/100; buy threshold {Math.round(Number(data.syntheticInstrument.outputs.mock_hedge_construction.entry_threshold_score || 70))}/100; Arc stays gated by judge.classify().
               </div>
               {data.syntheticInstrument.outputs.mock_hedge_construction.judge_verdict?.label && (
                 <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, lineHeight: 1.35, marginTop: '4px' }}>

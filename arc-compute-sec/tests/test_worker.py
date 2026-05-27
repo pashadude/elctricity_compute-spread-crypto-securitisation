@@ -18,6 +18,7 @@ def test_worker_runs_queued_request_through_runtime(tmp_path, monkeypatch):
     assert calls[0].scan is True
     assert calls[0].dry_run is True
     assert calls[0].force_signal == -2.0
+    assert calls[0].sizing_kalshi == 1.0
     assert scan_requests.requests_by_id(logs=tmp_path)[request["request_id"]]["status"] == "done"
 
 

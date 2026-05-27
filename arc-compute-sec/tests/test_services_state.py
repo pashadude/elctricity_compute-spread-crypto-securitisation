@@ -341,6 +341,48 @@ def test_snapshot_includes_direct_event_inventory_without_judge_rows(tmp_path, m
     assert "No Arc action unless verdict is EXECUTE." in proposal["outputs"]["guardrails"]
 
 
+def test_snapshot_includes_kalshi_direct_ai_inventory(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "1")
+    monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "")
+    monkeypatch.setenv("KALSHI_DIRECT_EVENT_FETCH", "1")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setattr(state, "_ibkr_inventory_rows", lambda logs=None: [])
+    monkeypatch.setattr(state, "_polymarket_inventory_rows", lambda: [])
+    monkeypatch.setattr(state, "_fetch_kalshi_ai_events", lambda: [{
+        "id": "KXOPENAI-26",
+        "event_ticker": "KXOPENAI-26",
+        "slug": "kxopenai-26",
+        "title": "Will OpenAI release GPT-6 before 2027?",
+        "description": "AI compute and frontier model capacity event.",
+        "end_date": "2026-12-31T15:00:00Z",
+        "yes_prices": [0.54, 0.50],
+        "category": "Science and Technology",
+        "series_ticker": "KXOPENAI",
+        "market_tickers": ["KXOPENAI-26"],
+        "mutually_exclusive": True,
+        "volume": 150.0,
+        "liquidity": 20.5,
+    }])
+
+    snap = state.snapshot()
+
+    assert len(snap["direct_inventory"]) == 1
+    row = snap["direct_inventory"][0]
+    assert row["surface"] == "kalshi"
+    assert row["leg_slug"] == "kxopenai-26"
+    assert row["pricing_status"] == "priced_watchlist"
+    assert row["pricing_status_label"] == "Live price available"
+    assert row["direct_pair_role"] == "AI compute-demand leg"
+    assert row["leg_role"] == "direct_prediction_event"
+    assert row["mutually_exclusive"] is True
+    assert row["is_thesis_mismatch"] is False
+    direct_ref = snap["synthetic_instrument"]["outputs"]["direct_reference_legs"][0]
+    assert direct_ref["surface"] == "kalshi"
+    assert direct_ref["slug"] == "kxopenai-26"
+
+
 def test_snapshot_labels_ibkr_quote_unavailable(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "1")

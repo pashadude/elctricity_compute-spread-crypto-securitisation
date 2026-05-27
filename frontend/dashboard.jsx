@@ -579,7 +579,7 @@ const SignalPanel = ({ data }) => {
 };
 
 const verdictColor = (label) => ({ EXECUTE: 'primary', REJECT: 'red', DEFER: 'amber', CHALLENGE: 'purple', WATCHLIST: 'blue' }[label] || 'muted');
-const surfaceIcon = (s) => ({ crypto: '₿', ibkr: '📊', ibkr_prediction: '◈', polymarket: '◎' }[s] || '·');
+const surfaceIcon = (s) => ({ crypto: '₿', ibkr: '📊', ibkr_prediction: '◈', polymarket: '◎', kalshi: 'K' }[s] || '·');
 
 const PackageLegRow = ({ leg }) => (
   <div style={{
@@ -937,10 +937,14 @@ const MockContractSummaryPanel = ({ proposal }) => {
   const construction = proposal?.outputs?.mock_hedge_construction || {};
   const sourceSummary = quoteSourceSummary(construction.quote_sources || []);
   const score = Number(construction.entry_signal_score ?? construction.profitability_score ?? 0);
-  const label = construction.recommendation_label || (construction.recommended_action === 'BUY_CONTRACT' ? 'Hedge now' : 'Monitor');
-  const reason = construction.recommendation_reason || 'Recommendation refreshes from the latest spread, quote, and leg state.';
+  const threshold = Number(construction.entry_threshold_score ?? 70);
   const judgeVerdict = construction.judge_verdict || {};
-  const color = construction.recommended_action === 'BUY_CONTRACT' ? THEME.primary[400] : THEME.amber[400];
+  const canOpen = construction.recommended_action === 'BUY_CONTRACT' && score >= threshold && judgeVerdict.label === 'EXECUTE';
+  const label = canOpen
+    ? (construction.recommendation_label || 'Open paper hedge')
+    : (construction.recommendation_label || 'Monitor');
+  const reason = construction.recommendation_reason || 'Recommendation refreshes from the latest spread, quote, and leg state.';
+  const color = canOpen ? THEME.primary[400] : THEME.amber[400];
   return (
     <Card glow>
       <SectionLabel>Mock Contract Control</SectionLabel>
@@ -971,7 +975,7 @@ const MockContractSummaryPanel = ({ proposal }) => {
               Recommended: {label}
             </div>
             <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '4px' }}>
-              Edge strength {Math.round(score)}/100 · {reason}
+              Entry score {Math.round(score)}/100 · buy threshold {Math.round(threshold)}/100 · {reason}
             </div>
             {construction.decision_basis_hash && (
               <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '5px' }}>
@@ -984,7 +988,9 @@ const MockContractSummaryPanel = ({ proposal }) => {
               </div>
             )}
             <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
-              Buy freezes a local entry ticket only; Arc stays gated by judge.classify().
+              {canOpen
+                ? 'Open paper hedge freezes a local entry ticket only; Arc stays gated by judge.classify().'
+                : 'No user-facing buy at this score; monitor until the entry threshold and judge gate both clear.'}
             </div>
           </div>
         </div>
@@ -1008,6 +1014,11 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   const weightedLegs = mockConstruction?.weighted_legs || [];
   const tooling = mockConstruction?.agent_tooling || [];
   const { ticket, marked, buy, monitor, sell, reset } = useMockContractTicket(proposal, mockConstruction, weightedLegs);
+  const entryScore = Number(mockConstruction?.entry_signal_score ?? mockConstruction?.profitability_score ?? 0);
+  const entryThreshold = Number(mockConstruction?.entry_threshold_score ?? 70);
+  const canBuyMock = mockConstruction?.recommended_action === 'BUY_CONTRACT'
+    && entryScore >= entryThreshold
+    && mockConstruction?.judge_verdict?.label === 'EXECUTE';
   const fmtMoney = value => `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   const fmtPct = value => `${Number(value || 0).toFixed(2)}%`;
   const monitorColor = marked.isUnprofitable ? THEME.red[400] : marked.total > 0 ? THEME.primary[400] : THEME.amber[400];
@@ -1111,7 +1122,14 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
-              <GlowButton size="sm" onClick={buy}>▸ Buy Contract</GlowButton>
+              <GlowButton
+                size="sm"
+                onClick={buy}
+                disabled={!canBuyMock}
+                title={canBuyMock ? 'Freeze a local paper/testnet entry ticket.' : `Entry score must clear ${Math.round(entryThreshold)}/100 and judge must return EXECUTE.`}
+              >
+                ▸ Open Paper Hedge
+              </GlowButton>
               <GlowButton size="sm" variant="secondary" onClick={monitor}>◎ Monitor Price</GlowButton>
               {ticket?.status === 'open' && (
                 <GlowButton size="sm" variant="secondary" onClick={sell} style={{ color: THEME.red[400], borderColor: THEME.red[400] + '40' }}>□ Sell Mock</GlowButton>
@@ -1120,6 +1138,11 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
                 <GlowButton size="sm" variant="secondary" onClick={reset}>↺ Reset</GlowButton>
               )}
             </div>
+            {!canBuyMock && (
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+                Buy is disabled because entry score is {Math.round(entryScore)}/100 and the user-facing threshold is {Math.round(entryThreshold)}/100 with judge EXECUTE required.
+              </div>
+            )}
             {ticket && (
               <div style={{
                 marginTop: '10px',
@@ -1252,7 +1275,12 @@ const DashboardPage = ({ refreshRate }) => {
   const isNarrow = useIsMobile(520);
   const construction = data.syntheticInstrument?.outputs?.mock_hedge_construction || {};
   const quoteSourceText = quoteSourceSummary(construction.quote_sources || []);
-  const recommendation = construction.recommendation_label || (construction.recommended_action === 'BUY_CONTRACT' ? 'Hedge now' : 'Monitor');
+  const topEntryScore = Number(construction.entry_signal_score ?? construction.profitability_score ?? 0);
+  const topEntryThreshold = Number(construction.entry_threshold_score ?? 70);
+  const topCanBuy = construction.recommended_action === 'BUY_CONTRACT'
+    && topEntryScore >= topEntryThreshold
+    && construction.judge_verdict?.label === 'EXECUTE';
+  const recommendation = topCanBuy ? (construction.recommendation_label || 'Open paper hedge') : (construction.recommendation_label || 'Monitor');
 
   return (
     <div style={{ padding: isMobile ? '18px 14px 32px' : '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -1283,7 +1311,7 @@ const DashboardPage = ({ refreshRate }) => {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? (isNarrow ? '1fr' : 'repeat(2, minmax(0, 1fr))') : 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
         <StatCard label="Mock Notional" value={construction.hedge_notional_usdc ? `$${Number(construction.hedge_notional_usdc).toLocaleString()}` : 'Pending'} />
         <StatCard label="Circle Ask" value={construction.circle_testnet_usdc_request ? `${Number(construction.circle_testnet_usdc_request).toLocaleString()} USDC` : 'Pending'} color={THEME.amber[400]} />
-        <StatCard label="Agent Recommendation" value={recommendation} color={construction.recommended_action === 'BUY_CONTRACT' ? THEME.primary[400] : THEME.amber[400]} />
+        <StatCard label="Agent Recommendation" value={recommendation} color={topCanBuy ? THEME.primary[400] : THEME.amber[400]} />
         <StatCard label="Quote Source" value={quoteSourceText || 'Pending'} valueSize={16} />
       </div>
 

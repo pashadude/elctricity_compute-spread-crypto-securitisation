@@ -25,7 +25,7 @@ with empirical defaults `k = 0.5` (PUE × instance-load factor) and `kWh_per_gpu
 |---|---------|-----------|--------------|
 | 1 | **Crypto** | BTC/ETH and miner equities (MARA/RIOT/CLSK) — mining margin = block reward × BTC − power cost × hashrate efficiency. Compresses with electricity spike. | Paper-fill against live Coinbase ask via CCXT. |
 | 2 | **Hyperscaler equities** | GOOGL, AMZN, MSFT, BABA — cloud-segment margin sensitive to electricity, capacity, and AI demand. | Paper market orders via `ib_insync` against IBKR demo Gateway (port 4002). |
-| 3 | **Predictive markets on private AI/compute companies** | Polymarket / Kalshi events on Anthropic, OpenAI, SpaceX, DeepSeek (model releases, capability claims, capacity announcements). Slower releases priced when compute is expensive. | Polymarket: live read via Gamma API + scorer premium-gate filter; NO order placement (stays on `@beldghik`). Kalshi: stub only in v0. |
+| 3 | **Predictive markets on private AI/compute companies** | Polymarket / Kalshi events on Anthropic, OpenAI, SpaceX, DeepSeek (model releases, capability claims, capacity announcements). Slower releases priced when compute is expensive. | Polymarket: live read via Gamma API + scorer premium-gate filter; NO order placement (stays on `@beldghik`). Kalshi: read-only public event feed for AI/compute watchlist/direct refs; NO order placement. |
 | 4 | **Direct energy events on Polymarket** | The prior S-4 narrow slice (oil/gas/electricity/policy keywords). Energy classifier filters Gamma events to this universe. | Same as #3 with the energy template universe. |
 
 The agent picks the highest-conviction subset of surfaces per signal.
@@ -85,7 +85,7 @@ arc-compute-sec/
 │   ├── polymarket.py              # Gamma read + scorer gate; NO order placement
 │   ├── ibkr.py                    # ib_insync paper market orders
 │   ├── crypto.py                  # paper fills at live Coinbase ask
-│   └── kalshi.py                  # STUB only
+│   └── kalshi.py                  # read-only public event feed + paper snapshot
 ├── agent/
 │   ├── arb_identifier.py          # S_t + 30-day z-score + signal emission
 │   ├── surface_router.py          # signal → candidates per surface
@@ -208,7 +208,7 @@ For each settled position, fetch current price, compute realized PnL, append to 
 - **Not running the upstream relayer's GA/Shinka loop.** Deferred until ≥30 days of v0 trace.
 - **Not deploying to Arc Mainnet.** Mainnet doesn't exist yet.
 - **Not using anyone else's wallets, API keys, or entity secret.** Fresh creds per build.
-- **Not running Kalshi in v0.** Stub only; v1 wires it.
+- **Not executing Kalshi orders in v0.** Kalshi is read-only watchlist/direct-reference market data; venue execution remains deferred.
 - **Not including the premium-gate kwarg (`require_non_negative_premium`) in any evolutionary, GA, or automated parameter search.** The gate is the desk's only cross-validated edge. Hard-coded exclusion, enforced by `tests/test_judge.py::test_gate_kwarg_exclusion`.
 
 ---

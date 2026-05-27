@@ -22,6 +22,7 @@ DEFAULT_GPU_KWH = 0.7
 DEFAULT_HEDGE_RATIO = 0.35
 ARC_SETTLEMENT_BUFFER_USDC = 5.0
 LIQUIDITY_BUFFER_RATE = 0.05
+ENTRY_SIGNAL_BUY_THRESHOLD = 70.0
 WEIGHTS_ELECTRICITY_EXPENSIVE = {
     "NRG": 0.24,
     "CEG": 0.20,
@@ -618,6 +619,7 @@ def _mock_recommendation(
     def with_judge(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             **payload,
+            "entry_threshold_score": ENTRY_SIGNAL_BUY_THRESHOLD,
             "judge_verdict": judge_verdict,
             "judge_candidate_hash": judge_candidate_hash,
             "judge_scope": judge_scope,
@@ -630,7 +632,7 @@ def _mock_recommendation(
             "recommendation_reason": "No live-priced hedge legs are available, so a buy would not give the user a defensible entry mark.",
             "recommendation_summary": "Monitor only until the basket has fresh prices.",
             "entry_signal_score": 0.0,
-            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
             "decision_basis_hash": basis_hash,
             "decision_basis": basis,
         })
@@ -642,7 +644,7 @@ def _mock_recommendation(
             "recommendation_reason": "The underlying compute sale is not profitable at current compute and power marks; buying a new mock ticket would hide bad unit economics.",
             "recommendation_summary": "Avoid a new ticket until compute margin turns positive.",
             "entry_signal_score": _round_units(edge_score),
-            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
             "decision_basis_hash": basis_hash,
             "decision_basis": basis,
         })
@@ -657,34 +659,34 @@ def _mock_recommendation(
             ),
             "recommendation_summary": "Monitor only; the judge gate did not clear on the latest spread state.",
             "entry_signal_score": _round_units(edge_score),
-            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
             "decision_basis_hash": basis_hash,
             "decision_basis": basis,
         })
 
-    if edge_score >= 70.0:
+    if edge_score >= ENTRY_SIGNAL_BUY_THRESHOLD:
         return with_judge({
             "recommended_action": "BUY_CONTRACT",
-            "recommendation_label": "Hedge now",
-            "recommendation_reason": "The spread dislocation is strong, the compute sale has positive margin, and the hedge basket has live marks. Buying only freezes a local mock entry ticket; Arc remains gated by judge.classify().",
-            "recommendation_summary": "Hedge now, then monitor leg PnL and close if the basket stops confirming the spread.",
+            "recommendation_label": "Open paper hedge",
+            "recommendation_reason": "The entry score clears the buy threshold, the compute sale has positive margin, live hedge marks are present, and the judge returned EXECUTE. This opens only a local paper/testnet ticket; it is not guaranteed profit.",
+            "recommendation_summary": "Open a paper/testnet hedge ticket; expected value comes from spread edge versus live hedge marks, then leg PnL must be monitored.",
             "entry_signal_score": _round_units(edge_score),
-            "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
             "decision_basis_hash": basis_hash,
             "decision_basis": basis,
         })
 
     if edge_score >= 45.0:
-        reason = "The spread is present, but the capped edge score is not strong enough after quote and funding checks."
+        reason = "The spread is present, but the entry score is still below the buy threshold after quote and funding checks."
     else:
         reason = "The spread is too weak for a user-facing buy recommendation."
     return with_judge({
         "recommended_action": "MONITOR_ONLY",
         "recommendation_label": "Monitor",
-        "recommendation_reason": reason,
+        "recommendation_reason": f"{reason} Score must clear {ENTRY_SIGNAL_BUY_THRESHOLD:.0f}/100 before a user-facing paper ticket is recommended.",
         "recommendation_summary": "Monitor only; wait for a stronger spread move or better-priced hedge basket.",
         "entry_signal_score": _round_units(edge_score),
-        "score_scale": "0-100 capped edge score; raw z-score is not shown to users",
+        "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
         "decision_basis_hash": basis_hash,
         "decision_basis": basis,
     })
@@ -742,6 +744,7 @@ def _mock_hedge_construction(
         "recommendation_reason": recommendation["recommendation_reason"],
         "recommendation_summary": recommendation["recommendation_summary"],
         "entry_signal_score": recommendation["entry_signal_score"],
+        "entry_threshold_score": recommendation["entry_threshold_score"],
         "profitability_score": recommendation["entry_signal_score"],
         "score_scale": recommendation["score_scale"],
         "decision_basis_hash": recommendation["decision_basis_hash"],

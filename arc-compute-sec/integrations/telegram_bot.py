@@ -176,7 +176,8 @@ def format_status(snap: dict[str, Any]) -> str:
             f"Circle ask: {float(construction.get('circle_testnet_usdc_request') or 0):.2f} test USDC"
         )
         if construction.get("entry_signal_score") not in ("", None):
-            parts.append(f"edge: {float(construction.get('entry_signal_score') or 0):.0f}/100")
+            threshold = float(construction.get("entry_threshold_score") or 70)
+            parts.append(f"entry score: {float(construction.get('entry_signal_score') or 0):.0f}/100 (threshold {threshold:.0f})")
         judge_verdict = construction.get("judge_verdict") if isinstance(construction.get("judge_verdict"), dict) else {}
         if judge_verdict.get("label"):
             parts.append(f"judge: {judge_verdict.get('label')}/{judge_verdict.get('reason_code', 'checked')}")
@@ -216,7 +217,8 @@ def format_latest(snap: dict[str, Any]) -> str:
                 summary = construction.get("recommendation_summary") or "Arc stays gated by judge.classify()."
                 lines.append(f"agent recommendation: {label} — {summary}")
                 if construction.get("entry_signal_score") not in ("", None):
-                    lines.append(f"edge: {float(construction.get('entry_signal_score') or 0):.0f}/100")
+                    threshold = float(construction.get("entry_threshold_score") or 70)
+                    lines.append(f"entry score: {float(construction.get('entry_signal_score') or 0):.0f}/100 (threshold {threshold:.0f})")
                 judge_verdict = construction.get("judge_verdict") if isinstance(construction.get("judge_verdict"), dict) else {}
                 if judge_verdict.get("label"):
                     lines.append(f"judge: {judge_verdict.get('label')}/{judge_verdict.get('reason_code', 'checked')}")
@@ -552,6 +554,11 @@ def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     if not construction:
         return None
     action = str(construction.get("recommended_action") or "MONITOR_ONLY")
+    score = float(construction.get("entry_signal_score") or construction.get("profitability_score") or 0)
+    threshold = float(construction.get("entry_threshold_score") or 70)
+    judge_verdict = construction.get("judge_verdict") if isinstance(construction.get("judge_verdict"), dict) else {}
+    if action != "BUY_CONTRACT" or score < threshold or judge_verdict.get("label") != "EXECUTE":
+        return None
     label = str(construction.get("recommendation_label") or action)
     proposal_id = str(proposal.get("proposal_id") or proposal.get("reference_package_id") or proposal.get("instrument_name") or "mock")
     circle = float(construction.get("circle_testnet_usdc_request") or 0)
@@ -569,17 +576,12 @@ def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
         f"instrument: {proposal.get('instrument_name', 'compute/energy hedge note')}",
         f"notional: {notional:.2f} USDC",
         f"Circle ask: {circle:.2f} test USDC",
-        f"edge: {float(construction.get('entry_signal_score') or 0):.0f}/100",
-        "judge: "
-        + (
-            f"{construction.get('judge_verdict', {}).get('label')}/{construction.get('judge_verdict', {}).get('reason_code', 'checked')}"
-            if isinstance(construction.get("judge_verdict"), dict) and construction.get("judge_verdict", {}).get("label")
-            else "pending"
-        ),
+        f"entry score: {score:.0f}/100 (threshold {threshold:.0f})",
+        f"judge: {judge_verdict.get('label')}/{judge_verdict.get('reason_code', 'checked')}",
         f"weights: {weights or 'waiting for live prices'}",
         f"quotes: {sources}",
         f"reason: {construction.get('recommendation_summary') or 'Arc stays gated by judge.classify().'}",
-        "Open Mini App to buy/monitor/sell the local testnet ticket.",
+        "Open Mini App to open, monitor, or close the local paper/testnet ticket.",
     ])
     return key, text
 

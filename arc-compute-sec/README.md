@@ -66,9 +66,10 @@ The runtime implements the package in four steps:
 The router then expresses that package on available surfaces:
 
 - **Direct prediction/event-contract legs:** S-4 Polymarket energy outcomes,
-  AI-infra events, and configured IBKR ForecastTrader/ForecastEx contracts are
-  filtered through the energy template universe and kept read-only/paper in
-  v1. IBKR event contracts are a different surface from IBKR stocks.
+  AI-infra events, Kalshi public AI/compute events, and configured IBKR
+  ForecastTrader/ForecastEx contracts are filtered through the energy template
+  universe and kept read-only/paper in v1. IBKR event contracts are a
+  different surface from IBKR stocks.
 - **Research inventory:** IBKR ForecastTrader and Polymarket slugs remain
   agent scouting inputs, not the main securitized-tool UI. Telegram `/latest`
   can list them as a research watchlist, but the dashboard promotes only the
@@ -468,6 +469,13 @@ The default Polymarket watchlist uses live slugs for AI data-center power
 siting and AI-industry stress; replace `POLYMARKET_DIRECT_EVENT_SLUGS` when
 those contracts expire.
 
+Kalshi is also wired as a read-only direct-event research surface. The desk
+polls Kalshi's public unauthenticated Trade API for open events, filters them
+with `KALSHI_DIRECT_EVENT_TERMS`, and shows matched AI/compute contracts as
+`kalshi` direct reference legs. These rows are watchlist evidence until priced
+event-contract candidates pass the normal judge path; no Kalshi order placement
+is implemented.
+
 Premium-gate failures become auditable `REJECT` judgements. Off-template
 non-energy events are dropped before scorer and judge. No fallback scorer path
 may disable the premium gate.
@@ -511,9 +519,10 @@ Alpaca public-market sources (`IBKR_FORECAST_PROXY_QUOTE_FETCH=1`, default on;
 -> NVDA or CRUDB -> BZ=F front Brent. That proxy quote is not treated as the
 ForecastTrader EC price. CME account data can be added later as an official
 futures/settlement source, but it should not be labelled as a ForecastTrader EC
-quote unless the venue contract IDs actually map. Kalshi and live external
-venue execution remain deferred. Crypto proxy PnL is not counted as direct
-spread-securitization proof; it must be reconciled separately.
+quote unless the venue contract IDs actually map. Kalshi venue execution and
+other live external venue execution remain deferred, but Kalshi public events
+are now read as watchlist/direct-reference market data. Crypto proxy PnL is not
+counted as direct spread-securitization proof; it must be reconciled separately.
 
 The current EIA adapter uses EIA's public electricity data as an ERCOT/TX
 electricity price proxy. A true ERCOT real-time LMP adapter is still deferred
