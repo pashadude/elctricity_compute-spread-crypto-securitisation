@@ -101,6 +101,21 @@ separate proxy-basket validation gate. Without that file, set
 `PROXY_BASKET_BACKTEST_FETCH=1` to let `/api/snapshot` refresh public history
 directly.
 
+`synthetic_instrument.outputs.spread_archetype_trade_map` joins the two replay
+layers. Each oil-style spread archetype now points to the expression that can
+copy it: syndicated structure, proxy basket, direct-leg target, replay status,
+current `BUY`/`SELL`/`MONITOR` signal, and remaining data gaps. This is the
+table that explains why a spread can be `PROMOTABLE` as an index replay but
+still be `SELL_OR_AVOID` if its mapped liquid proxy basket is losing.
+
+`synthetic_instrument.outputs.spread_profitability_ledger` ranks those mapped
+spreads for the operator. It reports paper 5d and 1m proxy PnL, spread replay
+PnL, win rate, priced symbols, and statuses such as `PAPER_BUY`,
+`SELL_OR_AVOID`, `WAIT_FOR_PROXY_CONFIRMATION`, `NEEDS_INDEX_HISTORY`, and
+`NEEDS_EXPRESSION`. The dashboard, Telegram Mini App, and bot `/latest` show
+this ledger near the top of the flow. It is paper/replay evidence only, not
+settled PnL.
+
 The snapshot also separates realized accounting from replay evidence. `pnl`
 returns `NO_SETTLED_PNL` and `display_total = "No settled PnL"` until
 `logs/pnl_reconciliation.tsv` contains reconciled fills or settlements.
@@ -480,7 +495,10 @@ want the live IBKR/Polymarket/Opoint/Nebius research watchlist. Use
 `npm run telegram:channel-about` to post the one-time public explainer,
 `npm run telegram:feedback-update` to post the one-time feedback/new-features
 announcement, and `npm run telegram:market-data-update` to post the IBKR
-paper-terminal/proxy-source labelling update. Each notification pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS`
+paper-terminal/proxy-source labelling update. Use
+`npm run telegram:instrument-menu-update` for the multi-spread structure
+announcement and `npm run telegram:profitability-update` for the profitability
+ledger announcement. Each notification pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS`
 (default `3`) to avoid Telegram rate limits.
 Use `npm run telegram:configure` after token rotation to set the bot description,
 command menu, and Mini App menu button from `PUBLIC_BASE_URL`.
@@ -645,6 +663,9 @@ Safe offline checks:
 | `npm run oracle:backtest -- --oracle-jsonl <file> --missing-outcomes-out <file>` | Generate fillable outcome stubs for unresolved oracle receipts; no live API calls |
 | `npm run gate:energy-backtest` | Verify Phase 3 energy historical fills under the S-4 premium gate; no live API calls |
 | `npm run oracle:energy-backtest -- --llm-receipts-jsonl <file>` | Score saved Opoint+Nebius energy oracle receipts against historical fills |
+| `npm run proxy:backtest -- --range 1mo --interval 1d` | Build public close-history proxy basket replay for the profitability ledger |
+| `npm run spread:proxy-backtest` | Build anchored public electricity/compute proxy history for spread-family replay |
+| `npm run telegram:profitability-update` | Post the deduped Telegram channel explainer for the profitability ledger |
 | `npm run package:mock` | Offline spread-package dry run |
 | `npm run package:scan` | One spread-package live-feed scan in dry-run mode |
 | `npm run crypto:mock` | Alias for the package mock path; crypto remains a proxy leg |

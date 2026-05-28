@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from agent import judge
 from agent.arb_identifier import DIRECTION_COMPUTE_EXPENSIVE, DIRECTION_ELEC_EXPENSIVE
+from agent.spread_family_backtest import SPREAD_ARCHETYPE_CATALOG
 
 SYNTHETIC_INSTRUMENT_VERSION = "synthetic_instrument_v1"
 DIRECT_SURFACES = {"polymarket", "ibkr_prediction", "kalshi"}
@@ -24,6 +25,7 @@ ARC_SETTLEMENT_BUFFER_USDC = 5.0
 LIQUIDITY_BUFFER_RATE = 0.05
 ENTRY_SIGNAL_BUY_THRESHOLD = 70.0
 MIN_MODELED_POWER_COST_SHARE_FOR_BUY = 0.025
+MIN_STRUCTURAL_POWER_COST_SHARE = 0.10
 WEIGHTS_ELECTRICITY_EXPENSIVE = {
     "NRG": 0.24,
     "CEG": 0.20,
@@ -79,6 +81,49 @@ LEG_EXPLANATIONS = {
         "sell_reason": "The ETH leg is hurting the mock contract when broad crypto beta overwhelms the spread thesis.",
     },
 }
+
+COLLATERAL_PROFILE_TEMPLATES = (
+    {
+        "profile_id": "cloud_gpu_receivable",
+        "label": "Cloud GPU receivable",
+        "cashflow": "Resold public-cloud GPU-hour receivable.",
+        "compute_price_multiplier": 1.00,
+        "kwh_multiplier": 1.00,
+        "k_factor_multiplier": 1.00,
+        "collateral_needed": ["GPU-hour invoice", "cloud bill hash", "delivery meter"],
+        "best_for": "Compute scarcity, but usually weak as an electricity hedge.",
+    },
+    {
+        "profile_id": "owned_colo_gpu_receivable",
+        "label": "Owned / colocation GPU receivable",
+        "cashflow": "GPU-hour receivable from owned servers or colocation with metered power.",
+        "compute_price_multiplier": 0.70,
+        "kwh_multiplier": 1.80,
+        "k_factor_multiplier": 1.15,
+        "collateral_needed": ["GPU rental receivable", "colo power meter", "PUE or power allocation policy"],
+        "best_for": "Power-cost share and regional electricity hedging.",
+    },
+    {
+        "profile_id": "curtailed_power_gpu_batch",
+        "label": "Curtailable power GPU batch",
+        "cashflow": "Discounted batch compute that can be scheduled around power availability.",
+        "compute_price_multiplier": 0.45,
+        "kwh_multiplier": 1.55,
+        "k_factor_multiplier": 1.00,
+        "collateral_needed": ["batch compute sale", "curtailment clause", "node-level meter"],
+        "best_for": "Energy-driven compute margin and grid-flexibility exposure.",
+    },
+    {
+        "profile_id": "miner_margin_energy_package",
+        "label": "Miner-margin energy package",
+        "cashflow": "Hashprice or miner receivable plus power contract; not an AI GPU receivable.",
+        "compute_price_multiplier": 0.10,
+        "kwh_multiplier": 1.65,
+        "k_factor_multiplier": 1.00,
+        "collateral_needed": ["hashrate report", "mining power contract", "BTC/ETH quote snapshot"],
+        "best_for": "Electricity-expensive miner-margin compression.",
+    },
+)
 
 SYNDICATED_INSTRUMENT_TYPES = [
     {
@@ -647,6 +692,129 @@ def _proxy_basket_for_direction(
     return primary, _proxy_basket_passes_entry_gate(primary, validation.get("entry_gate_pass"))
 
 
+def _materiality_status(
+    *,
+    margin: float,
+    modeled_power_share: float,
+    proxy_signal: str,
+    proxy_status: str,
+) -> tuple[str, str, str]:
+    if margin <= 0:
+        return (
+            "UNIT_ECONOMICS_FAIL",
+            "AVOID",
+            "The cashflow is not profitable after gross power cost.",
+        )
+    if modeled_power_share < MIN_MODELED_POWER_COST_SHARE_FOR_BUY:
+        return (
+            "WEAK_ENERGY_LINK",
+            "MONITOR",
+            "Power is too small a share of revenue for a clean energy-compute hedge.",
+        )
+    if modeled_power_share < MIN_STRUCTURAL_POWER_COST_SHARE:
+        return (
+            "THIN_ENERGY_LINK",
+            "MONITOR",
+            "Power is visible but still a thin share of the cashflow; direct legs or stronger proxy confirmation are required.",
+        )
+    if proxy_signal == "SELL":
+        return (
+            "MATERIAL_BUT_PROXY_SELL",
+            "AVOID_OR_CLOSE",
+            "Power is material, but the direction-matched proxy basket is in sell mode.",
+        )
+    if proxy_signal == "BUY" and proxy_status == "PROMOTABLE":
+        return (
+            "STRUCTURABLE",
+            "PAPER_BUY_CANDIDATE",
+            "Power is material and the direction-matched proxy replay supports a paper/testnet structure.",
+        )
+    return (
+        "MATERIAL_WAIT_FOR_CONFIRMATION",
+        "MONITOR",
+        "Power is material, but proxy replay or direct event legs are not yet confirming a fresh buy.",
+    )
+
+
+def _collateral_profile_candidates(
+    *,
+    direction: str,
+    spread_latest: dict[str, Any],
+    signal_latest: dict[str, Any],
+    proxy_basket_validation: dict[str, Any] | None,
+    spread_family_validation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    compute_per_gpu_hr = _num(spread_latest.get("compute_per_gpu_hr"), _num(signal_latest.get("compute_per_gpu_hr")))
+    electricity_per_mwh = _num(spread_latest.get("electricity_per_mwh"), _num(signal_latest.get("electricity_per_mwh")))
+    gpu_hours = max(1.0, _num(spread_latest.get("demo_gpu_hours"), DEFAULT_DEMO_GPU_HOURS))
+    base_gpu_kwh = max(0.01, _gpu_kwh(spread_latest, signal_latest))
+    base_k = max(0.01, _k_factor(spread_latest, signal_latest))
+    proxy_basket, _proxy_gate = _proxy_basket_for_direction(proxy_basket_validation, direction)
+    proxy_signal = _text(proxy_basket.get("latest_signal"), "MONITOR")
+    proxy_status = _text(proxy_basket.get("status"), "NO_REPLAY")
+    spread_primary = (spread_family_validation or {}).get("primary_family") or {}
+    spread_replay_status = _text(spread_primary.get("status"), "NO_REPLAY")
+    rows: list[dict[str, Any]] = []
+    for idx, template in enumerate(COLLATERAL_PROFILE_TEMPLATES):
+        profile_compute = max(0.0001, compute_per_gpu_hr * _num(template.get("compute_price_multiplier"), 1.0))
+        profile_kwh = max(0.01, base_gpu_kwh * _num(template.get("kwh_multiplier"), 1.0))
+        profile_k = max(0.01, base_k * _num(template.get("k_factor_multiplier"), 1.0))
+        revenue = profile_compute * gpu_hours
+        gross_power_cost = electricity_per_mwh / 1000.0 * profile_kwh * gpu_hours
+        modeled_power_cost = gross_power_cost * profile_k
+        margin = revenue - gross_power_cost
+        modeled_power_share = modeled_power_cost / revenue if revenue > 0 else 0.0
+        gross_power_share = gross_power_cost / revenue if revenue > 0 else 0.0
+        status, action, reason = _materiality_status(
+            margin=margin,
+            modeled_power_share=modeled_power_share,
+            proxy_signal=proxy_signal,
+            proxy_status=proxy_status,
+        )
+        materiality_score = min(40.0, modeled_power_share / MIN_STRUCTURAL_POWER_COST_SHARE * 40.0)
+        margin_score = _clamp((margin / revenue) if revenue > 0 else 0.0, -0.25, 0.5) * 40.0
+        replay_score = 10.0 if spread_replay_status == "PROMOTABLE" else 0.0
+        proxy_score = 10.0 if proxy_signal == "BUY" and proxy_status == "PROMOTABLE" else 0.0
+        entry_score = _clamp(materiality_score + margin_score + replay_score + proxy_score, 0.0, 100.0)
+        rows.append({
+            "profile_id": template["profile_id"],
+            "label": template["label"],
+            "rank": idx + 1,
+            "cashflow": template["cashflow"],
+            "best_for": template["best_for"],
+            "is_current_profile": template["profile_id"] == "cloud_gpu_receivable",
+            "compute_per_gpu_hr": _round_units(profile_compute),
+            "electricity_per_mwh": _round_units(electricity_per_mwh),
+            "kwh_per_unit_hr": _round_units(profile_kwh),
+            "k_factor": _round_units(profile_k),
+            "demo_units": _round_units(gpu_hours),
+            "receivable_usdc": _round_money(revenue),
+            "gross_power_cost_usdc": _round_money(gross_power_cost),
+            "modeled_power_cost_usdc": _round_money(modeled_power_cost),
+            "gross_power_cost_share_pct": _round_units(gross_power_share * 100.0),
+            "modeled_power_cost_share_pct": _round_units(modeled_power_share * 100.0),
+            "margin_usdc": _round_money(margin),
+            "margin_pct": _round_units((margin / revenue) * 100.0 if revenue > 0 else 0.0),
+            "materiality_gate": "PASS" if modeled_power_share >= MIN_STRUCTURAL_POWER_COST_SHARE else "MONITOR",
+            "status": status,
+            "action": action,
+            "status_reason": reason,
+            "entry_score": _round_units(entry_score),
+            "proxy_signal": proxy_signal,
+            "proxy_status": proxy_status,
+            "spread_replay_status": spread_replay_status,
+            "collateral_needed": template["collateral_needed"],
+        })
+    action_rank = {"PAPER_BUY_CANDIDATE": 0, "MONITOR": 1, "AVOID_OR_CLOSE": 2, "AVOID": 3}
+    rows.sort(key=lambda row: (
+        action_rank.get(row["action"], 9),
+        0 if row["materiality_gate"] == "PASS" else 1,
+        -_num(row["entry_score"]),
+        row["rank"],
+    ))
+    return rows
+
+
 def _mock_recommendation(
     *,
     direction: str,
@@ -1200,6 +1368,338 @@ def _syndicated_instrument_menu(
     return rows
 
 
+def _operator_signal_sheet(
+    *,
+    direction: str,
+    mock_construction: dict[str, Any],
+    collateral_profiles: list[dict[str, Any]],
+    proxy_basket_validation: dict[str, Any] | None,
+    spread_family_validation: dict[str, Any] | None,
+    syndicated_menu: list[dict[str, Any]],
+) -> dict[str, Any]:
+    proxy_basket, _proxy_gate = _proxy_basket_for_direction(proxy_basket_validation, direction)
+    proxy_signal = _text(proxy_basket.get("latest_signal"), "MONITOR")
+    proxy_status = _text(proxy_basket.get("status"), "NO_REPLAY")
+    trailing = proxy_basket.get("trailing_returns") if isinstance(proxy_basket.get("trailing_returns"), dict) else {}
+    spread_primary = (spread_family_validation or {}).get("primary_family") or {}
+    archetypes = (spread_family_validation or {}).get("archetype_scoreboard") or []
+    promotable_archetypes = [row for row in archetypes if isinstance(row, dict) and row.get("is_promotable")]
+    top_profile = collateral_profiles[0] if collateral_profiles else {}
+    current_profile = next((row for row in collateral_profiles if row.get("is_current_profile")), top_profile)
+    active_structure = next((row for row in syndicated_menu if row.get("direction_aligned")), syndicated_menu[0] if syndicated_menu else {})
+
+    if proxy_signal == "SELL":
+        overall_action = "AVOID_OR_CLOSE"
+        headline = "Avoid fresh buys; close local mock exposure if already open."
+        reason = _text(proxy_basket.get("signal_reason"), "The direction-matched proxy basket is in sell mode.")
+    elif mock_construction.get("recommended_action") == "BUY_CONTRACT":
+        overall_action = "PAPER_BUY_CANDIDATE"
+        headline = "Paper/testnet buy candidate."
+        reason = _text(mock_construction.get("recommendation_reason"), "Entry score and judge gate cleared.")
+    elif top_profile.get("action") == "PAPER_BUY_CANDIDATE":
+        overall_action = "STRUCTURE_THEN_JUDGE"
+        headline = "Structurable profile found; attach collateral before Arc."
+        reason = _text(top_profile.get("status_reason"), "Power materiality and replay support a candidate profile.")
+    else:
+        overall_action = "MONITOR"
+        headline = "Monitor; do not open a fresh ticket yet."
+        reason = _text(mock_construction.get("recommendation_reason"), "Entry gates have not all cleared.")
+
+    rows = [
+        {
+            "key": "current_mock_contract",
+            "label": "Current mock contract",
+            "action": _text(mock_construction.get("recommended_action"), "MONITOR_ONLY"),
+            "signal": _text(mock_construction.get("recommendation_label"), "Monitor"),
+            "score": _round_units(mock_construction.get("entry_signal_score")),
+            "reason": _text(mock_construction.get("recommendation_summary"), _text(mock_construction.get("recommendation_reason"))),
+        },
+        {
+            "key": "active_proxy_basket",
+            "label": _text(proxy_basket.get("label"), "Active proxy basket"),
+            "action": "AVOID_OR_CLOSE" if proxy_signal == "SELL" else ("BUY_OR_HOLD" if proxy_signal == "BUY" else "MONITOR"),
+            "signal": proxy_signal,
+            "status": proxy_status,
+            "score": _round_units(proxy_basket.get("total_return_pct")),
+            "return_5d_pct": ((trailing.get("5d") or {}).get("return_pct") if isinstance(trailing.get("5d"), dict) else ""),
+            "return_1m_pct": ((trailing.get("1m") or {}).get("return_pct") if isinstance(trailing.get("1m"), dict) else ""),
+            "reason": _text(proxy_basket.get("signal_reason"), _text(proxy_basket.get("status_reason"))),
+        },
+        {
+            "key": "current_collateral_profile",
+            "label": _text(current_profile.get("label"), "Current collateral profile"),
+            "action": _text(current_profile.get("action"), "MONITOR"),
+            "signal": _text(current_profile.get("materiality_gate"), "MONITOR"),
+            "score": _round_units(current_profile.get("entry_score")),
+            "power_share_pct": current_profile.get("modeled_power_cost_share_pct", ""),
+            "reason": _text(current_profile.get("status_reason"), "No collateral profile data."),
+        },
+        {
+            "key": "best_collateral_profile",
+            "label": _text(top_profile.get("label"), "Best collateral profile"),
+            "action": _text(top_profile.get("action"), "MONITOR"),
+            "signal": _text(top_profile.get("materiality_gate"), "MONITOR"),
+            "score": _round_units(top_profile.get("entry_score")),
+            "power_share_pct": top_profile.get("modeled_power_cost_share_pct", ""),
+            "reason": _text(top_profile.get("status_reason"), "No collateral profile passed yet."),
+        },
+        {
+            "key": "spread_replay",
+            "label": _text(spread_primary.get("label"), "Spread replay"),
+            "action": "PROMOTABLE" if spread_primary.get("is_promotable") else "MONITOR",
+            "signal": _text(spread_primary.get("status"), "NO_REPLAY"),
+            "score": _round_units(spread_primary.get("total_pnl_per_unit")),
+            "win_rate": spread_primary.get("win_rate", ""),
+            "reason": _text(spread_primary.get("status_reason"), "No replay status."),
+        },
+        {
+            "key": "active_syndicated_structure",
+            "label": _text(active_structure.get("title"), "Active syndicated structure"),
+            "action": _text(active_structure.get("status"), "MONITOR_ONLY"),
+            "signal": _text(active_structure.get("latest_signal"), "MONITOR"),
+            "score": _round_units(active_structure.get("total_return_pct")),
+            "reason": _text(active_structure.get("status_reason"), "No structure selected."),
+        },
+    ]
+    return {
+        "version": "operator_signal_sheet_v1",
+        "direction": direction,
+        "overall_action": overall_action,
+        "headline": headline,
+        "reason": reason,
+        "active_proxy_basket_id": _text(proxy_basket.get("basket_id")),
+        "promotable_spread_archetypes": [
+            {
+                "archetype_id": row.get("archetype_id"),
+                "label": row.get("label"),
+                "total_pnl_per_unit": row.get("total_pnl_per_unit"),
+                "win_rate": row.get("win_rate"),
+            }
+            for row in promotable_archetypes[:3]
+        ],
+        "rows": rows,
+        "guardrail": "Operator signals are advisory. Circle/Arc remains locked unless judge.classify() returns EXECUTE.",
+    }
+
+
+def _spread_archetype_trade_map(
+    *,
+    signal_direction: str,
+    spread_family_validation: dict[str, Any] | None,
+    proxy_basket_validation: dict[str, Any] | None,
+    syndicated_menu: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Tie each oil-style spread archetype to its tradable expression.
+
+    Spread-family replay answers "does this index expression mean-revert or
+    trend profitably?" Proxy-basket replay answers "can the desk express that
+    thesis through currently priced public legs?" This table joins those two
+    answers so the frontend/bot can avoid showing disconnected lists.
+    """
+    scoreboard = (spread_family_validation or {}).get("archetype_scoreboard") or []
+    replay_by_archetype = {
+        str(row.get("archetype_id")): row
+        for row in scoreboard
+        if isinstance(row, dict) and row.get("archetype_id")
+    }
+    baskets_by_id = _basket_by_id(proxy_basket_validation)
+    menu_by_archetype: dict[str, list[dict[str, Any]]] = {}
+    for item in syndicated_menu:
+        if not isinstance(item, dict):
+            continue
+        archetype_id = _text(item.get("spread_archetype"))
+        if not archetype_id:
+            continue
+        menu_by_archetype.setdefault(archetype_id, []).append(item)
+
+    rows: list[dict[str, Any]] = []
+    for archetype in SPREAD_ARCHETYPE_CATALOG:
+        archetype_id = str(archetype["id"])
+        replay = replay_by_archetype.get(archetype_id, {})
+        structures = menu_by_archetype.get(archetype_id, [])
+        expression_rows: list[dict[str, Any]] = []
+        for structure in structures:
+            basket_id = _text(structure.get("basket_id"))
+            basket = baskets_by_id.get(basket_id, {})
+            trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else structure.get("trailing_returns", {})
+            expression_rows.append({
+                "instrument_type": structure.get("instrument_type"),
+                "title": structure.get("title"),
+                "basket_id": basket_id,
+                "basket_label": _text(basket.get("label"), _text(structure.get("title"))),
+                "basket_direction": _first_nonempty(basket.get("direction"), structure.get("basket_direction"), structure.get("signal_direction")),
+                "direction_aligned": bool(structure.get("direction_aligned")),
+                "latest_signal": _first_nonempty(basket.get("latest_signal"), structure.get("latest_signal"), default="MONITOR"),
+                "replay_status": _first_nonempty(basket.get("status"), structure.get("replay_status"), default="NO_REPLAY"),
+                "recommendation": _first_nonempty(basket.get("recommendation"), structure.get("recommendation"), default="MONITOR_ONLY"),
+                "status": _text(structure.get("status"), "MONITOR_ONLY"),
+                "status_reason": _text(structure.get("status_reason")),
+                "return_5d_pct": ((trailing.get("5d") or {}).get("return_pct") if isinstance(trailing.get("5d"), dict) else ""),
+                "return_1m_pct": ((trailing.get("1m") or {}).get("return_pct") if isinstance(trailing.get("1m"), dict) else ""),
+                "total_return_pct": _round_units(_first_nonempty(basket.get("total_return_pct"), structure.get("total_return_pct"), default=0)),
+                "win_rate": _round_units(_first_nonempty(basket.get("win_rate"), structure.get("win_rate"), default=0)),
+                "priced_symbols": structure.get("priced_symbols") or [],
+                "missing_symbols": structure.get("missing_symbols") or [],
+                "direct_leg_target": structure.get("direct_leg_target"),
+                "direct_leg_target_ready": bool(structure.get("direct_leg_target_ready")),
+                "copying_spread": structure.get("copying_spread"),
+            })
+
+        selected = next((row for row in expression_rows if row["direction_aligned"]), expression_rows[0] if expression_rows else {})
+        replay_status = _first_nonempty(replay.get("replay_status"), replay.get("status"), default="NO_REPLAY")
+        replay_promotable = bool(replay.get("is_promotable"))
+        selected_signal = _text(selected.get("latest_signal"), "MONITOR") if selected else "MONITOR"
+        selected_status = _text(selected.get("status"), "NO_EXPRESSION") if selected else "NO_EXPRESSION"
+        if not expression_rows:
+            action = "NEEDS_EXPRESSION"
+            reason = "No syndicated expression has been mapped to this spread archetype yet."
+        elif selected_signal == "SELL" or "AVOID" in selected_status:
+            action = "AVOID_OR_SELL"
+            reason = _text(selected.get("status_reason"), "Mapped proxy basket says sell/avoid.")
+        elif selected_signal == "BUY" and selected_status in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE"}:
+            action = selected_status
+            reason = _text(selected.get("status_reason"), "Mapped proxy basket says buy, but Arc still needs the judge gate.")
+        elif replay_promotable and selected_signal in {"BUY", "HOLD"}:
+            action = "PAPER_BUY_CANDIDATE"
+            reason = "Spread replay and mapped proxy expression are both constructive."
+        elif replay_promotable:
+            action = "SPREAD_REPLAY_ONLY"
+            reason = "Spread replay is promotable, but mapped proxy expression is not yet confirming a fresh buy."
+        elif replay_status == "NEEDS_INDEX_HISTORY":
+            action = "NEEDS_INDEX_HISTORY"
+            reason = "Required index history is not available yet."
+        else:
+            action = "MONITOR"
+            reason = _text(replay.get("status_reason"), _text(selected.get("status_reason"), "Keep monitoring replay and venue evidence."))
+
+        rows.append({
+            "archetype_id": archetype_id,
+            "label": archetype.get("label"),
+            "formula": archetype.get("formula"),
+            "oil_analogy": archetype.get("oil_analogy"),
+            "catalog_status": archetype.get("status"),
+            "required_indexes": archetype.get("required_indexes", []),
+            "signal_direction": signal_direction,
+            "replay_status": replay_status,
+            "replay_promotable": replay_promotable,
+            "evidence_level": _text(replay.get("evidence_level"), "planned"),
+            "latest_z": replay.get("latest_z", 0),
+            "tested_trades": replay.get("tested_trades", 0),
+            "win_rate": replay.get("win_rate", 0),
+            "total_pnl_per_unit": replay.get("total_pnl_per_unit", 0),
+            "tradability_action": action,
+            "tradability_reason": reason,
+            "selected_expression": selected,
+            "expressions": expression_rows,
+            "arc_gate": "LOCKED_UNTIL_JUDGE_EXECUTE",
+        })
+    action_rank = {
+        "READY_FOR_JUDGE": 0,
+        "PAPER_BUY_ONLY": 1,
+        "PAPER_BUY_CANDIDATE": 2,
+        "AVOID_OR_SELL": 3,
+        "SPREAD_REPLAY_ONLY": 4,
+        "MONITOR": 5,
+        "NEEDS_INDEX_HISTORY": 6,
+        "NEEDS_EXPRESSION": 7,
+    }
+    rows.sort(key=lambda row: (
+        0 if (row.get("selected_expression") or {}).get("direction_aligned") else 1,
+        action_rank.get(str(row.get("tradability_action")), 9),
+        0 if row.get("replay_promotable") else 1,
+        -abs(_num(row.get("latest_z"))),
+        str(row.get("archetype_id") or ""),
+    ))
+    return rows
+
+
+def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, Any]:
+    """Rank spread expressions by actionable paper profitability.
+
+    The ledger is deliberately labelled as paper replay. It uses public proxy
+    basket returns and spread-family replay, not reconciled fills.
+    """
+    rows: list[dict[str, Any]] = []
+    for idx, item in enumerate(trade_map):
+        selected = item.get("selected_expression") if isinstance(item.get("selected_expression"), dict) else {}
+        action = _text(item.get("tradability_action"), "MONITOR")
+        latest_signal = _text(selected.get("latest_signal"), "MONITOR")
+        ret_5d = selected.get("return_5d_pct", "")
+        ret_1m = selected.get("return_1m_pct", "")
+        total_return = selected.get("total_return_pct", "")
+        replay_pnl = item.get("total_pnl_per_unit", 0)
+        supports_buy = action in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE", "PAPER_BUY_CANDIDATE"} and latest_signal in {"BUY", "HOLD"}
+        requires_close = "AVOID" in action or latest_signal == "SELL"
+        if supports_buy:
+            status = "PAPER_BUY"
+        elif requires_close:
+            status = "SELL_OR_AVOID"
+        elif action == "SPREAD_REPLAY_ONLY":
+            status = "WAIT_FOR_PROXY_CONFIRMATION"
+        elif action in {"NEEDS_INDEX_HISTORY", "NEEDS_EXPRESSION"}:
+            status = action
+        else:
+            status = "MONITOR"
+        rows.append({
+            "rank": idx + 1,
+            "archetype_id": item.get("archetype_id"),
+            "label": item.get("label"),
+            "oil_analogy": item.get("oil_analogy"),
+            "spread_replay_status": item.get("replay_status"),
+            "spread_replay_promotable": bool(item.get("replay_promotable")),
+            "spread_replay_pnl_per_unit": _round_units(replay_pnl),
+            "spread_replay_win_rate": item.get("win_rate", 0),
+            "expression_title": selected.get("title") or selected.get("basket_label") or "",
+            "basket_id": selected.get("basket_id") or "",
+            "latest_signal": latest_signal,
+            "tradability_action": action,
+            "profitability_status": status,
+            "paper_5d_return_pct": ret_5d,
+            "paper_1m_return_pct": ret_1m,
+            "paper_total_return_pct": total_return,
+            "paper_win_rate": selected.get("win_rate", 0),
+            "priced_symbols": selected.get("priced_symbols") or [],
+            "missing_symbols": selected.get("missing_symbols") or [],
+            "supports_fresh_buy": supports_buy,
+            "requires_close_or_avoid": requires_close,
+            "reason": item.get("tradability_reason"),
+        })
+    status_rank = {
+        "PAPER_BUY": 0,
+        "SELL_OR_AVOID": 1,
+        "WAIT_FOR_PROXY_CONFIRMATION": 2,
+        "MONITOR": 3,
+        "NEEDS_INDEX_HISTORY": 4,
+        "NEEDS_EXPRESSION": 5,
+    }
+    rows.sort(key=lambda row: (
+        status_rank.get(str(row.get("profitability_status")), 9),
+        -_num(row.get("paper_5d_return_pct")),
+        -_num(row.get("paper_1m_return_pct")),
+        -_num(row.get("spread_replay_pnl_per_unit")),
+        str(row.get("archetype_id") or ""),
+    ))
+    for idx, row in enumerate(rows):
+        row["rank"] = idx + 1
+    best_buy = next((row for row in rows if row.get("supports_fresh_buy")), None)
+    first_avoid = next((row for row in rows if row.get("requires_close_or_avoid")), None)
+    return {
+        "version": "spread_profitability_ledger_v1",
+        "source": "spread_replay_plus_public_proxy_replay",
+        "realized": False,
+        "realized_note": "These are replay and live paper signals, not reconciled fills or settled PnL.",
+        "best_buy_candidate": best_buy,
+        "first_avoid_candidate": first_avoid,
+        "counts": {
+            "paper_buy": sum(1 for row in rows if row.get("supports_fresh_buy")),
+            "sell_or_avoid": sum(1 for row in rows if row.get("requires_close_or_avoid")),
+            "needs_data": sum(1 for row in rows if str(row.get("profitability_status")).startswith("NEEDS")),
+            "monitor": sum(1 for row in rows if row.get("profitability_status") == "MONITOR"),
+        },
+        "rows": rows,
+    }
+
+
 def propose_synthetic_instrument(
     *,
     spread: dict[str, Any],
@@ -1257,6 +1757,13 @@ def propose_synthetic_instrument(
         spread_family_validation=spread_family_validation,
         proxy_basket_validation=proxy_basket_validation,
     )
+    collateral_profiles = _collateral_profile_candidates(
+        direction=direction,
+        spread_latest=spread_latest,
+        signal_latest=signal_latest,
+        proxy_basket_validation=proxy_basket_validation,
+        spread_family_validation=spread_family_validation,
+    )
     syndicated_menu = _syndicated_instrument_menu(
         region_profile=region_profile,
         signal_direction=direction,
@@ -1265,6 +1772,21 @@ def propose_synthetic_instrument(
         hedge_basket=hedge_basket,
         mock_construction=mock_construction,
         proxy_basket_validation=proxy_basket_validation,
+    )
+    spread_trade_map = _spread_archetype_trade_map(
+        signal_direction=direction,
+        spread_family_validation=spread_family_validation,
+        proxy_basket_validation=proxy_basket_validation,
+        syndicated_menu=syndicated_menu,
+    )
+    profitability_ledger = _spread_profitability_ledger(spread_trade_map)
+    operator_signal_sheet = _operator_signal_sheet(
+        direction=direction,
+        mock_construction=mock_construction,
+        collateral_profiles=collateral_profiles,
+        proxy_basket_validation=proxy_basket_validation,
+        spread_family_validation=spread_family_validation,
+        syndicated_menu=syndicated_menu,
     )
     build_instructions = _build_instructions(direct_legs, hedge_basket, discovery_gaps, collateral_status, mock_construction)
     schematic_steps = _schematic_steps(
@@ -1350,7 +1872,11 @@ def propose_synthetic_instrument(
             "proxy_reference_legs": proxy_legs,
             "priced_hedge_basket": hedge_basket,
             "mock_hedge_construction": mock_construction,
+            "collateral_profile_candidates": collateral_profiles,
             "syndicated_instrument_menu": syndicated_menu,
+            "spread_archetype_trade_map": spread_trade_map,
+            "spread_profitability_ledger": profitability_ledger,
+            "operator_signal_sheet": operator_signal_sheet,
             "spread_family_validation": spread_family_validation or {},
             "proxy_basket_validation": proxy_basket_validation or {},
             "oracle_judge_evidence": oracle_judge_evidence,

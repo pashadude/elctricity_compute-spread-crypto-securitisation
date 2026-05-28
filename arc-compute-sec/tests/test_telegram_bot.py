@@ -228,6 +228,36 @@ def test_status_uses_active_direction_matched_proxy_basket():
     text = telegram_bot.format_status({
         "runtime": {"state": "idle"},
         "mode": {"live_chain_enabled": False},
+        "synthetic_instrument": {
+            "proposal_id": "sig-sheet",
+            "outputs": {
+                "operator_signal_sheet": {
+                    "overall_action": "AVOID_OR_CLOSE",
+                    "headline": "Avoid fresh buys; close local mock exposure if already open.",
+                    "reason": "Both 5d and 1m proxy PnL are negative.",
+                    "direction": "compute_expensive",
+                    "active_proxy_basket_id": "compute_scarcity_ai_infra",
+                    "guardrail": "Operator signals are advisory. Circle/Arc remains locked unless judge.classify() returns EXECUTE.",
+                    "rows": [
+                        {
+                            "key": "active_proxy_basket",
+                            "label": "Compute scarcity AI-infra basket",
+                            "action": "AVOID_OR_CLOSE",
+                            "signal": "SELL",
+                            "status": "OBSERVE",
+                            "return_5d_pct": -0.4,
+                            "return_1m_pct": -1.5,
+                        },
+                        {
+                            "key": "best_collateral_profile",
+                            "label": "Curtailable power GPU batch",
+                            "action": "MONITOR",
+                            "power_share_pct": 8.54,
+                        },
+                    ],
+                },
+            },
+        },
         "proxy_baskets": {
             "active_direction": "compute_expensive",
             "primary_basket": {
@@ -252,8 +282,88 @@ def test_status_uses_active_direction_matched_proxy_basket():
     })
 
     assert "proxy replay: SELL/OBSERVE/MONITOR_ONLY | Compute scarcity AI-infra basket | compute_expensive" in text
+    assert "operator signal: AVOID_OR_CLOSE | compute_expensive | compute_scarcity_ai_infra" in text
+    assert "Avoid fresh buys; close local mock exposure" in text
+    assert "Compute scarcity AI-infra basket: AVOID_OR_CLOSE/SELL/OBSERVE | 5d -0.40%, 1m -1.50%" in text
+    assert "Curtailable power GPU batch: MONITOR | power share 8.54%" in text
+    assert "Circle/Arc remains locked unless judge.classify() returns EXECUTE" in text
     assert "5d -0.40%" in text
     assert "Miner-margin power pair" not in text
+
+
+def test_latest_includes_operator_signal_sheet():
+    text = telegram_bot.format_latest({
+        "signal": {"latest": {"direction": "compute_expensive", "z": 1.1}},
+        "synthetic_instrument": {
+            "instrument_name": "ERCOT power compute receivable hedge note abc",
+            "outputs": {
+                "operator_signal_sheet": {
+                    "overall_action": "AVOID_OR_CLOSE",
+                    "headline": "Avoid fresh buys; close local mock exposure if already open.",
+                    "reason": "Both 5d and 1m proxy PnL are negative.",
+                    "direction": "compute_expensive",
+                    "active_proxy_basket_id": "compute_scarcity_ai_infra",
+                    "rows": [
+                        {
+                            "key": "active_proxy_basket",
+                            "label": "Compute scarcity AI-infra basket",
+                            "action": "AVOID_OR_CLOSE",
+                            "signal": "SELL",
+                            "status": "OBSERVE",
+                            "return_5d_pct": -0.4,
+                            "return_1m_pct": -1.5,
+                        },
+                        {
+                            "key": "spread_replay",
+                            "label": "Raw compute minus power",
+                            "action": "PROMOTABLE",
+                            "win_rate": 61.82,
+                        },
+                    ],
+                },
+                "spread_archetype_trade_map": [
+                    {
+                        "archetype_id": "compute_spark_spread",
+                        "label": "Compute spark spread",
+                        "tradability_action": "AVOID_OR_SELL",
+                        "selected_expression": {
+                            "basket_id": "compute_scarcity_ai_infra",
+                            "latest_signal": "SELL",
+                        },
+                    },
+                ],
+                "spread_profitability_ledger": {
+                    "realized": False,
+                    "rows": [
+                        {
+                            "archetype_id": "fuel_stack_compute_spread",
+                            "label": "Fuel-stack compute spread",
+                            "profitability_status": "PAPER_BUY",
+                            "latest_signal": "BUY",
+                            "paper_5d_return_pct": 2.2,
+                            "paper_1m_return_pct": 6.1,
+                        },
+                        {
+                            "archetype_id": "compute_spark_spread",
+                            "label": "Compute spark spread",
+                            "profitability_status": "SELL_OR_AVOID",
+                            "latest_signal": "SELL",
+                            "paper_5d_return_pct": -0.4,
+                            "paper_1m_return_pct": -1.5,
+                        },
+                    ],
+                },
+            },
+        },
+    })
+
+    assert "operator signal sheet:" in text
+    assert "operator signal: AVOID_OR_CLOSE | compute_expensive | compute_scarcity_ai_infra" in text
+    assert "Compute scarcity AI-infra basket: AVOID_OR_CLOSE/SELL/OBSERVE | 5d -0.40%, 1m -1.50%" in text
+    assert "Raw compute minus power: PROMOTABLE | WR 62%" in text
+    assert "profitability ledger: Fuel-stack compute spread:PAPER_BUY/BUY (5d +2.20%, 1m +6.10%)" in text
+    assert "not realized PnL" in text
+    assert "spread trade map: Compute spark spread:AVOID_OR_SELL/SELL via compute_scarcity_ai_infra" in text
 
 
 def test_status_formats_spread_archetype_scoreboard():
@@ -380,6 +490,52 @@ def test_channel_messages_skip_low_score_mock_contract():
     assert messages == []
 
 
+def test_channel_messages_post_operator_sell_update_without_reject_spam(monkeypatch):
+    monkeypatch.setattr(telegram_bot.time, "time", lambda: 1_779_960_000)
+    messages = telegram_bot.channel_messages({
+        "runtime": {},
+        "synthetic_instrument": {
+            "proposal_id": "operator-sell",
+            "outputs": {
+                "operator_signal_sheet": {
+                    "overall_action": "AVOID_OR_CLOSE",
+                    "headline": "Avoid fresh buys; close local mock exposure if already open.",
+                    "reason": "Both 5d and 1m proxy PnL are negative.",
+                    "direction": "compute_expensive",
+                    "active_proxy_basket_id": "compute_scarcity_ai_infra",
+                    "guardrail": "Operator signals are advisory. Circle/Arc remains locked unless judge.classify() returns EXECUTE.",
+                    "rows": [
+                        {
+                            "key": "active_proxy_basket",
+                            "label": "Compute scarcity AI-infra basket",
+                            "action": "AVOID_OR_CLOSE",
+                            "signal": "SELL",
+                            "status": "OBSERVE",
+                            "return_5d_pct": -0.4,
+                            "return_1m_pct": -1.5,
+                        },
+                    ],
+                },
+            },
+        },
+        "proxy_baskets": {"active_basket": {"basket_id": "compute_scarcity_ai_infra", "end_date": "2026-05-28"}},
+        "verdicts": [{
+            "label": "REJECT",
+            "reason_code": "premium_gate_fail",
+            "instrument": "polymarket:bad-row",
+        }],
+    })
+
+    assert len(messages) == 1
+    key, text = messages[0]
+    assert key == "operator-signal:operator-sell:2026-05-28:AVOID_OR_CLOSE:compute_scarcity_ai_infra"
+    assert "Operator signal update" in text
+    assert "AVOID_OR_CLOSE" in text
+    assert "5d -0.40%" in text
+    assert "No raw REJECT/DEFER/watchlist rows" in text
+    assert "polymarket:bad-row" not in text
+
+
 def test_channel_messages_do_not_post_raw_execute_packages():
     messages = telegram_bot.channel_messages({
         "runtime": {},
@@ -467,6 +623,21 @@ def test_channel_instrument_menu_update_dedupes(tmp_path, monkeypatch):
     assert "compute calendar" in sent[0][1]
     assert "miner-margin power pair" in sent[0][1]
     assert "BUY, HOLD, SELL, or MONITOR" in sent[0][1]
+
+
+def test_channel_profitability_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_profitability_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_profitability_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "profitability ledger shipped" in sent[0][1]
+    assert "PAPER_BUY, SELL_OR_AVOID, MONITOR" in sent[0][1]
+    assert "realized PnL remains separate" in sent[0][1]
+    assert "Kalshi, Polymarket, IBKR ForecastTrader" in sent[0][1]
+    assert "judge.classify() returns EXECUTE" in sent[0][1]
 
 
 def test_ibkr_reauth_reminder_goes_to_private_admin_and_dedupes(tmp_path, monkeypatch):

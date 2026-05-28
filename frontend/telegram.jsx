@@ -197,6 +197,8 @@ const tgSpreadFamilies = (data) => data.spreadFamilies?.families || [];
 const tgSpreadArchetypes = (data) => data.spreadFamilies?.archetypeScoreboard || [];
 const tgProxyBaskets = (data) => data.proxyBaskets?.baskets || [];
 const tgInstrumentMenu = (data) => data.syntheticInstrument?.outputs?.syndicated_instrument_menu || [];
+const tgSpreadTradeMap = (data) => data.syntheticInstrument?.outputs?.spread_archetype_trade_map || [];
+const tgProfitabilityLedger = (data) => data.syntheticInstrument?.outputs?.spread_profitability_ledger || null;
 const tgVenueEvidence = (data) => data.venueEvidence?.rows || [];
 const tgOracleEvidence = (data) => data.oracleResults || {};
 const tgUsdc = (value, fallback = 'Pending') => {
@@ -500,6 +502,88 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
         </div>
       )}
 
+      {tgProfitabilityLedger(data)?.rows?.length > 0 && (
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              Profitability ledger
+            </div>
+            <TgBadge color={TG_THEME.orange}>PAPER PNL</TgBadge>
+          </div>
+          <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginBottom: '8px' }}>
+            {tgProfitabilityLedger(data).realized_note}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {tgProfitabilityLedger(data).rows.slice(0, 4).map(row => {
+              const status = row.profitability_status || 'MONITOR';
+              const color = status === 'PAPER_BUY'
+                ? TG_THEME.green
+                : (String(status).includes('SELL') || String(status).includes('AVOID') ? TG_THEME.red : TG_THEME.orange);
+              return (
+                <div key={row.archetype_id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>#{row.rank} {row.label}</div>
+                      <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                        {(row.expression_title || row.basket_id || 'No expression')} · {row.latest_signal || 'MONITOR'}
+                      </div>
+                      <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                        5d {Number(row.paper_5d_return_pct || 0).toFixed(1)}% · 1m {Number(row.paper_1m_return_pct || 0).toFixed(1)}% · WR {Number(row.paper_win_rate || row.spread_replay_win_rate || 0).toFixed(0)}%
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                      {String(status).replaceAll('_', ' ')}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tgSpreadTradeMap(data).length > 0 && (
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              Spread trade map
+            </div>
+            <TgBadge color={TG_THEME.blue}>INDEX TO BASKET</TgBadge>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {tgSpreadTradeMap(data).slice(0, 4).map(row => {
+              const selected = row.selected_expression || {};
+              const signal = selected.latest_signal || 'MONITOR';
+              const action = row.tradability_action || 'MONITOR';
+              const color = String(action).includes('AVOID') || signal === 'SELL'
+                ? TG_THEME.red
+                : (String(action).includes('BUY') || signal === 'BUY' ? TG_THEME.green : TG_THEME.orange);
+              return (
+                <div key={row.archetype_id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{row.label}</div>
+                      <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                        {row.oil_analogy} · {String(row.replay_status || 'NO_REPLAY').replaceAll('_', ' ')}
+                      </div>
+                      <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                        {(selected.title || selected.basket_label || 'No expression')} · 5d {Number(selected.return_5d_pct || 0).toFixed(1)}% · 1m {Number(selected.return_1m_pct || 0).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                      {String(action).replaceAll('_', ' ')}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                    {row.tradability_reason}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {data.syntheticInstrument && (
         <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', marginBottom: '8px' }}>
@@ -524,6 +608,54 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
               LLM/news evidence: {String(data.syntheticInstrument.outputs.oracle_judge_evidence.status || 'NO_RECEIPTS').replaceAll('_', ' ')}
               {' '}· {data.syntheticInstrument.outputs.oracle_judge_evidence.row_count || 0} receipts
               {' '}· {data.syntheticInstrument.outputs.oracle_judge_evidence.latest_verdict || 'no verdict'}
+            </div>
+          )}
+          {data.syntheticInstrument.outputs?.operator_signal_sheet && (
+            <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Operator signal</div>
+                  <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, lineHeight: 1.25, marginTop: '3px' }}>
+                    {data.syntheticInstrument.outputs.operator_signal_sheet.headline}
+                  </div>
+                </div>
+                <TgBadge color={String(data.syntheticInstrument.outputs.operator_signal_sheet.overall_action || '').includes('AVOID') ? TG_THEME.red : TG_THEME.orange}>
+                  {String(data.syntheticInstrument.outputs.operator_signal_sheet.overall_action || 'MONITOR').replaceAll('_', ' ')}
+                </TgBadge>
+              </div>
+              <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '5px' }}>
+                {data.syntheticInstrument.outputs.operator_signal_sheet.reason}
+              </div>
+              {(data.syntheticInstrument.outputs.operator_signal_sheet.rows || []).slice(0, 3).map(row => (
+                <div key={row.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 68px', gap: '6px', alignItems: 'center', paddingTop: '6px', marginTop: '6px', borderTop: `1px solid ${TG_THEME.border}` }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', color: TG_THEME.text, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.label}</div>
+                    <div style={{ fontSize: '9px', color: TG_THEME.tertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.reason}</div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: String(row.action || '').includes('AVOID') || row.signal === 'SELL' ? TG_THEME.red : TG_THEME.orange, fontWeight: 800, textAlign: 'right' }}>
+                    {String(row.action || 'MONITOR').replaceAll('_', ' ')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {(data.syntheticInstrument.outputs?.collateral_profile_candidates || []).length > 0 && (
+            <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '6px' }}>
+              <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700, marginBottom: '6px' }}>Collateral materiality</div>
+              {(data.syntheticInstrument.outputs.collateral_profile_candidates || []).slice(0, 3).map(profile => (
+                <div key={profile.profile_id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 54px 58px', gap: '6px', alignItems: 'center', padding: '5px 0', borderTop: `1px solid ${TG_THEME.border}` }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', color: TG_THEME.text, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profile.label}</div>
+                    <div style={{ fontSize: '9px', color: TG_THEME.tertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profile.action}</div>
+                  </div>
+                  <div style={{ fontSize: '11px', color: profile.materiality_gate === 'PASS' ? TG_THEME.green : TG_THEME.orange, fontWeight: 800, textAlign: 'right' }}>
+                    {Number(profile.modeled_power_cost_share_pct || 0).toFixed(1)}%
+                  </div>
+                  <div style={{ fontSize: '10px', color: profile.materiality_gate === 'PASS' ? TG_THEME.green : TG_THEME.orange, fontWeight: 800, textAlign: 'right' }}>
+                    {profile.materiality_gate || 'MON'}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
           {data.syntheticInstrument.outputs?.mock_hedge_construction && (

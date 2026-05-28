@@ -71,6 +71,12 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert construction["decision_basis"]["signal"]["z"] == -2.2
     assert construction["decision_basis"]["spread"]["kWh_per_gpu_hr"] == 1.2
     assert construction["modeled_power_cost_share_pct"] > 2.5
+    profiles = proposal["outputs"]["collateral_profile_candidates"]
+    current_profile = next(row for row in profiles if row["profile_id"] == "cloud_gpu_receivable")
+    assert profiles[0]["profile_id"] != "cloud_gpu_receivable"
+    assert profiles[0]["materiality_gate"] == "PASS"
+    assert current_profile["status"] == "THIN_ENERGY_LINK"
+    assert current_profile["materiality_gate"] == "MONITOR"
     assert construction["judge_verdict"]["label"] == "EXECUTE"
     assert construction["judge_verdict"]["reason_code"] == "all_gates_passed"
     assert len(construction["judge_candidate_hash"]) == 16
@@ -86,6 +92,20 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert proposal["outputs"]["build_instructions"][2]["title"] == "Request Circle test USDC"
     assert proposal["outputs"]["agent_search_plan"][0]["surface"] == "opoint_nebius"
     assert "ERCOT" in proposal["outputs"]["agent_search_plan"][0]["query"]
+    sheet = proposal["outputs"]["operator_signal_sheet"]
+    assert sheet["version"] == "operator_signal_sheet_v1"
+    assert sheet["overall_action"] in {"PAPER_BUY_CANDIDATE", "MONITOR", "STRUCTURE_THEN_JUDGE", "AVOID_OR_CLOSE"}
+    assert any(row["key"] == "active_proxy_basket" for row in sheet["rows"])
+    assert "judge.classify()" in sheet["guardrail"]
+    trade_map = proposal["outputs"]["spread_archetype_trade_map"]
+    assert len(trade_map) >= 5
+    assert {row["archetype_id"] for row in trade_map} >= {"compute_spark_spread", "power_cost_share", "fuel_stack_compute_spread"}
+    assert all(row["arc_gate"] == "LOCKED_UNTIL_JUDGE_EXECUTE" for row in trade_map)
+    ledger = proposal["outputs"]["spread_profitability_ledger"]
+    assert ledger["version"] == "spread_profitability_ledger_v1"
+    assert ledger["realized"] is False
+    assert "not reconciled fills" in ledger["realized_note"]
+    assert len(ledger["rows"]) == len(trade_map)
     assert proposal["inputs"]["underlying_contract"]["type"] == "forward_compute_sale"
     assert "not legal ABS" in proposal["structure"]["securitization_style"]
     assert "FDR-style" in proposal["inputs"]["search_adjustment"]["rule"]
@@ -189,6 +209,13 @@ def test_mock_recommendation_blocks_buy_when_energy_materiality_is_too_weak(monk
     assert construction["recommendation_label"] == "Monitor: weak energy link"
     assert construction["modeled_power_cost_share_pct"] < 2.5
     assert "mostly a compute-price signal" in construction["recommendation_reason"]
+    profiles = proposal["outputs"]["collateral_profile_candidates"]
+    current = next(row for row in profiles if row["profile_id"] == "cloud_gpu_receivable")
+    miner = next(row for row in profiles if row["profile_id"] == "miner_margin_energy_package")
+    assert current["status"] == "WEAK_ENERGY_LINK"
+    assert current["materiality_gate"] == "MONITOR"
+    assert miner["modeled_power_cost_share_pct"] > 10.0
+    assert miner["materiality_gate"] == "PASS"
 
 
 def test_mock_recommendation_calls_judge_on_decision_basis(monkeypatch):
@@ -392,12 +419,27 @@ def test_mock_recommendation_uses_proxy_basket_matching_signal_direction(monkeyp
     assert construction["recommendation_label"] == "Sell/avoid: proxy PnL"
     assert construction["decision_basis"]["proxy_basket_validation"]["primary_basket"] == "compute_scarcity_ai_infra"
     assert construction["decision_basis"]["proxy_basket_validation"]["primary_latest_signal"] == "SELL"
+    sheet = proposal["outputs"]["operator_signal_sheet"]
+    assert sheet["overall_action"] == "AVOID_OR_CLOSE"
+    assert sheet["active_proxy_basket_id"] == "compute_scarcity_ai_infra"
+    assert next(row for row in sheet["rows"] if row["key"] == "active_proxy_basket")["action"] == "AVOID_OR_CLOSE"
     menu = proposal["outputs"]["syndicated_instrument_menu"]
     assert menu[0]["instrument_type"] == "compute_receivable_hedge_note"
     assert menu[0]["basket_direction"] == "compute_expensive"
     assert menu[0]["direction_aligned"] is True
     assert menu[0]["latest_signal"] == "SELL"
     assert menu[1]["direction_aligned"] is False
+    trade_map = proposal["outputs"]["spread_archetype_trade_map"]
+    active_spread = next(row for row in trade_map if row["archetype_id"] == "compute_spark_spread")
+    assert active_spread["selected_expression"]["basket_id"] == "compute_scarcity_ai_infra"
+    assert active_spread["selected_expression"]["direction_aligned"] is True
+    assert active_spread["tradability_action"] == "AVOID_OR_SELL"
+    assert "sell" in active_spread["tradability_reason"].lower()
+    ledger = proposal["outputs"]["spread_profitability_ledger"]
+    avoid_row = next(row for row in ledger["rows"] if row["archetype_id"] == "compute_spark_spread")
+    assert avoid_row["profitability_status"] == "SELL_OR_AVOID"
+    assert avoid_row["requires_close_or_avoid"] is True
+    assert ledger["first_avoid_candidate"]["archetype_id"] == "compute_spark_spread"
 
 
 def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
@@ -477,6 +519,17 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
     assert menu[0]["priced_symbols"] == ["BTC-USD", "ETH-USD", "NRG", "CEG"]
     assert menu[0]["arc_gate"] == "LOCKED_UNTIL_JUDGE_EXECUTE"
     assert "priced public basket" in menu[0]["copying_spread"]
+    trade_map = proposal["outputs"]["spread_archetype_trade_map"]
+    fuel_stack = next(row for row in trade_map if row["archetype_id"] == "fuel_stack_compute_spread")
+    assert fuel_stack["tradability_action"] == "PAPER_BUY_ONLY"
+    assert fuel_stack["selected_expression"]["basket_id"] == "miner_margin_power_pair"
+    assert fuel_stack["selected_expression"]["latest_signal"] == "BUY"
+    assert "BTC-USD" in fuel_stack["selected_expression"]["priced_symbols"]
+    ledger = proposal["outputs"]["spread_profitability_ledger"]
+    assert ledger["best_buy_candidate"]["archetype_id"] == "fuel_stack_compute_spread"
+    assert ledger["best_buy_candidate"]["profitability_status"] == "PAPER_BUY"
+    assert ledger["best_buy_candidate"]["supports_fresh_buy"] is True
+    assert ledger["counts"]["paper_buy"] >= 1
     oracle = proposal["outputs"]["oracle_judge_evidence"]
     assert oracle["status"] == "EVIDENCE_LOGGED"
     assert oracle["latest_verdict"] == "DEFER"

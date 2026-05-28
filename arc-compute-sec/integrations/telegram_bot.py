@@ -21,6 +21,7 @@ CHANNEL_ABOUT_KEY = "channel-about:v2"
 CHANNEL_FEEDBACK_UPDATE_KEY = "channel-feedback-update:v1"
 CHANNEL_MARKET_DATA_UPDATE_KEY = "channel-market-data-update:v1"
 CHANNEL_INSTRUMENT_MENU_UPDATE_KEY = "channel-instrument-menu-update:v1"
+CHANNEL_PROFITABILITY_UPDATE_KEY = "channel-profitability-update:v1"
 
 
 def admin_ids() -> set[str]:
@@ -214,6 +215,139 @@ def _proxy_replay_line(snap: dict[str, Any]) -> str:
     return f"proxy replay: {latest_signal}/{status}/{recommendation} | {label}{direction_text} | {recent_text}, WR {wr:.0f}%"
 
 
+def _operator_signal_sheet(snap: dict[str, Any]) -> dict[str, Any]:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    sheet = outputs.get("operator_signal_sheet") if isinstance(outputs.get("operator_signal_sheet"), dict) else {}
+    return sheet
+
+
+def _fmt_operator_pct(value: Any) -> str:
+    if value in ("", None):
+        return ""
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _operator_row_line(row: dict[str, Any]) -> str:
+    label = str(row.get("label") or row.get("key") or "signal row")
+    action = str(row.get("action") or row.get("signal") or "MONITOR")
+    signal = str(row.get("signal") or "").strip()
+    status = str(row.get("status") or "").strip()
+    head = f"{label}: {action}"
+    if signal and signal != action:
+        head += f"/{signal}"
+    if status:
+        head += f"/{status}"
+    metrics: list[str] = []
+    if row.get("return_5d_pct") not in ("", None):
+        metrics.append(f"5d {_fmt_operator_pct(row.get('return_5d_pct'))}")
+    if row.get("return_1m_pct") not in ("", None):
+        metrics.append(f"1m {_fmt_operator_pct(row.get('return_1m_pct'))}")
+    if row.get("power_share_pct") not in ("", None):
+        try:
+            metrics.append(f"power share {float(row.get('power_share_pct')):.2f}%")
+        except (TypeError, ValueError):
+            pass
+    if row.get("win_rate") not in ("", None):
+        try:
+            metrics.append(f"WR {float(row.get('win_rate')):.0f}%")
+        except (TypeError, ValueError):
+            pass
+    score = row.get("score")
+    if score not in ("", None) and not metrics:
+        try:
+            metrics.append(f"score {float(score):.2f}")
+        except (TypeError, ValueError):
+            pass
+    return f"{head}" + (f" | {', '.join(metrics)}" if metrics else "")
+
+
+def _operator_signal_lines(snap: dict[str, Any], *, row_limit: int = 3) -> list[str]:
+    sheet = _operator_signal_sheet(snap)
+    if not sheet:
+        return []
+    action = str(sheet.get("overall_action") or "MONITOR")
+    headline = str(sheet.get("headline") or "").strip()
+    reason = str(sheet.get("reason") or "").strip()
+    direction = str(sheet.get("direction") or "").strip()
+    active = str(sheet.get("active_proxy_basket_id") or "").strip()
+    prefix = f"operator signal: {action}"
+    context = " | ".join(part for part in [direction, active] if part)
+    first = prefix + (f" | {context}" if context else "")
+    if headline:
+        first += f" | {headline}"
+    if reason and reason not in headline:
+        first += f" Reason: {reason}"
+    lines = [first]
+    rows = [row for row in (sheet.get("rows") or []) if isinstance(row, dict)]
+    preferred = [
+        "active_proxy_basket",
+        "active_syndicated_structure",
+        "best_collateral_profile",
+        "current_collateral_profile",
+        "spread_replay",
+    ]
+    ordered: list[dict[str, Any]] = []
+    for key in preferred:
+        for row in rows:
+            if row.get("key") == key and row not in ordered:
+                ordered.append(row)
+    for row in rows:
+        if row not in ordered:
+            ordered.append(row)
+    for row in ordered[:row_limit]:
+        lines.append("- " + _operator_row_line(row))
+    guardrail = str(sheet.get("guardrail") or "").strip()
+    if guardrail:
+        lines.append(guardrail)
+    return lines
+
+
+def _spread_trade_map_line(snap: dict[str, Any], *, limit: int = 3) -> str:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    rows = [row for row in (outputs.get("spread_archetype_trade_map") or []) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    parts = []
+    for row in rows[:limit]:
+        selected = row.get("selected_expression") if isinstance(row.get("selected_expression"), dict) else {}
+        label = row.get("label") or row.get("archetype_id") or "spread"
+        action = row.get("tradability_action") or "MONITOR"
+        basket = selected.get("basket_id") or selected.get("title") or "no expression"
+        signal = selected.get("latest_signal") or "MONITOR"
+        parts.append(f"{label}:{action}/{signal} via {basket}")
+    return "spread trade map: " + "; ".join(parts)
+
+
+def _profitability_ledger_line(snap: dict[str, Any], *, limit: int = 3) -> str:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    ledger = outputs.get("spread_profitability_ledger") if isinstance(outputs.get("spread_profitability_ledger"), dict) else {}
+    rows = [row for row in (ledger.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    parts = []
+    for row in rows[:limit]:
+        label = row.get("label") or row.get("archetype_id") or "spread"
+        status = row.get("profitability_status") or "MONITOR"
+        five_day = _fmt_operator_pct(row.get("paper_5d_return_pct"))
+        one_month = _fmt_operator_pct(row.get("paper_1m_return_pct"))
+        signal = row.get("latest_signal") or "MONITOR"
+        metrics = []
+        if five_day:
+            metrics.append(f"5d {five_day}")
+        if one_month:
+            metrics.append(f"1m {one_month}")
+        metric_text = ", ".join(metrics) if metrics else "paper replay"
+        parts.append(f"{label}:{status}/{signal} ({metric_text})")
+    note = "not realized PnL" if ledger.get("realized") is False else "ledger"
+    return "profitability ledger: " + "; ".join(parts) + f" | {note}"
+
+
 def _pnl_line(snap: dict[str, Any]) -> str:
     pnl = snap.get("pnl") if isinstance(snap.get("pnl"), dict) else {}
     if not pnl:
@@ -280,6 +414,7 @@ def format_status(snap: dict[str, Any]) -> str:
         sources = construction.get("quote_sources") or []
         if sources:
             parts.append("quotes: " + ", ".join(_quote_source_list(sources)))
+    parts.extend(_operator_signal_lines(snap, row_limit=3))
     spread_line = _spread_replay_line(snap)
     if spread_line:
         parts.append(spread_line)
@@ -289,6 +424,12 @@ def format_status(snap: dict[str, Any]) -> str:
     proxy_line = _proxy_replay_line(snap)
     if proxy_line:
         parts.append(proxy_line)
+    profitability_line = _profitability_ledger_line(snap)
+    if profitability_line:
+        parts.append(profitability_line)
+    trade_map_line = _spread_trade_map_line(snap)
+    if trade_map_line:
+        parts.append(trade_map_line)
     pnl_line = _pnl_line(snap)
     if pnl_line:
         parts.append(pnl_line)
@@ -345,6 +486,10 @@ def format_latest(snap: dict[str, Any]) -> str:
                     f"{leg.get('side')} {leg.get('slug')} {float(leg.get('weight') or 0):+.1%}"
                     for leg in weighted[:4]
                 ))
+        operator_lines = _operator_signal_lines(snap, row_limit=4)
+        if operator_lines:
+            lines.append("operator signal sheet:")
+            lines.extend(operator_lines)
         spread_line = _spread_replay_line(snap)
         if spread_line:
             lines.append(spread_line)
@@ -354,6 +499,12 @@ def format_latest(snap: dict[str, Any]) -> str:
         proxy_line = _proxy_replay_line(snap)
         if proxy_line:
             lines.append(proxy_line)
+        profitability_line = _profitability_ledger_line(snap, limit=4)
+        if profitability_line:
+            lines.append(profitability_line)
+        trade_map_line = _spread_trade_map_line(snap, limit=4)
+        if trade_map_line:
+            lines.append(trade_map_line)
         pnl_line = _pnl_line(snap)
         if pnl_line:
             lines.append(pnl_line)
@@ -724,6 +875,28 @@ def channel_instrument_menu_update_message() -> str:
     ])
 
 
+def channel_profitability_update_message() -> str:
+    return "\n".join([
+        "Product update: profitability ledger shipped",
+        "",
+        "Power by Botozen now ranks the compute/energy spread menu by paper profitability instead of showing disconnected replay rows.",
+        "",
+        "What changed:",
+        "- each oil-style spread maps to a tradable expression basket",
+        "- each expression shows PAPER_BUY, SELL_OR_AVOID, MONITOR, or needs-data status",
+        "- 5d and 1m public proxy PnL are shown next to the spread replay",
+        "- realized PnL remains separate and stays empty until reconciled fills or settlements exist",
+        "- Kalshi, Polymarket, IBKR ForecastTrader, Yahoo/public quotes, and crypto are labelled by venue role",
+        "",
+        "Current interpretation: a spread can be PROMOTABLE as an index replay and still be SELL_OR_AVOID if the mapped proxy basket is losing. That is intentional.",
+        "",
+        "No Arc action can happen unless judge.classify() returns EXECUTE.",
+        "",
+        "Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
 def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
     if not proposal:
@@ -764,6 +937,29 @@ def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     return key, text
 
 
+def _operator_signal_message(snap: dict[str, Any]) -> tuple[str, str] | None:
+    sheet = _operator_signal_sheet(snap)
+    if not sheet:
+        return None
+    action = str(sheet.get("overall_action") or "MONITOR").upper()
+    if action not in {"BUY", "BUY_OR_HOLD", "AVOID", "AVOID_OR_CLOSE", "AVOID_OR_SELL", "SELL"}:
+        return None
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    proposal_id = str(proposal.get("proposal_id") or proposal.get("reference_package_id") or proposal.get("instrument_name") or "operator")
+    proxy = snap.get("proxy_baskets") if isinstance(snap.get("proxy_baskets"), dict) else {}
+    active = proxy.get("active_basket") if isinstance(proxy.get("active_basket"), dict) else {}
+    bucket = str(active.get("end_date") or int(time.time() // 86400))
+    active_id = str(sheet.get("active_proxy_basket_id") or active.get("basket_id") or "basket")
+    key = f"operator-signal:{proposal_id}:{bucket}:{action}:{active_id}"
+    lines = [
+        "Operator signal update",
+        *_operator_signal_lines(snap, row_limit=4),
+        "No raw REJECT/DEFER/watchlist rows are included in this channel update.",
+        "Mini App: https://power.botozen.com/tg",
+    ]
+    return key, "\n".join(line for line in lines if line)
+
+
 def channel_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     runtime = snap.get("runtime") or {}
@@ -777,6 +973,10 @@ def channel_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
     mock_message = _mock_contract_message(snap)
     if mock_message:
         out.append(mock_message)
+    operator_message = _operator_signal_message(snap)
+    operator_action = str(_operator_signal_sheet(snap).get("overall_action") or "").upper()
+    if operator_message and not (mock_message and operator_action.startswith("BUY")):
+        out.append(operator_message)
     return out
 
 
@@ -825,6 +1025,18 @@ def notify_channel_instrument_menu_update_once(*, logs: Path | str | None = None
         return 0
     send_message(channel_id, channel_instrument_menu_update_message())
     _mark_sent(CHANNEL_INSTRUMENT_MENU_UPDATE_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_profitability_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_PROFITABILITY_UPDATE_KEY in sent:
+        return 0
+    send_message(channel_id, channel_profitability_update_message())
+    _mark_sent(CHANNEL_PROFITABILITY_UPDATE_KEY, logs=logs)
     return 1
 
 
@@ -882,6 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--post-feedback-update", action="store_true", help="Post the deduped feedback/new-features channel update")
     parser.add_argument("--post-market-data-update", action="store_true", help="Post the deduped IBKR/proxy market-data update")
     parser.add_argument("--post-instrument-menu-update", action="store_true", help="Post the deduped index/spread/instrument menu update")
+    parser.add_argument("--post-profitability-update", action="store_true", help="Post the deduped profitability-ledger channel update")
     args = parser.parse_args(argv)
     if args.set_webhook:
         print(json.dumps(set_webhook(), sort_keys=True))
@@ -903,6 +1116,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.post_instrument_menu_update:
         print(notify_channel_instrument_menu_update_once())
+        return 0
+    if args.post_profitability_update:
+        print(notify_channel_profitability_update_once())
         return 0
     if args.notify_once:
         print(notify_channel_once() + notify_ibkr_reauth_reminder_once())

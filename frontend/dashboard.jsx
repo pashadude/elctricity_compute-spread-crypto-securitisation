@@ -947,6 +947,145 @@ const SyndicatedInstrumentMenuPanel = ({ proposal }) => {
   );
 };
 
+const SpreadTradeMapPanel = ({ proposal }) => {
+  const rows = proposal?.outputs?.spread_archetype_trade_map || [];
+  if (!rows.length) return null;
+  const actionColor = (action, signal) => {
+    const text = String(action || '').toUpperCase();
+    if (text.includes('AVOID') || text.includes('SELL') || signal === 'SELL') return THEME.red[400];
+    if (text.includes('BUY') || text.includes('READY')) return THEME.primary[400];
+    if (text.includes('REPLAY')) return THEME.blue[400];
+    return THEME.amber[400];
+  };
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Spread Trade Map</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Index replay to tradable expression
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
+            Each oil-style spread is mapped to the basket or event structure that can copy it. Arc stays locked until judge EXECUTE.
+          </div>
+        </div>
+        <Badge color="blue">MULTI-SPREAD</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '8px' }}>
+        {rows.slice(0, 6).map(row => {
+          const selected = row.selected_expression || {};
+          const signal = selected.latest_signal || 'MONITOR';
+          const color = actionColor(row.tradability_action, signal);
+          const ret5 = selected.return_5d_pct;
+          const ret1 = selected.return_1m_pct;
+          return (
+            <div key={row.archetype_id} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
+                    {row.label}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.3, marginTop: '2px' }}>
+                    {row.oil_analogy} · {String(row.evidence_level || 'planned').replaceAll('_', ' ')}
+                  </div>
+                </div>
+                <MonoText style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                  {String(row.tradability_action || 'MONITOR').replaceAll('_', ' ')}
+                </MonoText>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
+                {[
+                  ['Replay', String(row.replay_status || 'NO_REPLAY').replaceAll('_', ' '), row.replay_promotable ? THEME.primary[400] : THEME.amber[400]],
+                  ['Signal', signal, signal === 'SELL' ? THEME.red[400] : (signal === 'BUY' ? THEME.primary[400] : THEME.amber[400])],
+                  ['5d/1m', `${ret5 === undefined || ret5 === '' ? '-' : Number(ret5).toFixed(1) + '%'} / ${ret1 === undefined || ret1 === '' ? '-' : Number(ret1).toFixed(1) + '%'}`, THEME.text.secondary],
+                ].map(([label, value, itemColor]) => (
+                  <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                    <MonoText style={{ fontSize: '10px', color: itemColor, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</MonoText>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
+                {selected.title || selected.basket_label || 'No mapped basket yet'}
+                {selected.basket_id ? ` · ${selected.basket_id}` : ''}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '4px' }}>
+                {row.tradability_reason}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+};
+
+const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
+  const ledger = proposal?.outputs?.spread_profitability_ledger || null;
+  const rows = ledger?.rows || [];
+  if (!rows.length) return null;
+  const statusColor = (status) => {
+    const text = String(status || '').toUpperCase();
+    if (text === 'PAPER_BUY') return THEME.primary[400];
+    if (text.includes('SELL') || text.includes('AVOID')) return THEME.red[400];
+    if (text.includes('WAIT')) return THEME.blue[400];
+    return THEME.amber[400];
+  };
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Profitability Ledger</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Ranked paper spread PnL
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
+            {ledger.realized_note || 'Replay and local tickets are separate from realized PnL.'}
+          </div>
+        </div>
+        <Badge color="amber">PAPER</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+        {rows.slice(0, 6).map(row => {
+          const color = statusColor(row.profitability_status);
+          return (
+            <div key={row.archetype_id} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                    #{row.rank} {row.label}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.3, marginTop: '2px' }}>
+                    {row.expression_title || row.basket_id || 'No expression'} · {row.latest_signal || 'MONITOR'}
+                  </div>
+                </div>
+                <MonoText style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                  {String(row.profitability_status || 'MONITOR').replaceAll('_', ' ')}
+                </MonoText>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
+                {[
+                  ['5d', row.paper_5d_return_pct === '' || row.paper_5d_return_pct === undefined ? '-' : `${Number(row.paper_5d_return_pct).toFixed(2)}%`],
+                  ['1m', row.paper_1m_return_pct === '' || row.paper_1m_return_pct === undefined ? '-' : `${Number(row.paper_1m_return_pct).toFixed(2)}%`],
+                  ['WR', `${Number(row.paper_win_rate || row.spread_replay_win_rate || 0).toFixed(0)}%`],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                    <MonoText style={{ fontSize: '11px', color: THEME.text.secondary, fontWeight: 800 }}>{value}</MonoText>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35 }}>
+                {row.reason}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+};
+
 const statusBadgeColor = (status) => {
   const text = String(status || '').toUpperCase();
   if (['LIVE_PRICED', 'EVIDENCE_LOGGED', 'SETTLED_PNL'].includes(text)) return 'primary';
@@ -1501,6 +1640,7 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   const searchPlan = proposal.outputs?.agent_search_plan || [];
   const mockConstruction = proposal.outputs?.mock_hedge_construction || null;
   const oracleEvidence = proposal.outputs?.oracle_judge_evidence || {};
+  const collateralProfiles = proposal.outputs?.collateral_profile_candidates || [];
   const weightedLegs = mockConstruction?.weighted_legs || [];
   const tooling = mockConstruction?.agent_tooling || [];
   const { ticket, marked, buy, monitor, sell, reset } = useMockContractTicket(proposal, mockConstruction, weightedLegs);
@@ -1592,6 +1732,56 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
           </div>
         </div>
       </div>
+      {collateralProfiles.length > 0 && (
+        <div style={{ marginTop: '10px', padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', marginBottom: '8px' }}>
+            <div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted }}>Collateral profile candidates</div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35 }}>
+                Shows whether the cashflow is actually power-sensitive enough to syndicate.
+              </div>
+            </div>
+            <Badge color="blue">MATERIALITY GATE</Badge>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '8px' }}>
+            {collateralProfiles.slice(0, 4).map(profile => {
+              const pass = profile.materiality_gate === 'PASS';
+              const actionColor = profile.action === 'PAPER_BUY_CANDIDATE'
+                ? THEME.primary[400]
+                : (String(profile.action || '').includes('AVOID') ? THEME.red[400] : THEME.amber[400]);
+              return (
+                <div key={profile.profile_id} style={{ padding: '9px', borderRadius: '6px', background: THEME.bg.surface, border: `1px solid ${pass ? THEME.primary[400] + '25' : THEME.border.subtle}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>{profile.label}</div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.3, marginTop: '3px' }}>{profile.cashflow}</div>
+                    </div>
+                    <Badge color={pass ? 'primary' : 'amber'}>{profile.materiality_gate || 'MONITOR'}</Badge>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '5px', marginTop: '7px' }}>
+                    {[
+                      ['Power', `${Number(profile.modeled_power_cost_share_pct || 0).toFixed(1)}%`, pass ? THEME.primary[400] : THEME.amber[400]],
+                      ['Margin', `${Number(profile.margin_pct || 0).toFixed(0)}%`, Number(profile.margin_pct || 0) > 0 ? THEME.primary[400] : THEME.red[400]],
+                      ['Score', Math.round(Number(profile.entry_score || 0)), actionColor],
+                    ].map(([label, value, color]) => (
+                      <div key={label} style={{ padding: '5px', borderRadius: '5px', background: THEME.bg.elevated }}>
+                        <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                        <MonoText style={{ fontSize: '10px', color, fontWeight: 800 }}>{value}</MonoText>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+                    {profile.action}: {profile.status_reason}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.text.faint, marginTop: '5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    needs: {(profile.collateral_needed || []).join(', ')}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {mockConstruction && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '10px', marginTop: '10px' }}>
           <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.primary[400]}20` }}>
@@ -1817,6 +2007,70 @@ const OraclePanel = ({ oracle = {} }) => {
   );
 };
 
+const OperatorSignalSheetPanel = ({ proposal }) => {
+  const sheet = proposal?.outputs?.operator_signal_sheet || null;
+  if (!sheet) return null;
+  const actionColor = sheet.overall_action === 'PAPER_BUY_CANDIDATE' || sheet.overall_action === 'STRUCTURE_THEN_JUDGE'
+    ? THEME.primary[400]
+    : (String(sheet.overall_action || '').includes('AVOID') ? THEME.red[400] : THEME.amber[400]);
+  const rows = sheet.rows || [];
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Operator Signal Sheet</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.2 }}>
+            {sheet.headline || 'Monitor current package'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '4px' }}>
+            {sheet.reason || 'No operator reason available.'}
+          </div>
+        </div>
+        <Badge color={String(sheet.overall_action || '').includes('AVOID') ? 'red' : (sheet.overall_action === 'MONITOR' ? 'amber' : 'primary')}>
+          {String(sheet.overall_action || 'MONITOR').replaceAll('_', ' ')}
+        </Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))', gap: '8px' }}>
+        {rows.slice(0, 6).map(row => {
+          const rowAction = String(row.action || 'MONITOR');
+          const color = rowAction.includes('AVOID') || row.signal === 'SELL'
+            ? THEME.red[400]
+            : (rowAction.includes('BUY') || rowAction === 'PROMOTABLE' ? THEME.primary[400] : THEME.amber[400]);
+          return (
+            <div key={row.key} style={{ padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>{row.label}</div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color, marginTop: '3px', overflowWrap: 'anywhere' }}>{rowAction.replaceAll('_', ' ')}</div>
+                </div>
+                {row.signal && <MonoText style={{ fontSize: '10px', color, fontWeight: 800 }}>{String(row.signal).replaceAll('_', ' ')}</MonoText>}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '5px', marginTop: '7px' }}>
+                {[
+                  ['score', row.score ?? '-'],
+                  ['5d', row.return_5d_pct === undefined || row.return_5d_pct === '' ? '-' : `${Number(row.return_5d_pct).toFixed(2)}%`],
+                  ['power', row.power_share_pct === undefined || row.power_share_pct === '' ? '-' : `${Number(row.power_share_pct).toFixed(1)}%`],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: '5px', borderRadius: '5px', background: THEME.bg.surface }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                    <MonoText style={{ fontSize: '10px', color: THEME.text.secondary, fontWeight: 700 }}>{value}</MonoText>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+                {row.reason}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '8px' }}>
+        {sheet.guardrail}
+      </div>
+    </Card>
+  );
+};
+
 const DashboardPage = ({ refreshRate }) => {
   const data = useLiveData(refreshRate);
   const isMobile = useIsMobile(820);
@@ -1864,6 +2118,8 @@ const DashboardPage = ({ refreshRate }) => {
       </div>
 
       <PnlStatusPanel pnl={data.pnl} />
+      <SpreadProfitabilityLedgerPanel proposal={data.syntheticInstrument} />
+      <OperatorSignalSheetPanel proposal={data.syntheticInstrument} />
 
       {/* Signal + Candidates */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
@@ -1875,6 +2131,7 @@ const DashboardPage = ({ refreshRate }) => {
       </div>
 
       <SyndicatedInstrumentMenuPanel proposal={data.syntheticInstrument} />
+      <SpreadTradeMapPanel proposal={data.syntheticInstrument} />
 
       <VenueEvidencePanel evidence={data.venueEvidence} />
 
