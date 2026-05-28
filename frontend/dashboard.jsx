@@ -686,6 +686,8 @@ const SignalPanel = ({ data }) => {
     : '';
   const powerShare = data.spread.powerSharePct;
   const powerShareWeak = powerShare !== null && powerShare !== undefined && Number(powerShare) < 2.5;
+  const chartWidth = isNarrow ? 320 : 600;
+  const chartHeight = isNarrow ? 56 : 80;
   const fmtSpreadOos = (row) => {
     const status = String(row?.oos_status || '').toUpperCase();
     if (!status) return `${Number(row?.win_rate || 0).toFixed(0)}%`;
@@ -762,8 +764,8 @@ const SignalPanel = ({ data }) => {
           </div>
         </div>
       )}
-      <div style={{ height: '80px', position: 'relative', width: '100%', maxWidth: '100%', overflow: 'hidden', minWidth: 0 }}>
-        <Sparkline data={data.history} width={600} height={80} color={THEME.primary[400]} style={{ width: '100%', height: '80px' }} />
+      <div style={{ height: `${chartHeight}px`, position: 'relative', width: '100%', maxWidth: '100%', overflow: 'hidden', minWidth: 0 }}>
+        <Sparkline data={data.history} width={chartWidth} height={chartHeight} color={THEME.primary[400]} style={{ width: '100%', height: `${chartHeight}px` }} />
         {/* threshold lines */}
         <div style={{ position: 'absolute', top: '20%', left: 0, right: 0, borderTop: `1px dashed ${THEME.red[400]}40`, pointerEvents: 'none' }}>
           <span style={{ position: 'absolute', right: 0, top: '-14px', fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.red[400] }}>+σ</span>

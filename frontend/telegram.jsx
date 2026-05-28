@@ -84,14 +84,22 @@ const tgInventoryTrailing = (leg = {}) => (
 
 const TgScreen = ({ children, title, subtitle, onBack, style }) => (
   <div style={{
-    background: TG_THEME.bg, height: '100%', minHeight: '100%', display: 'flex', flexDirection: 'column',
+    background: TG_THEME.bg,
+    height: '100%',
+    minHeight: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    boxSizing: 'border-box',
+    paddingTop: 'calc(10px + env(safe-area-inset-top, 0px))',
+    paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))',
     fontFamily: '-apple-system, "SF Pro Text", sans-serif', ...style,
   }}>
     {/* TG header */}
     <div style={{
-      padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px',
+      padding: '10px 16px 12px', display: 'flex', alignItems: 'center', gap: '12px',
       borderBottom: `0.5px solid ${TG_THEME.separator}`,
       background: TG_THEME.bg,
+      flexShrink: 0,
     }}>
       {onBack && (
         <button type="button" onClick={onBack} style={{
@@ -105,7 +113,7 @@ const TgScreen = ({ children, title, subtitle, onBack, style }) => (
         {subtitle && <div style={{ fontSize: '12px', color: TG_THEME.secondary }}>{subtitle}</div>}
       </div>
     </div>
-    <div style={{ flex: 1, overflow: 'auto' }}>{children}</div>
+    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>
   </div>
 );
 
@@ -309,6 +317,18 @@ const TgHome = ({ setScreen, data, requestScan }) => {
             </div>
           ))}
         </div>
+      </div>
+
+      <div style={{
+        background: TG_THEME.surface,
+        borderRadius: '12px',
+        padding: '14px 16px',
+        marginBottom: '16px',
+      }}>
+        <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '10px' }}>
+          Telegram surfaces
+        </div>
+        <TgWebLinks />
       </div>
 
       {/* Live signal */}
@@ -1504,6 +1524,7 @@ const TelegramMiniApp = () => {
   return (
     <div style={{
       height: '100dvh', width: '100vw', overflow: 'hidden',
+      paddingTop: 'env(safe-area-inset-top, 0px)',
       background: TG_THEME.bg, color: TG_THEME.text,
     }}>
       <Screen setScreen={setScreen} goBack={goBack} data={data} requestScan={requestBackendScan} />
