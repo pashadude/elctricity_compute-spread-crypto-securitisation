@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import sqlite3
 
 from services import state
@@ -61,6 +62,291 @@ def test_runtime_status_json_is_included(tmp_path, monkeypatch):
     }))
 
     assert state.snapshot()["runtime"] == {"state": "idle", "last_error": ""}
+
+
+def test_snapshot_includes_spread_family_replay_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    rows = []
+    for i in range(80):
+        rows.append({
+            "ts": str(i),
+            "region": "ERCOT|us-east-1",
+            "electricity_per_mwh": "62.6",
+            "compute_per_gpu_hr": "0.86635",
+            "S_t": "0.84444",
+            "k": "0.5",
+            "kwh_per_gpu_hr": "0.7",
+        })
+    _write_tsv(tmp_path / "spread_history.tsv", rows)
+
+    snap = state.snapshot()
+
+    assert snap["spread_families"]["version"] == "spread_family_replay_v1"
+    assert snap["spread_families"]["entry_gate_pass"] is False
+    assert snap["spread_families"]["primary_family"]["status"] == "INSUFFICIENT_VARIANCE"
+    assert snap["synthetic_instrument"]["outputs"]["spread_family_validation"]["entry_gate_pass"] is False
+
+
+def test_spread_state_merges_latest_power_proxy_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    _write_tsv(tmp_path / "spread_history.tsv", [{
+        "ts": "1779931022",
+        "region": "ERCOT|us-east-1",
+        "electricity_per_mwh": "63.535",
+        "compute_per_gpu_hr": "0.86635",
+        "S_t": "0.844113",
+        "k": "0.5",
+        "kwh_per_gpu_hr": "0.7",
+    }])
+    (tmp_path / "spread_mark_sources.jsonl").write_text(json.dumps({
+        "ts": 1779931022,
+        "electricity_source": "eia_plus_power_proxy",
+        "electricity_source_status": "proxy_adjusted",
+        "electricity_base_per_mwh": 62.6,
+        "electricity_proxy_weighted_return_pct": 1.493,
+        "electricity_proxy_symbols": ["NG=F", "NRG", "CEG"],
+        "electricity_proxy_used_quotes": 3,
+        "electricity_proxy_quote_sources": ["yahoo_finance_chart"],
+        "eia_period": "2026-03",
+        "compute_source": "aws_spot",
+        "compute_instance": "p4d.24xlarge",
+    }) + "\n")
+
+    latest = state.spread_state()["latest"]
+
+    assert latest["electricity_source"] == "eia_plus_power_proxy"
+    assert latest["electricity_source_status"] == "proxy_adjusted"
+    assert latest["electricity_base_per_mwh"] == 62.6
+    assert latest["electricity_proxy_used_quotes"] == 3
+    assert latest["compute_instance"] == "p4d.24xlarge"
+
+
+def test_spread_family_state_uses_proxy_history_when_runtime_marks_are_flat(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    flat_rows = []
+    for i in range(120):
+        flat_rows.append({
+            "ts": str(i),
+            "region": "ERCOT|us-east-1",
+            "electricity_per_mwh": "62.6",
+            "compute_per_gpu_hr": "0.86635",
+            "S_t": "0.84444",
+            "k": "0.5",
+            "kwh_per_gpu_hr": "0.7",
+        })
+    _write_tsv(tmp_path / "spread_history.tsv", flat_rows)
+    proxy_rows = []
+    for i in range(240):
+        s_t = 0.84 + 0.02 * math.sin(i * 2 * math.pi / 24)
+        proxy_rows.append({
+            "ts": str(i),
+            "date": f"2026-01-{(i % 28) + 1:02d}",
+            "region": "ERCOT|public-proxy-compute",
+            "electricity_per_mwh": "62.6",
+            "compute_per_gpu_hr": f"{s_t + 0.02191:.6f}",
+            "S_t": f"{s_t:.6f}",
+            "k": "0.5",
+            "kwh_per_gpu_hr": "0.7",
+            "mark_source": "public_proxy_history",
+            "electricity_index": "public fuel/power electricity proxy",
+            "compute_index": "public compute-infra proxy",
+        })
+    _write_tsv(tmp_path / "spread_proxy_history.tsv", proxy_rows)
+
+    spread_families = state.snapshot()["spread_families"]
+
+    assert spread_families["primary_source"] == "proxy_history"
+    assert spread_families["entry_gate_pass"] is True
+    assert spread_families["recorded_history_replay"]["entry_gate_pass"] is False
+    assert spread_families["proxy_history_replay"]["entry_gate_pass"] is True
+
+
+def test_snapshot_reads_saved_proxy_basket_backtest(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    report = {
+        "version": "proxy_basket_replay_v1",
+        "entry_gate_pass": True,
+        "primary_basket": {
+            "basket_id": "compute_scarcity_ai_infra",
+            "label": "Compute scarcity AI-infra basket",
+            "status": "PROMOTABLE",
+            "recommendation": "BUY_OR_HOLD",
+            "total_return_pct": 12.5,
+            "win_rate": 61.0,
+            "max_drawdown_pct": -8.0,
+            "status_reason": "Historical proxy basket replay is positive enough.",
+        },
+        "baskets": [],
+    }
+    (tmp_path / "proxy_basket_backtest.json").write_text(json.dumps(report))
+
+    snap = state.snapshot()
+
+    assert snap["proxy_baskets"]["entry_gate_pass"] is True
+    assert snap["proxy_baskets"]["primary_basket"]["basket_id"] == "compute_scarcity_ai_infra"
+    assert snap["proxy_baskets"]["active_basket"]["basket_id"] == "compute_scarcity_ai_infra"
+    assert snap["synthetic_instrument"]["outputs"]["proxy_basket_validation"]["entry_gate_pass"] is True
+
+
+def test_snapshot_pnl_uses_proxy_basket_matching_signal_direction(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    _write_tsv(tmp_path / "arb_signals.tsv", [{
+        "ts": "1",
+        "signal_id": "sig-proxy-direction",
+        "direction": "compute_expensive",
+        "region": "ERCOT|us-east-1",
+        "z": "2.4",
+    }])
+    report = {
+        "version": "proxy_basket_replay_v1",
+        "entry_gate_pass": True,
+        "primary_basket": {
+            "basket_id": "miner_margin_power_pair",
+            "direction": "electricity_expensive",
+            "label": "Miner-margin power pair",
+            "status": "PROMOTABLE",
+            "recommendation": "BUY_OR_HOLD",
+            "latest_signal": "BUY",
+            "trailing_returns": {"5d": {"return_pct": 2.2}, "1m": {"return_pct": 6.1}},
+            "is_promotable": True,
+        },
+        "baskets": [
+            {
+                "basket_id": "miner_margin_power_pair",
+                "direction": "electricity_expensive",
+                "label": "Miner-margin power pair",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "trailing_returns": {"5d": {"return_pct": 2.2}, "1m": {"return_pct": 6.1}},
+                "is_promotable": True,
+            },
+            {
+                "basket_id": "compute_scarcity_ai_infra",
+                "direction": "compute_expensive",
+                "label": "Compute scarcity AI-infra basket",
+                "status": "OBSERVE",
+                "recommendation": "MONITOR_ONLY",
+                "latest_signal": "SELL",
+                "trailing_returns": {"5d": {"return_pct": -0.4}, "1m": {"return_pct": -1.5}},
+                "total_return_pct": 2.2,
+                "win_rate": 43.3,
+                "is_promotable": False,
+            },
+        ],
+    }
+    (tmp_path / "proxy_basket_backtest.json").write_text(json.dumps(report))
+
+    snap = state.snapshot()
+
+    assert snap["proxy_baskets"]["primary_basket"]["basket_id"] == "miner_margin_power_pair"
+    assert snap["proxy_baskets"]["active_basket"]["basket_id"] == "compute_scarcity_ai_infra"
+    assert snap["proxy_baskets"]["active_entry_gate_pass"] is False
+    assert snap["pnl"]["proxy_basket_id"] == "compute_scarcity_ai_infra"
+    assert snap["pnl"]["proxy_latest_signal"] == "SELL"
+    assert snap["pnl"]["proxy_5d_return_pct"] == -0.4
+
+
+def test_snapshot_exposes_gated_pnl_status_without_reconciliation(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    rows = []
+    for i in range(80):
+        rows.append({
+            "ts": str(i),
+            "region": "ERCOT|us-east-1",
+            "electricity_per_mwh": "62.6",
+            "compute_per_gpu_hr": "0.86635",
+            "S_t": "0.84444",
+            "k": "0.5",
+            "kwh_per_gpu_hr": "0.7",
+        })
+    _write_tsv(tmp_path / "spread_history.tsv", rows)
+
+    pnl = state.snapshot()["pnl"]
+
+    assert pnl["has_reconciled"] is False
+    assert pnl["status"] == "NO_SETTLED_PNL"
+    assert pnl["display_total"] == "No settled PnL"
+    assert pnl["display_trades"] == "0 settled"
+    assert pnl["spread_replay_status"] == "INSUFFICIENT_VARIANCE"
+    assert "not realized PnL" in pnl["mark_to_market_note"]
+
+
+def test_snapshot_exposes_real_venue_evidence_matrix(tmp_path, monkeypatch):
+    state.cache.clear("public_quote")
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "1")
+    monkeypatch.setenv("IBKR_DIRECT_EVENT_SYMBOLS", "RETXC")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_SLUGS", "ai-data-center-moratorium-passed-before-2027")
+    monkeypatch.setenv("POLYMARKET_DIRECT_EVENT_FETCH", "1")
+    monkeypatch.setenv("KALSHI_DIRECT_EVENT_FETCH", "1")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "1")
+    monkeypatch.setenv("PUBLIC_HEDGE_SYMBOLS", "NVDA,BTC-USD")
+    monkeypatch.setattr(state, "_fetch_kalshi_ai_events", lambda: [{
+        "id": "KXOPENAI-26",
+        "event_ticker": "KXOPENAI-26",
+        "slug": "kxopenai-26",
+        "title": "Will OpenAI release GPT-6 before 2027?",
+        "description": "AI compute event.",
+        "yes_prices": [0.54],
+    }])
+    monkeypatch.setattr(state, "_fetch_polymarket_event", lambda key: {
+        "id": "108522",
+        "slug": "ai-data-center-moratorium-passed-before-2027",
+        "title": "AI data center moratorium passed before 2027?",
+        "description": "AI data-center grid-stress event.",
+        "yes_prices": [0.32],
+    })
+    monkeypatch.setattr(state, "_fetch_public_quote", lambda symbol, sources=None: {
+        "symbol": symbol,
+        "price": 181.25 if symbol == "NVDA" else 74_000.0,
+        "currency": "USD",
+        "exchange": "NMS",
+        "source": "yahoo_finance_chart",
+        "source_priority": "ibkr,yahoo",
+    })
+    (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
+        "events": [{
+            "symbol": "RETXC",
+            "slug": "retxc-ec",
+            "title": "Texas Commercial Electricity Generation Sales Revenue",
+            "pricing_status": "ibkr_quote_unavailable",
+        }],
+    }))
+    (tmp_path / "energy_llm_oracle.jsonl").write_text(json.dumps({
+        "ts": "2026-05-23T20:48:43+00:00",
+        "analyst_model": "deepseek-ai/DeepSeek-V3.2",
+        "verdict": "DEFER",
+        "reason_code": "no_opoint_evidence",
+        "event_slug": "ai-data-center-moratorium",
+        "coverage": {"raw": 50, "after_filter": 0},
+    }) + "\n")
+
+    snap = state.snapshot()
+    matrix = snap["venue_evidence"]
+    by_surface = {row["surface"]: row for row in matrix["rows"]}
+
+    assert matrix["version"] == "venue_evidence_matrix_v1"
+    assert matrix["summary"]["arc_ready_surfaces"] == 0
+    assert by_surface["polymarket"]["status"] == "LIVE_PRICED"
+    assert by_surface["polymarket"]["premium_gate_required"] is True
+    assert by_surface["kalshi"]["status"] == "LIVE_PRICED"
+    assert by_surface["ibkr_prediction"]["status"] == "PROXY_PRICED"
+    assert by_surface["ibkr_prediction"]["external_proxy_count"] == 1
+    assert by_surface["public_market"]["priced_count"] == 2
+    assert by_surface["crypto"]["status"] == "LIVE_PRICED"
+    assert by_surface["opoint_nebius"]["evidence_only"] is True
+    assert by_surface["opoint_nebius"]["can_drive_arc"] is False
+    assert by_surface["opoint_nebius"]["latest_model"] == "deepseek-ai/DeepSeek-V3.2"
+    assert all(row["can_drive_arc"] is False for row in matrix["rows"])
+    assert snap["oracle"]["status"] == "EVIDENCE_LOGGED"
+    assert snap["oracle"]["row_count"] == 1
+    assert snap["oracle"]["verdict_counts"] == {"DEFER": 1}
+    oracle_output = snap["synthetic_instrument"]["outputs"]["oracle_judge_evidence"]
+    assert oracle_output["status"] == "EVIDENCE_LOGGED"
+    assert oracle_output["can_drive_arc"] is False
+    assert oracle_output["judge_required"] is True
+    assert oracle_output["oracle_evidence_hash"]
 
 
 def test_public_quote_uses_configured_source_order(monkeypatch):

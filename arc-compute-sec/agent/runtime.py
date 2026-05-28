@@ -36,6 +36,7 @@ from agent.spread_package import package_summary_for_candidate
 
 _POSITIONS_PATH = Path(__file__).resolve().parent.parent / "logs" / "positions.tsv"
 _ARC_TXS_PATH = Path(__file__).resolve().parent.parent / "logs" / "arc_txs.tsv"
+_SPREAD_MARK_SOURCES_PATH = Path(__file__).resolve().parent.parent / "logs" / "spread_mark_sources.jsonl"
 _POSITIONS_HEADERS = [
     "ts", "stage", "job_id", "arb_signal_id", "surface", "instrument",
     "direction", "notional_usdc", "deliverable_hash", "reason_hash",
@@ -194,10 +195,17 @@ def _log_chain_tx(stage: str, job_id: int | str, tx: Any) -> None:
     })
 
 
-def _live_spread() -> arb_identifier.SpreadPoint:
+def _append_spread_mark_source(row: dict[str, Any]) -> None:
+    _SPREAD_MARK_SOURCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _SPREAD_MARK_SOURCES_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+
+def _live_spread(*, persist_source: bool = True) -> arb_identifier.SpreadPoint:
     """Fetch live EIA + AWS feeds and compute the latest spread."""
     from feeds.eia import fetch_regions, ERCOT
     from feeds.aws_spot import fetch_gpu_spot
+    from feeds.power_proxy import adjust_electricity_mark
     e_map = fetch_regions((ERCOT,))
     elec = e_map.get(ERCOT)
     if elec is None or elec.value_mwh <= 0:
@@ -208,11 +216,39 @@ def _live_spread() -> arb_identifier.SpreadPoint:
     # Pick the lowest $/GPU-hr we can find (the marginal trade).
     aws_points.sort(key=lambda p: p.price_per_gpu_hour)
     aws_min = aws_points[0]
-    return arb_identifier.compute_spread(
-        electricity_per_mwh=elec.value_mwh,
+    power_mark = adjust_electricity_mark(elec.value_mwh)
+    point = arb_identifier.compute_spread(
+        electricity_per_mwh=power_mark.electricity_per_mwh,
         compute_per_gpu_hr=aws_min.price_per_gpu_hour,
         region="ERCOT|us-east-1",
     )
+    if persist_source:
+        _append_spread_mark_source({
+            "ts": point.ts,
+            "region": point.region,
+            "S_t": point.S_t,
+            "compute_per_gpu_hr": point.compute_per_gpu_hr,
+            "electricity_per_mwh": point.electricity_per_mwh,
+            "electricity_base_per_mwh": power_mark.base_electricity_per_mwh,
+            "electricity_source": power_mark.source,
+            "electricity_source_status": power_mark.status,
+            "electricity_proxy_weighted_return_pct": power_mark.weighted_return_pct,
+            "electricity_proxy_symbols": power_mark.symbols,
+            "electricity_proxy_used_quotes": power_mark.used_quotes,
+            "electricity_proxy_quote_sources": power_mark.quote_sources,
+            "electricity_proxy_formula": power_mark.formula,
+            "electricity_proxy_quotes": power_mark.quotes,
+            "eia_region": elec.region,
+            "eia_state": elec.state,
+            "eia_period": elec.period,
+            "eia_raw_unit": elec.raw_unit,
+            "eia_raw_value": elec.raw_value,
+            "compute_source": "aws_spot",
+            "compute_instance": getattr(aws_min, "instance_type", ""),
+            "compute_region": getattr(aws_min, "region", ""),
+            "compute_os": getattr(aws_min, "os_type", ""),
+        })
+    return point
 
 
 def _mock_polymarket_events(direction: str, energy_template: str = "energy_oil_price") -> list[dict]:
@@ -620,7 +656,7 @@ def run_once(args: argparse.Namespace) -> int:
     """One scan-and-act cycle."""
     # 1. Acquire signal.
     if args.scan:
-        pt = _live_spread()
+        pt = _live_spread(persist_source=not args.no_persist)
         signal = arb_identifier.score_signal(
             pt,
             threshold_z=args.z_threshold,

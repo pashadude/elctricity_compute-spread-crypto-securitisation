@@ -40,7 +40,7 @@ express that stress when direct events are unavailable or too thin.
 The identifier measures the electricity-compute spread:
 
 ```text
-S_t = compute_$_per_gpu_hr - k * electricity_$_per_MWh * kWh_per_gpu_hr
+S_t = compute_$_per_gpu_hr - k * (electricity_$_per_MWh / 1000) * kWh_per_gpu_hr
 ```
 
 with the electricity term converted from MWh to GPU-hours in
@@ -49,6 +49,102 @@ with the electricity term converted from MWh to GPU-hours in
 
 - `z(S_t) > threshold`: compute is expensive relative to electricity.
 - `z(S_t) < -threshold`: electricity is expensive relative to compute.
+
+The dashboard also computes oil-style spread families in
+`agent/spread_family_backtest.py` so one noisy scalar cannot become the whole
+story:
+
+| Family | Formula | Read |
+|---|---|---|
+| Compute minus power cost | `compute - k * (electricity/1000) * kWh` | high means compute rich vs power |
+| Power cost share | `k * (electricity/1000) * kWh / compute` | high means power consumes more GPU-hour revenue |
+| Compute / power ratio | `compute / (k * electricity/1000 * kWh)` | high means compute rich versus power input |
+| Raw compute minus power | `compute - (electricity/1000) * kWh` | same spread before PUE/utilization haircut |
+
+The catalog also names the next spread archetypes the agent is expected to
+scout: regional compute-power basis, compute calendar spread, and fuel-stack
+compute spread. Current electricity indexes include EIA regional power proxies,
+IBKR ForecastTrader power-generation and price indexes, Henry Hub, Brent/WTI,
+and public merchant-power proxies. Current compute indexes include AWS GPU
+spot, SiliconData H100 rental, cloud GPU provider marks, IBKR/Kalshi/Polymarket
+AI compute events, NVDA/VRT/ETN infrastructure proxies, BTC/ETH miner-margin
+proxies, and planned hashprice inputs.
+
+Each family is replayed walk-forward: collapse repeated worker polls, use only
+prior mark changes for the z-score, enter mean-reversion when the z gate
+clears, and mark PnL at the configured horizon. A family is not promotable
+unless it has enough mark-change history, enough distinct marks, enough
+z-gated trades, positive replay PnL, and acceptable win rate. Flat marks
+therefore show `INSUFFICIENT_VARIANCE` or `INSUFFICIENT_MARK_CHANGES` instead
+of a fake profitable signal. The frontend and Telegram Mini App show this
+replay gate beside the live spread.
+
+The public hedge expression is replayed separately in
+`agent/proxy_basket_backtest.py`. That replay uses Yahoo/IBKR-style public
+close histories for baskets such as AI-infra scarcity, power-stress hedge,
+grid-equipment load growth, miner-margin power pair, and fuel-stack power
+input. Mixed calendars are handled with a union daily calendar and carried
+last closes, so crypto weekends and equity holidays do not collapse the replay
+to one common timestamp. It reports 5d, 1m, 3m, and 6m returns and emits a
+conservative `BUY`, `HOLD`, `SELL`, or `MONITOR` profitability signal. A
+recent proxy `SELL` blocks a fresh mock-contract buy even if the longer replay
+is otherwise promotable.
+
+Run it with:
+
+```bash
+npm run proxy:backtest -- --range 1mo --interval 1d
+```
+
+The API reads `logs/proxy_basket_backtest.json` when present and uses it as a
+separate proxy-basket validation gate. Without that file, set
+`PROXY_BASKET_BACKTEST_FETCH=1` to let `/api/snapshot` refresh public history
+directly.
+
+The snapshot also separates realized accounting from replay evidence. `pnl`
+returns `NO_SETTLED_PNL` and `display_total = "No settled PnL"` until
+`logs/pnl_reconciliation.tsv` contains reconciled fills or settlements.
+Spread-family replay, proxy-basket replay, and local mock ticket marks stay
+labelled as replay/local state so a flat mark cannot look like real PnL.
+
+The spread snapshot also exposes `spread.mark_source`. The base electricity
+index is still EIA ERCOT/TX monthly retail power, but live scans can adjust it
+with a labelled public proxy move from `NG=F`, `NRG`, `CEG`, and `BZ=F`.
+Set `POWER_PROXY_ENABLED=0` to disable this layer, or configure
+`POWER_PROXY_SYMBOLS`, `POWER_PROXY_WEIGHTS_JSON`, `POWER_PROXY_BETA`, and
+`POWER_PROXY_MAX_MOVE_PCT`. This is a demo power/fuel mark, not an ERCOT LMP
+feed.
+
+Run `npm run spread:proxy-backtest` to build `logs/spread_proxy_history.tsv`.
+It creates daily public-history electricity and compute indexes, anchored to
+the latest live EIA/AWS marks, then reruns the same no-lookahead spread-family
+replay. `spread_families.primary_source` tells the UI whether the active replay
+comes from recorded runtime marks or proxy history. The replay evaluates both
+mean-reversion and trend-following spread rules; a buy signal only appears when
+one of those rules clears the trade-count, PnL, and win-rate gates.
+
+`venue_evidence` is the operator-facing matrix for real feeds and gaps:
+Polymarket Gamma, Kalshi public events, IBKR ForecastTrader/ForecastEx,
+Yahoo/IBKR/Alpaca public quotes, BTC/ETH, and Opoint/Nebius receipts. It is
+read-only evidence. `can_drive_arc` is false for every row; promotion still
+requires premium scoring where applicable and `judge.classify() == EXECUTE`.
+
+`oracle` exposes the Opoint/Nebius receipt ledger separately from the venue
+matrix. `agent/synthetic_instrument.py` copies that state into
+`outputs.oracle_judge_evidence` with a stable hash so the frontend, Mini App,
+and future Arc blobs can reference the LLM/news evidence without letting it
+drive execution by itself.
+
+`agent/synthetic_instrument.py` then maps the validated baskets into several
+syndicated structures:
+
+| Structure | Spread copied | Current status rule |
+|---|---|---|
+| Compute scarcity receivable hedge note | compute spark spread | proxy BUY is paper-only until collateral |
+| Power-stress compute receivable hedge | power cost share | electricity stress hedge, not ABS without receivable/PPA |
+| Grid load-growth basket note | regional compute-power basis | public proxy expression until direct legs price |
+| Miner-margin power pair | fuel-stack/miner-margin spread | BTC/ETH are labelled proxy legs only |
+| Fuel-stack compute input hedge | fuel-stack compute spread | gas/Brent/power input hedge |
 
 The runtime implements the package in four steps:
 

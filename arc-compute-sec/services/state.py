@@ -19,7 +19,9 @@ from typing import Any
 
 from services.env import load_project_env
 from agent.synthetic_instrument import propose_synthetic_instrument
-from adapters.yahoo_finance import fetch_chart_quote
+from agent import spread_family_backtest
+from agent import proxy_basket_backtest
+from adapters.yahoo_finance import fetch_chart_quote, fetch_chart_history
 from contracts.arc_addresses import EXPLORER
 from feeds import cache
 from templates.energy.classifier import classify_energy
@@ -51,6 +53,8 @@ DEFAULT_KALSHI_DIRECT_EVENT_TERMS = (
 DEFAULT_PUBLIC_HEDGE_SYMBOLS = ("NVDA", "VRT", "ETN", "CEG", "NRG", "BTC-USD", "ETH-USD")
 DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES = ("yahoo",)
 DEFAULT_IBKR_FORECAST_PROXY_PRICE_SOURCES = ("ibkr", "yahoo")
+DEFAULT_PROXY_BASKET_HISTORY_RANGE = "6mo"
+DEFAULT_PROXY_BASKET_HISTORY_INTERVAL = "1d"
 IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
     "RETXC": {
         "title": "Texas Commercial Electricity Generation Sales Revenue",
@@ -230,15 +234,26 @@ def _coerce_value(value: str) -> Any:
         return value
 
 
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_value(inner)
+            for key, inner in value.items()
+            if key is not None and not _is_sensitive_key(str(key))
+        }
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, str):
+        return _coerce_value(value)
+    return value
+
+
 def sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in row.items():
         if key is None or _is_sensitive_key(str(key)):
             continue
-        if isinstance(value, str):
-            out[str(key)] = _coerce_value(value)
-        else:
-            out[str(key)] = value
+        out[str(key)] = _sanitize_value(value)
     tx_hash = out.get("tx_hash")
     if isinstance(tx_hash, str) and tx_hash.startswith("0x"):
         out["arcscan_url"] = f"{EXPLORER}/tx/{tx_hash}"
@@ -269,6 +284,29 @@ def read_json(path: Path, default: Any) -> Any:
         return default
 
 
+def read_jsonl(path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    decoded = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(decoded, dict):
+                    rows.append(sanitize_row(decoded))
+    except OSError:
+        return []
+    if limit is None:
+        return rows
+    return rows[-limit:]
+
+
 def latest_row(name: str, *, logs: Path | str | None = None) -> dict[str, Any] | None:
     rows = read_tsv(name, limit=1, logs=logs)
     return rows[-1] if rows else None
@@ -288,6 +326,16 @@ def _maybe_json_list(value: Any) -> list[Any]:
             return []
         return decoded if isinstance(decoded, list) else []
     return []
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if out != out:
+        return None
+    return out
 
 
 def _coerce_price(value: Any) -> float | None:
@@ -506,14 +554,170 @@ def _enrich_leg_rows(rows: list[dict[str, Any]], *, logs: Path | str | None = No
 
 def spread_state(*, logs: Path | str | None = None, limit: int = 120) -> dict[str, Any]:
     rows = read_tsv("spread_history.tsv", limit=limit, logs=logs)
-    latest = rows[-1] if rows else None
+    latest = dict(rows[-1]) if rows else None
     history: list[float] = []
     for row in rows:
         try:
             history.append(float(row.get("S_t", 0.0)))
         except (TypeError, ValueError):
             continue
-    return {"latest": latest, "history": history}
+    source_rows = read_jsonl(log_dir(logs) / "spread_mark_sources.jsonl", limit=1)
+    source = source_rows[-1] if source_rows else {}
+    if latest and source:
+        latest.update({
+            "electricity_source": source.get("electricity_source", ""),
+            "electricity_source_status": source.get("electricity_source_status", ""),
+            "electricity_base_per_mwh": source.get("electricity_base_per_mwh", ""),
+            "electricity_proxy_weighted_return_pct": source.get("electricity_proxy_weighted_return_pct", ""),
+            "electricity_proxy_symbols": source.get("electricity_proxy_symbols", []),
+            "electricity_proxy_used_quotes": source.get("electricity_proxy_used_quotes", ""),
+            "electricity_proxy_quote_sources": source.get("electricity_proxy_quote_sources", []),
+            "electricity_proxy_formula": source.get("electricity_proxy_formula", ""),
+            "eia_period": source.get("eia_period", ""),
+            "compute_source": source.get("compute_source", ""),
+            "compute_instance": source.get("compute_instance", ""),
+            "compute_region": source.get("compute_region", ""),
+        })
+    return {"latest": latest, "history": history, "mark_source": source}
+
+
+def spread_family_state(*, logs: Path | str | None = None, limit: int = 720) -> dict[str, Any]:
+    rows = read_tsv("spread_history.tsv", limit=limit, logs=logs)
+    strategies = (
+        spread_family_backtest.STRATEGY_MEAN_REVERSION,
+        spread_family_backtest.STRATEGY_MOMENTUM,
+    )
+    recorded = spread_family_backtest.summarize(rows, strategy_modes=strategies)
+    proxy_rows = read_tsv("spread_proxy_history.tsv", limit=limit, logs=logs)
+    proxy = spread_family_backtest.summarize(proxy_rows, strategy_modes=strategies) if proxy_rows else None
+    recorded_primary = recorded.get("primary_family") or {}
+    proxy_primary = (proxy or {}).get("primary_family") or {}
+    proxy_has_stronger_sample = (
+        proxy
+        and proxy.get("entry_gate_pass")
+        and (
+            not recorded.get("entry_gate_pass")
+            or int(_as_float(proxy_primary.get("tested_trades")) or 0)
+            > int(_as_float(recorded_primary.get("tested_trades")) or 0)
+        )
+    )
+    chosen = proxy if proxy_has_stronger_sample else recorded
+    source = "proxy_history" if chosen is proxy else "recorded_runtime_marks"
+    out = dict(chosen)
+    out["primary_source"] = source
+    out["recorded_history_replay"] = recorded
+    if proxy is not None:
+        out["proxy_history_replay"] = proxy
+    out["source_status"] = (
+        "using public proxy history because recorded runtime marks are too flat"
+        if source == "proxy_history"
+        else "using recorded runtime marks"
+    )
+    return out
+
+
+def _proxy_basket_report_path(*, logs: Path | str | None = None) -> Path:
+    return log_dir(logs) / "proxy_basket_backtest.json"
+
+
+def _fetch_yahoo_history_cached(
+    symbol: str,
+    *,
+    range_name: str = DEFAULT_PROXY_BASKET_HISTORY_RANGE,
+    interval: str = DEFAULT_PROXY_BASKET_HISTORY_INTERVAL,
+) -> dict[str, Any] | None:
+    clean = str(symbol or "").strip().upper()
+    if not clean:
+        return None
+    key = f"{range_name}|{interval}|{clean}"
+    cached = cache.get("yahoo_history", key)
+    if isinstance(cached, dict):
+        return cached
+    timeout = _num_env("PROXY_BASKET_HISTORY_TIMEOUT", 2.5)
+    try:
+        history = fetch_chart_history(clean, range=range_name, interval=interval, timeout=timeout)
+    except Exception as exc:
+        history = {"symbol": clean, "points": [], "source": "yahoo_finance_chart", "error": exc.__class__.__name__}
+    if isinstance(history, dict):
+        cache.put("yahoo_history", key, history, ttl_seconds=int(_num_env("PROXY_BASKET_HISTORY_CACHE_SECONDS", 21_600)))
+        return history
+    return None
+
+
+def _num_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def proxy_basket_state(*, logs: Path | str | None = None) -> dict[str, Any]:
+    saved = read_json(_proxy_basket_report_path(logs=logs), default={})
+    if isinstance(saved, dict) and saved.get("version") == "proxy_basket_replay_v1":
+        return saved
+    if not bool_env("PROXY_BASKET_BACKTEST_FETCH", False):
+        out = proxy_basket_backtest.summarize({})
+        out["fetch_enabled"] = False
+        out["status_reason"] = "Set PROXY_BASKET_BACKTEST_FETCH=1 or run npm run proxy:backtest to load Yahoo close-history replay."
+        return out
+    range_name = os.environ.get("PROXY_BASKET_HISTORY_RANGE", DEFAULT_PROXY_BASKET_HISTORY_RANGE)
+    interval = os.environ.get("PROXY_BASKET_HISTORY_INTERVAL", DEFAULT_PROXY_BASKET_HISTORY_INTERVAL)
+    histories = {
+        symbol: history
+        for symbol in proxy_basket_backtest.required_symbols()
+        if (history := _fetch_yahoo_history_cached(symbol, range_name=range_name, interval=interval))
+    }
+    out = proxy_basket_backtest.summarize(histories)
+    out["fetch_enabled"] = True
+    out["history_range"] = range_name
+    out["history_interval"] = interval
+    return out
+
+
+def _proxy_basket_entry_gate(basket: dict[str, Any], fallback: Any = None) -> bool | None:
+    if not basket:
+        return bool(fallback) if fallback is not None else None
+    if "is_promotable" in basket:
+        return bool(basket.get("is_promotable"))
+    status = str(basket.get("status") or "")
+    if status:
+        return status == "PROMOTABLE"
+    return bool(fallback) if fallback is not None else None
+
+
+def select_proxy_basket_for_direction(proxy_baskets: dict[str, Any], direction: str) -> tuple[dict[str, Any], bool | None]:
+    validation = proxy_baskets if isinstance(proxy_baskets, dict) else {}
+    primary = validation.get("primary_basket") if isinstance(validation.get("primary_basket"), dict) else {}
+    baskets = [basket for basket in validation.get("baskets") or [] if isinstance(basket, dict)]
+    if primary and all(basket.get("basket_id") != primary.get("basket_id") for basket in baskets):
+        baskets.append(primary)
+
+    clean_direction = str(direction or "").strip()
+    if clean_direction and clean_direction != "no_signal":
+        for basket in baskets:
+            if str(basket.get("direction") or "").strip() == clean_direction:
+                return basket, _proxy_basket_entry_gate(basket)
+        if primary and not str(primary.get("direction") or "").strip():
+            return primary, _proxy_basket_entry_gate(primary, validation.get("entry_gate_pass"))
+        if baskets or primary:
+            return {
+                "basket_id": "no_direction_matched_proxy_basket",
+                "direction": clean_direction,
+                "label": "No direction-matched proxy basket",
+                "status": "DIRECTION_MISMATCH",
+                "status_reason": f"No proxy basket replay matched the active {clean_direction} signal.",
+                "recommendation": "MONITOR_ONLY",
+                "latest_signal": "MONITOR",
+                "signal_reason": "Proxy replay is available, but not for the active spread direction.",
+                "trailing_returns": {},
+                "total_return_pct": 0,
+                "win_rate": 0,
+                "max_drawdown_pct": 0,
+            }, False
+    return primary, _proxy_basket_entry_gate(primary, validation.get("entry_gate_pass"))
 
 
 def signal_state(*, logs: Path | str | None = None, limit: int = 25) -> dict[str, Any]:
@@ -963,6 +1167,238 @@ def direct_inventory_state(*, logs: Path | str | None = None) -> list[dict[str, 
     return _visible_leg_rows(_enrich_leg_rows(rows, logs=logs))
 
 
+def _row_has_yes_price(row: dict[str, Any]) -> bool:
+    prices = row.get("yes_prices")
+    if isinstance(prices, list):
+        return any(_as_float(price) is not None for price in prices)
+    return False
+
+
+def _row_has_public_price(row: dict[str, Any]) -> bool:
+    return _as_float(row.get("last_price")) is not None
+
+
+def _row_has_external_proxy_price(row: dict[str, Any]) -> bool:
+    return _as_float(row.get("external_proxy_last_price")) is not None
+
+
+def _status_from_counts(
+    *,
+    rows: int,
+    priced: int,
+    external_proxy: int = 0,
+    empty_status: str = "NEEDS_DISCOVERY",
+) -> str:
+    if rows <= 0:
+        return empty_status
+    if priced > 0:
+        return "LIVE_PRICED"
+    if external_proxy > 0:
+        return "PROXY_PRICED"
+    return "NEEDS_PRICE"
+
+
+def _venue_row(
+    *,
+    surface: str,
+    label: str,
+    role: str,
+    rows: list[dict[str, Any]],
+    status: str,
+    gaps: list[str],
+    evidence_only: bool = False,
+    direct_event_surface: bool = False,
+    premium_gate_required: bool = False,
+) -> dict[str, Any]:
+    priced = [
+        row for row in rows
+        if _row_has_yes_price(row) or _row_has_public_price(row)
+        or str(row.get("pricing_status") or "") in {"priced_watchlist", "priced_public_market"}
+    ]
+    external = [row for row in rows if _row_has_external_proxy_price(row)]
+    watchlist = [row for row in rows if str(row.get("label") or "") == "WATCHLIST" or row.get("inventory")]
+    latest = max(rows, key=_row_ts) if rows else {}
+    return {
+        "surface": surface,
+        "label": label,
+        "role": role,
+        "status": status,
+        "row_count": len(rows),
+        "priced_count": len(priced),
+        "watchlist_count": len(watchlist),
+        "external_proxy_count": len(external),
+        "direct_event_surface": direct_event_surface,
+        "evidence_only": evidence_only,
+        "real_feed": len(rows) > 0,
+        "can_drive_arc": False,
+        "judge_required": True,
+        "premium_gate_required": premium_gate_required,
+        "latest_title": latest.get("display_label") or latest.get("leg_title") or latest.get("instrument") or "",
+        "latest_slug": latest.get("leg_slug") or latest.get("instrument") or "",
+        "latest_pricing_status": latest.get("pricing_status_label") or latest.get("pricing_status") or latest.get("reason_code") or "",
+        "gaps": gaps,
+    }
+
+
+def _oracle_evidence_state(*, logs: Path | str | None = None) -> dict[str, Any]:
+    receipts = read_jsonl(log_dir(logs) / "energy_llm_oracle.jsonl", limit=250)
+    verdict_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    raw_articles = 0
+    filtered_articles = 0
+    for row in receipts:
+        verdict = str(row.get("verdict") or "UNKNOWN")
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        reason = str(row.get("reason_code") or "unknown")
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        coverage = row.get("coverage") if isinstance(row.get("coverage"), dict) else {}
+        raw_articles += int(_as_float(coverage.get("raw")) or 0)
+        filtered_articles += int(_as_float(coverage.get("after_filter")) or 0)
+    latest = receipts[-1] if receipts else {}
+    return {
+        "surface": "opoint_nebius",
+        "label": "Opoint + Nebius oracle receipts",
+        "role": "news-grounded evidence only",
+        "status": "EVIDENCE_LOGGED" if receipts else "NO_RECEIPTS",
+        "row_count": len(receipts),
+        "priced_count": 0,
+        "watchlist_count": 0,
+        "external_proxy_count": 0,
+        "direct_event_surface": False,
+        "evidence_only": True,
+        "real_feed": len(receipts) > 0,
+        "can_drive_arc": False,
+        "judge_required": True,
+        "premium_gate_required": False,
+        "latest_title": latest.get("event_slug") or latest.get("slug") or "",
+        "latest_slug": latest.get("slug") or latest.get("event_slug") or "",
+        "latest_pricing_status": latest.get("verdict") or "",
+        "latest_model": latest.get("analyst_model") or "",
+        "latest_reason_code": latest.get("reason_code") or "",
+        "verdict_counts": verdict_counts,
+        "reason_counts": reason_counts,
+        "raw_articles": raw_articles,
+        "filtered_articles": filtered_articles,
+        "gaps": [
+            "Oracle receipts are evidence only; they cannot trigger Circle or Arc.",
+            "Missing or DEFER oracle output must not bypass premium scorer or judge.classify().",
+        ],
+    }
+
+
+def venue_evidence_state(
+    *,
+    direct_inventory: list[dict[str, Any]],
+    public_hedges: list[dict[str, Any]],
+    verdicts: list[dict[str, Any]],
+    logs: Path | str | None = None,
+) -> dict[str, Any]:
+    """Explain which real surfaces are feeding the desk and what still blocks use.
+
+    This is an operator-facing projection only. It does not fetch venues, score,
+    judge, or route orders.
+    """
+    visible_verdicts = _visible_leg_rows(verdicts)
+
+    def rows_for(surface: str) -> list[dict[str, Any]]:
+        return [
+            row for row in [*direct_inventory, *visible_verdicts]
+            if str(row.get("surface") or "") == surface
+        ]
+
+    polymarket = rows_for("polymarket")
+    kalshi = rows_for("kalshi")
+    ibkr_prediction = rows_for("ibkr_prediction")
+    public_market = [*public_hedges, *[row for row in visible_verdicts if str(row.get("surface") or "") in {"ibkr", "public_market"}]]
+    crypto = [
+        row for row in [*public_hedges, *visible_verdicts]
+        if str(row.get("surface") or "") == "crypto"
+        or str(row.get("leg_slug") or row.get("instrument") or "").upper() in {"BTC-USD", "ETH-USD", "BTC/USD", "ETH/USD"}
+    ]
+
+    ibkr_priced = sum(1 for row in ibkr_prediction if _row_has_yes_price(row) or str(row.get("pricing_status") or "") == "priced_watchlist")
+    ibkr_proxy = sum(1 for row in ibkr_prediction if _row_has_external_proxy_price(row))
+    rows = [
+        _venue_row(
+            surface="polymarket",
+            label="Polymarket Gamma",
+            role="direct event watchlist after premium scoring",
+            rows=polymarket,
+            status=_status_from_counts(
+                rows=len(polymarket),
+                priced=sum(1 for row in polymarket if _row_has_yes_price(row) or str(row.get("pricing_status") or "") == "priced_watchlist"),
+            ),
+            gaps=["Premium scorer must pass before any Polymarket leg can be promoted."] if polymarket else ["No configured Polymarket direct event rows."],
+            direct_event_surface=True,
+            premium_gate_required=True,
+        ),
+        _venue_row(
+            surface="kalshi",
+            label="Kalshi public event feed",
+            role="direct AI/data-center forecast events",
+            rows=kalshi,
+            status=_status_from_counts(
+                rows=len(kalshi),
+                priced=sum(1 for row in kalshi if _row_has_yes_price(row) or str(row.get("pricing_status") or "") == "priced_watchlist"),
+                empty_status="NEEDS_EVENT_MATCH",
+            ),
+            gaps=["Needs thesis-matched priced event contracts before promotion."] if kalshi else ["No thesis-matched Kalshi rows in the current snapshot."],
+            direct_event_surface=True,
+        ),
+        _venue_row(
+            surface="ibkr_prediction",
+            label="IBKR ForecastTrader / ForecastEx",
+            role="direct electricity and AI compute forecast contracts",
+            rows=ibkr_prediction,
+            status=_status_from_counts(rows=len(ibkr_prediction), priced=ibkr_priced, external_proxy=ibkr_proxy),
+            gaps=(
+                ["IBKR EC metadata is present, but venue bid/ask/last is still missing; external proxy marks are labelled separately."]
+                if ibkr_prediction and ibkr_priced == 0 and ibkr_proxy > 0
+                else ["Needs live EC bid/ask/last from Client Portal or TWS."]
+            ),
+            direct_event_surface=True,
+        ),
+        _venue_row(
+            surface="public_market",
+            label="Yahoo / IBKR / Alpaca public quote proxies",
+            role="liquid public hedge expression",
+            rows=public_market,
+            status=_status_from_counts(
+                rows=len(public_market),
+                priced=sum(1 for row in public_market if _row_has_public_price(row) or str(row.get("pricing_status") or "") == "priced_public_market"),
+                empty_status="NEEDS_QUOTES",
+            ),
+            gaps=["These are liquid proxies, not direct compute or electricity claims."],
+        ),
+        _venue_row(
+            surface="crypto",
+            label="BTC/ETH miner-margin proxy",
+            role="power-sensitive miner-margin proxy",
+            rows=crypto,
+            status=_status_from_counts(
+                rows=len(crypto),
+                priced=sum(1 for row in crypto if _row_has_public_price(row) or str(row.get("pricing_status") or "") == "priced_public_market"),
+                empty_status="NEEDS_QUOTES",
+            ),
+            gaps=["Crypto is proxy-only unless explicit miner-margin evidence is attached."],
+        ),
+        _oracle_evidence_state(logs=logs),
+    ]
+    return {
+        "version": "venue_evidence_matrix_v1",
+        "guardrail": "All rows are evidence or watchlist state only; no Circle or Arc action can happen before judge.classify() returns EXECUTE.",
+        "rows": rows,
+        "summary": {
+            "surfaces": len(rows),
+            "real_feed_surfaces": sum(1 for row in rows if row.get("real_feed")),
+            "direct_event_surfaces": sum(1 for row in rows if row.get("direct_event_surface")),
+            "priced_surfaces": sum(1 for row in rows if int(row.get("priced_count") or 0) > 0),
+            "evidence_only_surfaces": sum(1 for row in rows if row.get("evidence_only")),
+            "arc_ready_surfaces": 0,
+        },
+    }
+
+
 def arc_tx_state(*, logs: Path | str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     return _latest_first(read_tsv("arc_txs.tsv", limit=limit, logs=logs))
 
@@ -986,6 +1422,53 @@ def pnl_state(*, logs: Path | str | None = None) -> dict[str, Any]:
         "trades": counted,
         "win_rate": round((wins / counted) * 100.0, 3) if counted else 0.0,
     }
+
+
+def enrich_pnl_state(
+    pnl: dict[str, Any],
+    *,
+    spread_families: dict[str, Any],
+    proxy_baskets: dict[str, Any],
+    signal_direction: str = "",
+    visible_positions: int,
+) -> dict[str, Any]:
+    trades = int(_as_float(pnl.get("trades")) or 0)
+    primary_family = spread_families.get("primary_family") if isinstance(spread_families, dict) else {}
+    primary_proxy, _proxy_gate = select_proxy_basket_for_direction(proxy_baskets, signal_direction)
+    if trades <= 0:
+        status = "NO_SETTLED_PNL"
+        status_label = "No settled PnL"
+        note = (
+            "No reconciled fills or settlements exist yet. Replay rows and local mock "
+            "tickets are not realized PnL."
+        )
+    elif visible_positions <= 0:
+        status = "RECONCILED_ONLY"
+        status_label = "Reconciled history only"
+        note = "PnL comes from reconciliation rows; there are no currently visible Arc positions."
+    else:
+        status = "SETTLED_PNL"
+        status_label = "Settled PnL"
+        note = "PnL comes from reconciled fills or settlements."
+    pnl.update({
+        "status": status,
+        "status_label": status_label,
+        "display_total": f"${float(pnl.get('total') or 0):.4f}" if trades > 0 else status_label,
+        "display_trades": str(trades) if trades > 0 else "0 settled",
+        "mark_to_market_note": note,
+        "spread_replay_status": (primary_family or {}).get("status", ""),
+        "spread_replay_reason": (primary_family or {}).get("status_reason", ""),
+        "spread_mark_changes": (primary_family or {}).get("observations", 0),
+        "spread_raw_observations": (primary_family or {}).get("raw_observations", 0),
+        "spread_collapsed_polls": (primary_family or {}).get("collapsed_repeated_marks", 0),
+        "proxy_basket_id": (primary_proxy or {}).get("basket_id", ""),
+        "proxy_basket_direction": (primary_proxy or {}).get("direction", ""),
+        "proxy_latest_signal": (primary_proxy or {}).get("latest_signal", ""),
+        "proxy_replay_status": (primary_proxy or {}).get("status", ""),
+        "proxy_5d_return_pct": (((primary_proxy or {}).get("trailing_returns") or {}).get("5d") or {}).get("return_pct", ""),
+        "proxy_1m_return_pct": (((primary_proxy or {}).get("trailing_returns") or {}).get("1m") or {}).get("return_pct", ""),
+    })
+    return pnl
 
 
 def _row_ts(row: dict[str, Any]) -> float:
@@ -1189,13 +1672,30 @@ def runtime_status(*, logs: Path | str | None = None) -> dict[str, Any]:
 def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
     now = time.time()
     spread = spread_state(logs=logs)
+    spread_families = spread_family_state(logs=logs)
+    proxy_baskets = proxy_basket_state(logs=logs)
     signal = signal_state(logs=logs)
+    signal_latest = signal.get("latest") if isinstance(signal.get("latest"), dict) else {}
+    signal_direction = str((signal_latest or {}).get("direction") or "")
+    active_proxy_basket, active_proxy_gate = select_proxy_basket_for_direction(proxy_baskets, signal_direction)
+    if isinstance(proxy_baskets, dict):
+        proxy_baskets = dict(proxy_baskets)
+        proxy_baskets["active_direction"] = signal_direction
+        proxy_baskets["active_basket"] = active_proxy_basket
+        proxy_baskets["active_entry_gate_pass"] = active_proxy_gate
     verdicts = verdict_state(logs=logs)
     positions = position_state(logs=logs)
     direct_inventory = direct_inventory_state(logs=logs)
     public_hedges = public_hedge_state(logs=logs)
     verdict_rollups = rollup_leg_rows(_visible_leg_rows(verdicts))
     packages = package_state(verdicts, positions)
+    venue_evidence = venue_evidence_state(
+        direct_inventory=direct_inventory,
+        public_hedges=public_hedges,
+        verdicts=verdict_rollups,
+        logs=logs,
+    )
+    oracle_evidence = _oracle_evidence_state(logs=logs)
     synthetic_instrument = propose_synthetic_instrument(
         spread=spread,
         signal=signal,
@@ -1204,6 +1704,9 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         packages=packages,
         verdicts=verdict_rollups,
         positions=positions,
+        spread_family_validation=spread_families,
+        proxy_basket_validation=proxy_baskets,
+        oracle_evidence=oracle_evidence,
     )
     pnl = pnl_state(logs=logs)
     real_positions = _visible_leg_rows(positions)
@@ -1220,6 +1723,13 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         "executed_verdicts": sum(1 for row in real_verdicts if row.get("label") == "EXECUTE"),
         "visible_positions": len(real_positions),
     })
+    pnl = enrich_pnl_state(
+        pnl,
+        spread_families=spread_families,
+        proxy_baskets=proxy_baskets,
+        signal_direction=signal_direction,
+        visible_positions=len(real_positions),
+    )
     return {
         "ok": True,
         "generated_at": now,
@@ -1229,6 +1739,8 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         },
         "runtime": runtime_status(logs=logs),
         "spread": spread,
+        "spread_families": spread_families,
+        "proxy_baskets": proxy_baskets,
         "signal": signal,
         "verdicts": verdicts,
         "verdict_rollups": verdict_rollups,
@@ -1236,8 +1748,9 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         "synthetic_instrument": synthetic_instrument,
         "direct_inventory": direct_inventory,
         "public_hedges": public_hedges,
+        "venue_evidence": venue_evidence,
         "positions": positions,
         "arc_txs": arc_tx_state(logs=logs),
         "pnl": pnl,
-        "oracle": {},
+        "oracle": oracle_evidence,
     }

@@ -21,13 +21,72 @@ securitizable asset. The practical v1 is a judged compute/energy spread
 package:
 
 ```text
-S_t = compute_$_per_gpu_hr - k * electricity_$_per_MWh * kWh_per_gpu_hr
+S_t = compute_$_per_gpu_hr - k * (electricity_$_per_MWh / 1000) * kWh_per_gpu_hr
 ```
 
 The desk searches for dislocations in that spread, builds a canonical package
 of direct event legs and proxy hedge legs, runs the energy classifier, premium
 gate, and `judge.classify()`, and only then wraps an approved package as an
 ERC-8183 job on Arc.
+
+The live dashboard now also runs a walk-forward replay over several
+compute/energy spread families: compute minus power cost, power-cost share,
+compute/power ratio, and raw compute minus power. Repeated worker polls are
+collapsed first, so a slow-moving mark cannot create fake zero-PnL trades. A
+spread family is not promoted to a user-facing buy signal unless the replay has
+enough mark-change history, enough distinct marks, enough z-gated trades,
+positive PnL, and acceptable win rate.
+
+The index universe is no longer one scalar. The API now catalogues electricity
+indexes, compute indexes, and oil-style spread archetypes: compute spark
+spread, power-cost share, regional compute-power basis, compute calendar
+spread, and fuel-stack compute spread.
+
+The liquid expression is tested separately with a public proxy basket replay:
+`NVDA`, `VRT`, `ETN`, `CEG`, `NRG`, `BTC-USD`, `ETH-USD`, gas, and Brent where
+available. This answers a different question from the raw spread: if the desk
+expressed the thesis through tradable proxies, did that basket make money over
+recent public closes? The replay now reports 5d, 1m, 3m, and 6m returns plus a
+conservative `BUY`, `HOLD`, `SELL`, or `MONITOR` signal. A recent proxy `SELL`
+can block a fresh mock-contract buy even when the longer replay is promotable.
+
+The proposal output also includes several syndicated structures that copy the
+spread differently: compute receivable hedge note, power-stress receivable
+hedge, grid load-growth note, miner-margin power pair, and fuel-stack compute
+input hedge. They are synthetic until collateral is attached and no Arc action
+can happen before `judge.classify()` returns `EXECUTE`.
+
+The dashboard now separates settled PnL from replay evidence. If there are no
+reconciliation rows, the ledger says `No settled PnL` instead of showing a
+misleading `$0.00` performance number. Spread replay, proxy-basket replay, and
+local mock tickets are labelled separately.
+
+The live spread mark now labels the electricity input. EIA remains the monthly
+ERCOT/TX anchor, but the worker can apply a public power/fuel proxy move from
+`NG=F`, `NRG`, `CEG`, and `BZ=F` so the spread is not flat between EIA releases.
+The UI shows `EIA anchor + public power/fuel proxy`, the base EIA value, and the
+proxy move; if quotes fail, it falls back to `EIA monthly retail anchor`.
+
+For historical replay, `npm run spread:proxy-backtest` builds
+`logs/spread_proxy_history.tsv`: a public electricity proxy index anchored to
+the current EIA/power mark and a public compute-infra proxy index anchored to
+the current AWS GPU mark. The API can then use that replay when recorded worker
+marks are too flat, while still labelling it as proxy-history evidence. The
+spread-family replay now tests both mean-reversion and trend-following rules
+because public proxy spreads can trend instead of snapping back over the demo
+horizon.
+
+The API also exposes a venue evidence matrix for Polymarket, Kalshi, IBKR
+ForecastTrader/ForecastEx, Yahoo/IBKR/Alpaca public quotes, BTC/ETH, and
+Opoint/Nebius oracle receipts. Every row is explicitly evidence or watchlist
+state; the matrix reports zero Arc-ready surfaces until the judge returns
+`EXECUTE`.
+
+`snapshot.oracle` now exposes the Opoint/Nebius receipt ledger directly, and
+the synthetic proposal includes an `oracle_judge_evidence` hash. This is
+LLM/news judge context only: it can support or criticize a leg, but it cannot
+replace the premium scorer, `judge.classify()`, or the no-chain-unless-EXECUTE
+rule.
 
 Arc is the settlement, escrow, identity, reputation, and audit rail. Arc is not
 the alpha source, crypto venue, prediction venue, scorer, or Polymarket
@@ -75,6 +134,7 @@ https://t.me/BotozenPowerBot
 cd arc-compute-sec
 npm run typecheck
 npm run package:backtest
+npm run proxy:backtest
 npm run test
 ```
 

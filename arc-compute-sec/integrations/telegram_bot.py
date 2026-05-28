@@ -20,6 +20,7 @@ DEFAULT_IBKR_REAUTH_REMINDER_HOURS = 4.0
 CHANNEL_ABOUT_KEY = "channel-about:v2"
 CHANNEL_FEEDBACK_UPDATE_KEY = "channel-feedback-update:v1"
 CHANNEL_MARKET_DATA_UPDATE_KEY = "channel-market-data-update:v1"
+CHANNEL_INSTRUMENT_MENU_UPDATE_KEY = "channel-instrument-menu-update:v1"
 
 
 def admin_ids() -> set[str]:
@@ -158,6 +159,87 @@ def _quote_source_list(sources: Any, *, limit: int = 3) -> list[str]:
     return out
 
 
+def _spread_replay_line(snap: dict[str, Any]) -> str:
+    replay = snap.get("spread_families") if isinstance(snap.get("spread_families"), dict) else {}
+    primary = replay.get("primary_family") if isinstance(replay.get("primary_family"), dict) else {}
+    if not primary:
+        return ""
+    status = primary.get("status") or "UNKNOWN"
+    label = primary.get("label") or primary.get("family_id") or "spread family"
+    raw = int(float(primary.get("raw_observations") or primary.get("observations") or 0))
+    obs = int(float(primary.get("observations") or 0))
+    collapsed = int(float(primary.get("collapsed_repeated_marks") or 0))
+    return f"spread replay: {status} | {label} | {obs}/{raw} mark changes, {collapsed} repeated polls collapsed"
+
+
+def _proxy_replay_line(snap: dict[str, Any]) -> str:
+    replay = snap.get("proxy_baskets") if isinstance(snap.get("proxy_baskets"), dict) else {}
+    primary = replay.get("active_basket") if isinstance(replay.get("active_basket"), dict) else {}
+    if not primary:
+        primary = replay.get("primary_basket") if isinstance(replay.get("primary_basket"), dict) else {}
+    if not primary:
+        return ""
+    label = primary.get("label") or primary.get("basket_id") or "proxy basket"
+    direction = primary.get("direction") or replay.get("active_direction") or ""
+    status = primary.get("status") or "UNKNOWN"
+    recommendation = primary.get("recommendation") or "MONITOR_ONLY"
+    latest_signal = primary.get("latest_signal") or "MONITOR"
+    trailing = primary.get("trailing_returns") if isinstance(primary.get("trailing_returns"), dict) else {}
+    five_day = (trailing.get("5d") or {}).get("return_pct")
+    one_month = (trailing.get("1m") or {}).get("return_pct")
+    ret = float(primary.get("total_return_pct") or 0)
+    wr = float(primary.get("win_rate") or 0)
+    days = int(float(primary.get("observations") or 0))
+    recent = []
+    if five_day is not None:
+        recent.append(f"5d {float(five_day):+.2f}%")
+    if one_month is not None:
+        recent.append(f"1m {float(one_month):+.2f}%")
+    recent_text = ", ".join(recent) if recent else f"{ret:+.2f}% over {days} days"
+    direction_text = f" | {direction}" if direction else ""
+    return f"proxy replay: {latest_signal}/{status}/{recommendation} | {label}{direction_text} | {recent_text}, WR {wr:.0f}%"
+
+
+def _pnl_line(snap: dict[str, Any]) -> str:
+    pnl = snap.get("pnl") if isinstance(snap.get("pnl"), dict) else {}
+    if not pnl:
+        return ""
+    label = pnl.get("status_label") or "PnL unavailable"
+    trades = pnl.get("display_trades") or "0 settled"
+    total = pnl.get("display_total") or label
+    return f"settled PnL: {total} | trades {trades} | replay/local tickets are separate"
+
+
+def _venue_evidence_line(snap: dict[str, Any]) -> str:
+    matrix = snap.get("venue_evidence") if isinstance(snap.get("venue_evidence"), dict) else {}
+    rows = [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    compact = []
+    for row in rows[:5]:
+        surface = row.get("surface") or "surface"
+        status = str(row.get("status") or "UNKNOWN").replace("_", " ")
+        priced = int(float(row.get("priced_count") or 0))
+        proxy = int(float(row.get("external_proxy_count") or 0))
+        suffix = f"{priced} priced"
+        if proxy:
+            suffix += f", {proxy} proxy"
+        compact.append(f"{surface}:{status} ({suffix})")
+    return "venue evidence: " + "; ".join(compact) + "; Arc-ready 0 before judge EXECUTE"
+
+
+def _oracle_line(snap: dict[str, Any]) -> str:
+    oracle = snap.get("oracle") if isinstance(snap.get("oracle"), dict) else {}
+    if not oracle:
+        return ""
+    status = str(oracle.get("status") or "NO_RECEIPTS")
+    row_count = int(float(oracle.get("row_count") or 0))
+    verdict_counts = oracle.get("verdict_counts") if isinstance(oracle.get("verdict_counts"), dict) else {}
+    verdict_text = ", ".join(f"{key}:{value}" for key, value in sorted(verdict_counts.items())) or "none"
+    reason = oracle.get("latest_reason_code") or "none"
+    return f"oracle evidence: {status} | receipts {row_count} | verdicts {verdict_text} | latest {reason} | evidence only"
+
+
 def format_status(snap: dict[str, Any]) -> str:
     runtime = snap.get("runtime") or {}
     mode = snap.get("mode") or {}
@@ -184,6 +266,21 @@ def format_status(snap: dict[str, Any]) -> str:
         sources = construction.get("quote_sources") or []
         if sources:
             parts.append("quotes: " + ", ".join(_quote_source_list(sources)))
+    spread_line = _spread_replay_line(snap)
+    if spread_line:
+        parts.append(spread_line)
+    proxy_line = _proxy_replay_line(snap)
+    if proxy_line:
+        parts.append(proxy_line)
+    pnl_line = _pnl_line(snap)
+    if pnl_line:
+        parts.append(pnl_line)
+    venue_line = _venue_evidence_line(snap)
+    if venue_line:
+        parts.append(venue_line)
+    oracle_line = _oracle_line(snap)
+    if oracle_line:
+        parts.append(oracle_line)
     if runtime.get("last_success_at"):
         parts.append(f"last_success: {int(float(runtime['last_success_at']))}")
     if runtime.get("last_error"):
@@ -231,6 +328,21 @@ def format_latest(snap: dict[str, Any]) -> str:
                     f"{leg.get('side')} {leg.get('slug')} {float(leg.get('weight') or 0):+.1%}"
                     for leg in weighted[:4]
                 ))
+        spread_line = _spread_replay_line(snap)
+        if spread_line:
+            lines.append(spread_line)
+        proxy_line = _proxy_replay_line(snap)
+        if proxy_line:
+            lines.append(proxy_line)
+        pnl_line = _pnl_line(snap)
+        if pnl_line:
+            lines.append(pnl_line)
+        venue_line = _venue_evidence_line(snap)
+        if venue_line:
+            lines.append(venue_line)
+        oracle_line = _oracle_line(snap)
+        if oracle_line:
+            lines.append(oracle_line)
         if search_plan:
             lines.append("agent scouting: " + ", ".join(
                 f"{item.get('surface')}:{item.get('target')}"
@@ -238,6 +350,23 @@ def format_latest(snap: dict[str, Any]) -> str:
             ))
         if actions:
             lines.append(f"next: {actions[0]}")
+        instrument_menu = (((proposal.get("outputs") or {}).get("syndicated_instrument_menu")) or [])
+        if instrument_menu:
+            lines.append("syndicated structures:")
+            for item in instrument_menu[:4]:
+                trailing = item.get("trailing_returns") if isinstance(item.get("trailing_returns"), dict) else {}
+                ret_5d = (trailing.get("5d") or {}).get("return_pct")
+                ret_1m = (trailing.get("1m") or {}).get("return_pct")
+                active = "ACTIVE " if item.get("direction_aligned") else ""
+                direction = item.get("basket_direction") or item.get("active_signal_direction") or ""
+                direction_part = f"{direction} | " if direction else ""
+                lines.append(
+                    "- "
+                    f"{active}{item.get('latest_signal', 'MONITOR')} | {item.get('title', item.get('instrument_type'))} | "
+                    f"{item.get('status', 'MONITOR_ONLY')} | "
+                    f"{direction_part}"
+                    f"5d {float(ret_5d or 0):+.2f}% / 1m {float(ret_1m or 0):+.2f}%"
+                )
     inventory = [row for row in (snap.get("direct_inventory") or []) if isinstance(row, dict)]
     if inventory:
         lines.append("research watchlist:")
@@ -259,6 +388,9 @@ def format_about() -> str:
         "How to read the feed:",
         "- /latest and the Mini App show the mock contract, live-priced weights, Circle test USDC ask, and buy/monitor recommendation.",
         "- Buy Contract freezes a local testnet entry ticket; Monitor tracks live leg marks; Sell Mock explains the worst drag if PnL turns red.",
+        "- Spread replay collapses repeated worker polls before PnL; proxy replay uses public close history for the liquid expression.",
+        "- Settled PnL stays \"No settled PnL\" until reconciliation rows exist; replay and local tickets are labelled separately.",
+        "- Venue evidence matrix shows Polymarket, Kalshi, IBKR, public quotes, crypto, and Opoint/Nebius as feeds or evidence only.",
         "- IBKR ForecastTrader, Polymarket, and future venues are agent scouting inputs until priced and thesis-matched.",
         "- The channel posts mock-contract updates, product updates, and runtime errors.",
         "- Raw REJECT, DEFER, premium_gate_fail, and watchlist-only rows stay out of the channel.",
@@ -503,6 +635,7 @@ def channel_about_message() -> str:
         "This channel does not post repeated REJECT/DEFER rows, premium_gate_fail rows, raw judge tables, or watchlist-only slugs. Use /latest in the bot or the Mini App for research scouting details.",
         "",
         "The Mini App shows live-priced weights, Circle test USDC ask, local Buy Contract / Monitor Price / Sell Mock controls, and the leg that drags PnL red.",
+        "The spread replay collapses repeated worker polls before PnL, and the proxy replay separately checks public close-history PnL.",
         "",
         "No Arc action can happen unless judge.classify() returns EXECUTE.",
     ])
@@ -540,6 +673,31 @@ def channel_market_data_update_message() -> str:
         "If IBKR blocks live market data because another session owns the data bridge, Power can still show Brent and gas marks from the local Brent strategy IBKR history file. Those rows are labelled IBKR paper CSV / stale, not live EC prices.",
         "",
         "This keeps the story honest: the contract is the judged compute/energy package; IBKR and Polymarket are scouting surfaces until priced, thesis-matched, and approved by the judge.",
+        "",
+        "Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def channel_instrument_menu_update_message() -> str:
+    return "\n".join([
+        "Product update: spread menu shipped",
+        "",
+        "Power by Botozen now tracks more than one compute/energy expression.",
+        "",
+        "New index universe:",
+        "- electricity: EIA regional power, IBKR ForecastTrader power indexes, Henry Hub, Brent/WTI, merchant power proxies",
+        "- compute: AWS GPU spot, H100 rental marks, cloud GPU providers, AI event contracts, NVDA/VRT/ETN, BTC/ETH miner-margin proxies",
+        "- spread archetypes: compute spark, power-cost share, regional compute-power basis, compute calendar, fuel-stack compute",
+        "",
+        "New syndicated structures:",
+        "- compute scarcity receivable hedge note",
+        "- power-stress compute receivable hedge",
+        "- grid load-growth basket note",
+        "- miner-margin power pair",
+        "- fuel-stack compute input hedge",
+        "",
+        "Each structure now carries a replay signal: BUY, HOLD, SELL, or MONITOR, with 5d and 1m public proxy PnL. Still no Arc action before judge.classify() returns EXECUTE, and these are not asset-backed until collateral is attached.",
         "",
         "Mini App: https://power.botozen.com/tg",
         "Dashboard: https://power.botozen.com/dashboard",
@@ -638,6 +796,18 @@ def notify_channel_market_data_update_once(*, logs: Path | str | None = None) ->
     return 1
 
 
+def notify_channel_instrument_menu_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_INSTRUMENT_MENU_UPDATE_KEY in sent:
+        return 0
+    send_message(channel_id, channel_instrument_menu_update_message())
+    _mark_sent(CHANNEL_INSTRUMENT_MENU_UPDATE_KEY, logs=logs)
+    return 1
+
+
 def notify_channel_once(*, logs: Path | str | None = None) -> int:
     channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
     if not channel_id:
@@ -691,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--post-channel-about", action="store_true", help="Post the deduped channel explainer")
     parser.add_argument("--post-feedback-update", action="store_true", help="Post the deduped feedback/new-features channel update")
     parser.add_argument("--post-market-data-update", action="store_true", help="Post the deduped IBKR/proxy market-data update")
+    parser.add_argument("--post-instrument-menu-update", action="store_true", help="Post the deduped index/spread/instrument menu update")
     args = parser.parse_args(argv)
     if args.set_webhook:
         print(json.dumps(set_webhook(), sort_keys=True))
@@ -709,6 +880,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.post_market_data_update:
         print(notify_channel_market_data_update_once())
+        return 0
+    if args.post_instrument_menu_update:
+        print(notify_channel_instrument_menu_update_once())
         return 0
     if args.notify_once:
         print(notify_channel_once() + notify_ibkr_reauth_reminder_once())

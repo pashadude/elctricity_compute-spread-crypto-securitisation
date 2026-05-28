@@ -140,6 +140,16 @@ def test_latest_includes_direct_inventory_watchlist():
                 },
                 "discovery_gaps": [{"slug": "retxc-ec", "status_label": "Needs live venue price"}],
                 "agent_search_plan": [{"surface": "opoint_nebius", "target": "news-grounded spread drivers"}],
+                "syndicated_instrument_menu": [{
+                    "title": "Miner-margin power pair",
+                    "instrument_type": "miner_margin_power_pair",
+                    "latest_signal": "BUY",
+                    "status": "PAPER_BUY_ONLY",
+                    "trailing_returns": {
+                        "5d": {"return_pct": 2.1},
+                        "1m": {"return_pct": 6.1},
+                    },
+                }],
             },
         },
         "direct_inventory": [{
@@ -150,6 +160,42 @@ def test_latest_includes_direct_inventory_watchlist():
             "pricing_status": "unpriced_snapshot",
             "pricing_status_label": "Needs live venue price",
         }],
+        "spread_families": {
+            "primary_family": {
+                "label": "Compute minus power cost",
+                "status": "INSUFFICIENT_MARK_CHANGES",
+                "raw_observations": 720,
+                "observations": 11,
+                "collapsed_repeated_marks": 709,
+            },
+        },
+        "proxy_baskets": {
+            "primary_basket": {
+                "label": "Miner-margin power pair",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "trailing_returns": {
+                    "5d": {"return_pct": 2.1, "observations": 5},
+                    "1m": {"return_pct": 1.5, "observations": 21},
+                },
+                "total_return_pct": 1.5,
+                "win_rate": 46.67,
+                "observations": 31,
+            },
+        },
+        "pnl": {
+            "status_label": "No settled PnL",
+            "display_total": "No settled PnL",
+            "display_trades": "0 settled",
+        },
+        "venue_evidence": {
+            "rows": [
+                {"surface": "polymarket", "status": "LIVE_PRICED", "priced_count": 1, "external_proxy_count": 0},
+                {"surface": "ibkr_prediction", "status": "PROXY_PRICED", "priced_count": 0, "external_proxy_count": 1},
+                {"surface": "opoint_nebius", "status": "EVIDENCE_LOGGED", "priced_count": 0, "external_proxy_count": 0},
+            ],
+        },
     })
 
     assert "Latest mock contract" in text
@@ -161,6 +207,15 @@ def test_latest_includes_direct_inventory_watchlist():
     assert "entry score: 83/100 (threshold 70)" in text
     assert "judge: EXECUTE/all_gates_passed" in text
     assert "weights: short NVDA -20.0%, long CEG +20.0%" in text
+    assert "spread replay: INSUFFICIENT_MARK_CHANGES" in text
+    assert "11/720 mark changes" in text
+    assert "proxy replay: BUY/PROMOTABLE/BUY_OR_HOLD" in text
+    assert "5d +2.10%" in text
+    assert "settled PnL: No settled PnL" in text
+    assert "venue evidence: polymarket:LIVE PRICED (1 priced)" in text
+    assert "ibkr_prediction:PROXY PRICED (0 priced, 1 proxy)" in text
+    assert "syndicated structures:" in text
+    assert "BUY | Miner-margin power pair | PAPER_BUY_ONLY" in text
     assert "pricing gaps:" not in text
     assert "agent scouting: opoint_nebius:news-grounded spread drivers" in text
     assert "next: Find one direct regional energy/grid-stress leg." in text
@@ -169,11 +224,79 @@ def test_latest_includes_direct_inventory_watchlist():
     assert "unpriced_snapshot" not in text
 
 
+def test_status_uses_active_direction_matched_proxy_basket():
+    text = telegram_bot.format_status({
+        "runtime": {"state": "idle"},
+        "mode": {"live_chain_enabled": False},
+        "proxy_baskets": {
+            "active_direction": "compute_expensive",
+            "primary_basket": {
+                "label": "Miner-margin power pair",
+                "direction": "electricity_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "trailing_returns": {"5d": {"return_pct": 2.1}},
+                "win_rate": 47.0,
+            },
+            "active_basket": {
+                "label": "Compute scarcity AI-infra basket",
+                "direction": "compute_expensive",
+                "status": "OBSERVE",
+                "recommendation": "MONITOR_ONLY",
+                "latest_signal": "SELL",
+                "trailing_returns": {"5d": {"return_pct": -0.4}, "1m": {"return_pct": -1.5}},
+                "win_rate": 43.0,
+            },
+        },
+    })
+
+    assert "proxy replay: SELL/OBSERVE/MONITOR_ONLY | Compute scarcity AI-infra basket | compute_expensive" in text
+    assert "5d -0.40%" in text
+    assert "Miner-margin power pair" not in text
+
+
+def test_latest_marks_active_syndicated_structure():
+    text = telegram_bot.format_latest({
+        "signal": {"latest": {"direction": "compute_expensive", "z": 2.4}},
+        "synthetic_instrument": {
+            "instrument_name": "PJM compute receivable hedge note",
+            "outputs": {
+                "syndicated_instrument_menu": [
+                    {
+                        "title": "Compute scarcity receivable hedge note",
+                        "instrument_type": "compute_receivable_hedge_note",
+                        "latest_signal": "SELL",
+                        "status": "AVOID_OR_SELL",
+                        "basket_direction": "compute_expensive",
+                        "direction_aligned": True,
+                        "trailing_returns": {"5d": {"return_pct": -0.4}, "1m": {"return_pct": -1.5}},
+                    },
+                    {
+                        "title": "Miner-margin power pair",
+                        "instrument_type": "miner_margin_power_pair",
+                        "latest_signal": "BUY",
+                        "status": "PAPER_BUY_ONLY",
+                        "basket_direction": "electricity_expensive",
+                        "direction_aligned": False,
+                        "trailing_returns": {"5d": {"return_pct": 2.1}, "1m": {"return_pct": 6.1}},
+                    },
+                ],
+            },
+        },
+    })
+
+    assert "- ACTIVE SELL | Compute scarcity receivable hedge note | AVOID_OR_SELL | compute_expensive" in text
+    assert "- BUY | Miner-margin power pair | PAPER_BUY_ONLY | electricity_expensive" in text
+
+
 def test_about_explains_watchlist_and_channel_policy(tmp_path):
     text = telegram_bot.handle_command("/start", 7, logs=tmp_path)
 
     assert "/latest and the Mini App show the mock contract" in text
     assert "Buy Contract freezes a local testnet entry ticket" in text
+    assert "Settled PnL stays" in text
+    assert "Venue evidence matrix shows" in text
     assert "The channel posts mock-contract updates" in text
     assert "premium_gate_fail" in text
     assert "judge.classify() returns EXECUTE" in text
@@ -314,6 +437,20 @@ def test_channel_market_data_update_dedupes(tmp_path, monkeypatch):
     assert "IBKR paper-terminal marks shipped" in sent[0][1]
     assert "IBKR paper CSV / stale" in sent[0][1]
     assert "not live EC prices" in sent[0][1]
+
+
+def test_channel_instrument_menu_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_instrument_menu_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_instrument_menu_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "spread menu shipped" in sent[0][1]
+    assert "compute calendar" in sent[0][1]
+    assert "miner-margin power pair" in sent[0][1]
+    assert "BUY, HOLD, SELL, or MONITOR" in sent[0][1]
 
 
 def test_ibkr_reauth_reminder_goes_to_private_admin_and_dedupes(tmp_path, monkeypatch):

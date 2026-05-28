@@ -79,6 +79,59 @@ LEG_EXPLANATIONS = {
     },
 }
 
+SYNDICATED_INSTRUMENT_TYPES = [
+    {
+        "instrument_type": "compute_receivable_hedge_note",
+        "basket_id": "compute_scarcity_ai_infra",
+        "signal_direction": DIRECTION_COMPUTE_EXPENSIVE,
+        "title": "Compute scarcity receivable hedge note",
+        "spread_archetype": "compute_spark_spread",
+        "payoff": "Long AI compute-demand and datacenter infrastructure proxies against power-cost proxies.",
+        "collateral_needed": ["GPU-hour invoice", "delivery meter", "buyer/seller terms"],
+        "direct_leg_target": "long AI compute-demand vs short energy/grid stress",
+    },
+    {
+        "instrument_type": "power_stress_receivable_hedge",
+        "basket_id": "power_stress_receivable_hedge",
+        "signal_direction": DIRECTION_ELEC_EXPENSIVE,
+        "title": "Power-stress compute receivable hedge",
+        "spread_archetype": "power_cost_share",
+        "payoff": "Long power beneficiaries and short compute/miner-margin beta when electricity is expensive.",
+        "collateral_needed": ["compute receivable", "PPA or power hedge", "delivery meter"],
+        "direct_leg_target": "long energy/grid stress vs short AI compute-demand",
+    },
+    {
+        "instrument_type": "grid_load_growth_note",
+        "basket_id": "grid_equipment_load_growth",
+        "signal_direction": "compute_load_growth",
+        "title": "Grid load-growth basket note",
+        "spread_archetype": "regional_compute_power_basis",
+        "payoff": "Long electrical equipment, cooling, and baseload beneficiaries against generic GPU beta.",
+        "collateral_needed": ["datacenter load contract", "interconnect milestone evidence", "quote snapshot"],
+        "direct_leg_target": "data-center load growth vs generic AI capex beta",
+    },
+    {
+        "instrument_type": "miner_margin_power_pair",
+        "basket_id": "miner_margin_power_pair",
+        "signal_direction": DIRECTION_ELEC_EXPENSIVE,
+        "title": "Miner-margin power pair",
+        "spread_archetype": "fuel_stack_compute_spread",
+        "payoff": "Short crypto miner-margin beta against power beneficiaries when electricity pressure rises.",
+        "collateral_needed": ["mining power contract", "hashrate or energy-use report", "BTC/ETH quote snapshot"],
+        "direct_leg_target": "power-cost stress vs crypto-linked miner revenue",
+    },
+    {
+        "instrument_type": "fuel_stack_compute_hedge",
+        "basket_id": "fuel_stack_power_input",
+        "signal_direction": DIRECTION_ELEC_EXPENSIVE,
+        "title": "Fuel-stack compute input hedge",
+        "spread_archetype": "fuel_stack_compute_spread",
+        "payoff": "Long gas/oil input-cost proxies and power beneficiaries, short generic compute beta.",
+        "collateral_needed": ["regional power exposure", "fuel-index reference", "compute sale tenor"],
+        "direct_leg_target": "fuel input tightness vs AI compute-demand beta",
+    },
+]
+
 
 def _hash_payload(payload: dict[str, Any]) -> str:
     body = json.dumps(payload, sort_keys=True, default=str).encode()
@@ -116,6 +169,13 @@ def _first_nonempty(*values: Any, default: str = "") -> str:
         if text:
             return text
     return default
+
+
+def _gpu_kwh(spread_latest: dict[str, Any], signal_latest: dict[str, Any]) -> float:
+    return _num(
+        spread_latest.get("kwh_per_gpu_hr", spread_latest.get("kWh_per_gpu_hr")),
+        _num(signal_latest.get("kwh_per_gpu_hr", signal_latest.get("kWh_per_gpu_hr")), DEFAULT_GPU_KWH),
+    )
 
 
 def _region_profile(region: str) -> dict[str, Any]:
@@ -529,6 +589,59 @@ def _weighted_hedge_legs(hedge_basket: list[dict[str, Any]], hedge_notional: flo
     return rows
 
 
+def _proxy_basket_passes_entry_gate(basket: dict[str, Any], fallback: Any = None) -> bool | None:
+    if not basket:
+        return bool(fallback) if fallback is not None else None
+    if "is_promotable" in basket:
+        return bool(basket.get("is_promotable"))
+    status = _text(basket.get("status"))
+    if status:
+        return status == "PROMOTABLE"
+    return bool(fallback) if fallback is not None else None
+
+
+def _proxy_basket_for_direction(
+    proxy_basket_validation: dict[str, Any] | None,
+    direction: str,
+) -> tuple[dict[str, Any], bool | None]:
+    """Pick the proxy replay that matches the current spread direction.
+
+    The saved proxy replay has a global `primary_basket`, but the recommendation
+    gate must use the basket for the active signal. A compute-expensive signal
+    should not borrow an electricity-expensive miner-margin BUY replay.
+    """
+    validation = proxy_basket_validation if isinstance(proxy_basket_validation, dict) else {}
+    primary = validation.get("primary_basket") if isinstance(validation.get("primary_basket"), dict) else {}
+    baskets = [basket for basket in validation.get("baskets") or [] if isinstance(basket, dict)]
+    if primary and all(basket.get("basket_id") != primary.get("basket_id") for basket in baskets):
+        baskets.append(primary)
+
+    clean_direction = _text(direction)
+    if clean_direction and clean_direction != "no_signal":
+        for basket in baskets:
+            if _text(basket.get("direction")) == clean_direction:
+                return basket, _proxy_basket_passes_entry_gate(basket)
+        # Backwards-compatible fixture path: older tests may pass a primary
+        # basket without a direction field.
+        if primary and not _text(primary.get("direction")):
+            return primary, _proxy_basket_passes_entry_gate(primary, validation.get("entry_gate_pass"))
+        if baskets or primary:
+            return {
+                "basket_id": "no_direction_matched_proxy_basket",
+                "direction": clean_direction,
+                "status": "DIRECTION_MISMATCH",
+                "status_reason": f"No proxy basket replay matched the active {clean_direction} signal.",
+                "recommendation": "MONITOR_ONLY",
+                "latest_signal": "MONITOR",
+                "signal_reason": "Proxy replay is available, but not for the active spread direction.",
+                "trailing_returns": {},
+                "total_return_pct": 0,
+                "win_rate": 0,
+                "max_drawdown_pct": 0,
+            }, False
+    return primary, _proxy_basket_passes_entry_gate(primary, validation.get("entry_gate_pass"))
+
+
 def _mock_recommendation(
     *,
     direction: str,
@@ -536,6 +649,8 @@ def _mock_recommendation(
     signal_latest: dict[str, Any],
     direct_legs: list[dict[str, Any]],
     weighted_legs: list[dict[str, Any]],
+    spread_family_validation: dict[str, Any] | None,
+    proxy_basket_validation: dict[str, Any] | None,
     receivable: float,
     power_cost: float,
     margin: float,
@@ -546,6 +661,9 @@ def _mock_recommendation(
     abs_z = abs(z_score)
     margin_ratio = margin / receivable if receivable > 0 else 0.0
     live_prices = [row for row in weighted_legs if _num(row.get("last_price")) > 0]
+    primary_family = (spread_family_validation or {}).get("primary_family") or {}
+    entry_gate_pass = (spread_family_validation or {}).get("entry_gate_pass")
+    primary_proxy_basket, proxy_entry_gate_pass = _proxy_basket_for_direction(proxy_basket_validation, direction)
     z_component = min(abs_z, 4.0) / 4.0 * 60.0
     margin_component = _clamp(margin_ratio, -0.25, 0.50) * 50.0
     quote_component = 15.0 if live_prices else 0.0
@@ -558,7 +676,7 @@ def _mock_recommendation(
             "electricity_per_mwh": _round_units(spread_latest.get("electricity_per_mwh")),
             "compute_per_gpu_hr": _round_units(spread_latest.get("compute_per_gpu_hr")),
             "S_t": _round_units(spread_latest.get("S_t")),
-            "kWh_per_gpu_hr": _round_units(spread_latest.get("kWh_per_gpu_hr")),
+            "kWh_per_gpu_hr": _round_units(_gpu_kwh(spread_latest, signal_latest)),
         },
         "signal": {
             "z": _round_units(z_score),
@@ -581,6 +699,28 @@ def _mock_recommendation(
             for row in weighted_legs
         ],
         "direct_leg_slugs": [leg.get("slug") for leg in direct_legs],
+        "spread_family_validation": {
+            "entry_gate_pass": entry_gate_pass,
+            "primary_family": primary_family.get("family_id", ""),
+            "primary_status": primary_family.get("status", ""),
+            "primary_status_reason": primary_family.get("status_reason", ""),
+            "primary_tested_trades": primary_family.get("tested_trades", 0),
+            "primary_win_rate": primary_family.get("win_rate", 0),
+            "primary_total_pnl_per_unit": primary_family.get("total_pnl_per_unit", 0),
+        } if spread_family_validation else {},
+        "proxy_basket_validation": {
+            "entry_gate_pass": proxy_entry_gate_pass,
+            "primary_basket": primary_proxy_basket.get("basket_id", ""),
+            "primary_status": primary_proxy_basket.get("status", ""),
+            "primary_status_reason": primary_proxy_basket.get("status_reason", ""),
+            "primary_recommendation": primary_proxy_basket.get("recommendation", ""),
+            "primary_latest_signal": primary_proxy_basket.get("latest_signal", ""),
+            "primary_signal_reason": primary_proxy_basket.get("signal_reason", ""),
+            "primary_trailing_returns": primary_proxy_basket.get("trailing_returns", {}),
+            "primary_total_return_pct": primary_proxy_basket.get("total_return_pct", 0),
+            "primary_win_rate": primary_proxy_basket.get("win_rate", 0),
+            "primary_max_drawdown_pct": primary_proxy_basket.get("max_drawdown_pct", 0),
+        } if proxy_basket_validation else {},
     }
     basis_hash = _hash_payload(basis)[:16]
     state = judge.default_state()
@@ -664,6 +804,67 @@ def _mock_recommendation(
             "decision_basis": basis,
         })
 
+    if entry_gate_pass is False:
+        status = primary_family.get("status") or "not_promotable"
+        status_reason = primary_family.get("status_reason") or "Spread-family replay has not cleared the promotion gate."
+        return with_judge({
+            "recommended_action": "MONITOR_ONLY",
+            "recommendation_label": "Monitor: replay gate",
+            "recommendation_reason": (
+                f"The latest judge pass is EXECUTE, but the spread-family replay is {status}. "
+                f"{status_reason}"
+            ),
+            "recommendation_summary": "Monitor only; replay must show enough history, variation, and positive PnL before a user-facing buy.",
+            "entry_signal_score": _round_units(edge_score),
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
+    if proxy_entry_gate_pass is False and primary_proxy_basket:
+        status = primary_proxy_basket.get("status") or "not_promotable"
+        status_reason = primary_proxy_basket.get("status_reason") or "Proxy basket replay has not cleared the promotion gate."
+        recommendation = primary_proxy_basket.get("recommendation") or "MONITOR_ONLY"
+        label = "Avoid: proxy replay" if recommendation == "SELL_OR_AVOID" else "Monitor: proxy replay"
+        return with_judge({
+            "recommended_action": "MONITOR_ONLY",
+            "recommendation_label": label,
+            "recommendation_reason": (
+                f"The spread judge passed, but the liquid proxy basket replay is {status}. "
+                f"{status_reason}"
+            ),
+            "recommendation_summary": "Monitor only; the public proxy expression must show positive replay before a user-facing buy.",
+            "entry_signal_score": _round_units(edge_score),
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
+    if primary_proxy_basket:
+        proxy_signal = primary_proxy_basket.get("latest_signal") or ""
+        if proxy_signal in {"SELL", "HOLD"}:
+            status_reason = (
+                primary_proxy_basket.get("signal_reason")
+                or primary_proxy_basket.get("status_reason")
+                or "Proxy basket profitability is not confirming a fresh buy."
+            )
+            label = "Sell/avoid: proxy PnL" if proxy_signal == "SELL" else "Hold: proxy PnL"
+            summary = (
+                "Avoid a fresh buy; the liquid proxy expression is in sell mode."
+                if proxy_signal == "SELL"
+                else "Hold/monitor; the liquid proxy expression is promotable but not a fresh buy."
+            )
+            return with_judge({
+                "recommended_action": "MONITOR_ONLY",
+                "recommendation_label": label,
+                "recommendation_reason": status_reason,
+                "recommendation_summary": summary,
+                "entry_signal_score": _round_units(edge_score),
+                "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
+                "decision_basis_hash": basis_hash,
+                "decision_basis": basis,
+            })
+
     if edge_score >= ENTRY_SIGNAL_BUY_THRESHOLD:
         return with_judge({
             "recommended_action": "BUY_CONTRACT",
@@ -699,11 +900,13 @@ def _mock_hedge_construction(
     signal_latest: dict[str, Any],
     hedge_basket: list[dict[str, Any]],
     direct_legs: list[dict[str, Any]],
+    spread_family_validation: dict[str, Any] | None = None,
+    proxy_basket_validation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     compute_per_gpu_hr = _num(spread_latest.get("compute_per_gpu_hr"), _num(signal_latest.get("compute_per_gpu_hr")))
     electricity_per_mwh = _num(spread_latest.get("electricity_per_mwh"), _num(signal_latest.get("electricity_per_mwh")))
     gpu_hours = max(1.0, _num(spread_latest.get("demo_gpu_hours"), DEFAULT_DEMO_GPU_HOURS))
-    gpu_kwh = max(0.01, _num(spread_latest.get("kWh_per_gpu_hr"), _num(signal_latest.get("kWh_per_gpu_hr"), DEFAULT_GPU_KWH)))
+    gpu_kwh = max(0.01, _gpu_kwh(spread_latest, signal_latest))
     receivable = compute_per_gpu_hr * gpu_hours
     power_cost = electricity_per_mwh / 1000.0 * gpu_kwh * gpu_hours
     margin = receivable - power_cost
@@ -723,6 +926,8 @@ def _mock_hedge_construction(
         signal_latest=signal_latest,
         direct_legs=direct_legs,
         weighted_legs=weighted_legs,
+        spread_family_validation=spread_family_validation,
+        proxy_basket_validation=proxy_basket_validation,
         receivable=receivable,
         power_cost=power_cost,
         margin=margin,
@@ -749,6 +954,8 @@ def _mock_hedge_construction(
         "score_scale": recommendation["score_scale"],
         "decision_basis_hash": recommendation["decision_basis_hash"],
         "decision_basis": recommendation["decision_basis"],
+        "spread_family_validation": (recommendation["decision_basis"] or {}).get("spread_family_validation", {}),
+        "proxy_basket_validation": (recommendation["decision_basis"] or {}).get("proxy_basket_validation", {}),
         "judge_verdict": recommendation["judge_verdict"],
         "judge_candidate_hash": recommendation["judge_candidate_hash"],
         "judge_scope": recommendation["judge_scope"],
@@ -810,6 +1017,155 @@ def _mock_hedge_construction(
     }
 
 
+def _basket_by_id(proxy_basket_validation: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for basket in (proxy_basket_validation or {}).get("baskets") or []:
+        if isinstance(basket, dict) and basket.get("basket_id"):
+            out[str(basket["basket_id"])] = basket
+    primary = (proxy_basket_validation or {}).get("primary_basket")
+    if isinstance(primary, dict) and primary.get("basket_id"):
+        out.setdefault(str(primary["basket_id"]), primary)
+    return out
+
+
+def _instrument_signal_status(
+    *,
+    basket: dict[str, Any],
+    collateral_status: str,
+    has_direct_legs: bool,
+) -> tuple[str, str]:
+    latest_signal = _text(basket.get("latest_signal"), "MONITOR")
+    if collateral_status != "asset_backed":
+        if latest_signal == "BUY":
+            return "PAPER_BUY_ONLY", "Proxy replay says BUY, but the structure is not asset-backed until collateral is attached."
+        if latest_signal == "SELL":
+            return "AVOID_OR_SELL", "Proxy replay says SELL; avoid new exposure and close local mock tickets if already open."
+        return "MONITOR_ONLY", "Collateral is missing, so this remains a monitored synthetic package."
+    if not has_direct_legs:
+        return "NEEDS_DIRECT_LEGS", "Collateral exists, but direct event legs still need priced venue references."
+    if latest_signal == "BUY":
+        return "READY_FOR_JUDGE", "Collateral and direct legs exist; run scorer and judge before Arc wrap."
+    if latest_signal == "SELL":
+        return "AVOID_OR_SELL", "Do not wrap; proxy PnL says sell/avoid."
+    return "MONITOR_ONLY", "Hold in research until replay and judge both confirm."
+
+
+def _oracle_judge_evidence(oracle_evidence: dict[str, Any] | None) -> dict[str, Any]:
+    """Compact Opoint/Nebius receipt state for the term sheet.
+
+    The oracle is evidence only. The returned blob is safe to hash/reference in
+    the synthetic proposal, but it never changes the Arc gate by itself.
+    """
+    if not isinstance(oracle_evidence, dict) or not oracle_evidence:
+        payload = {
+            "status": "NO_RECEIPTS",
+            "role": "LLM/news evidence only; not an execution gate.",
+            "row_count": 0,
+            "latest_verdict": "",
+            "latest_reason_code": "",
+            "verdict_counts": {},
+            "reason_counts": {},
+            "raw_articles": 0,
+            "filtered_articles": 0,
+            "can_drive_arc": False,
+            "judge_required": True,
+            "gate_note": "No Opoint/Nebius receipt is attached; scorer and judge gates are unchanged.",
+        }
+    else:
+        verdict_counts = oracle_evidence.get("verdict_counts") if isinstance(oracle_evidence.get("verdict_counts"), dict) else {}
+        reason_counts = oracle_evidence.get("reason_counts") if isinstance(oracle_evidence.get("reason_counts"), dict) else {}
+        payload = {
+            "status": _text(oracle_evidence.get("status"), "NO_RECEIPTS"),
+            "role": _text(oracle_evidence.get("role"), "news-grounded evidence only"),
+            "row_count": int(_num(oracle_evidence.get("row_count"))),
+            "latest_title": _text(oracle_evidence.get("latest_title")),
+            "latest_slug": _text(oracle_evidence.get("latest_slug")),
+            "latest_verdict": _text(oracle_evidence.get("latest_pricing_status")),
+            "latest_model": _text(oracle_evidence.get("latest_model")),
+            "latest_reason_code": _text(oracle_evidence.get("latest_reason_code")),
+            "verdict_counts": verdict_counts,
+            "reason_counts": reason_counts,
+            "raw_articles": int(_num(oracle_evidence.get("raw_articles"))),
+            "filtered_articles": int(_num(oracle_evidence.get("filtered_articles"))),
+            "can_drive_arc": False,
+            "judge_required": True,
+            "gate_note": "LLM/news evidence can support or criticize a leg, but cannot replace premium scoring or judge.classify().",
+        }
+    payload["oracle_evidence_hash"] = _hash_payload(payload)[:16]
+    return payload
+
+
+def _syndicated_instrument_menu(
+    *,
+    region_profile: dict[str, Any],
+    signal_direction: str,
+    collateral_status: str,
+    direct_legs: list[dict[str, Any]],
+    hedge_basket: list[dict[str, Any]],
+    mock_construction: dict[str, Any],
+    proxy_basket_validation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    by_id = _basket_by_id(proxy_basket_validation)
+    priced_symbols = {str(leg.get("slug") or "").upper() for leg in hedge_basket}
+    base_ask = _num(mock_construction.get("circle_testnet_usdc_request"))
+    rows: list[dict[str, Any]] = []
+    clean_signal_direction = _text(signal_direction)
+    for template in SYNDICATED_INSTRUMENT_TYPES:
+        basket = by_id.get(template["basket_id"], {})
+        basket_direction = _first_nonempty(basket.get("direction"), template.get("signal_direction"))
+        direction_aligned = bool(clean_signal_direction and clean_signal_direction != "no_signal" and basket_direction == clean_signal_direction)
+        weights = basket.get("weights") if isinstance(basket.get("weights"), dict) else {}
+        required_symbols = list(weights) or list(basket.get("symbols_required") or [])
+        priced = [symbol for symbol in required_symbols if str(symbol).upper() in priced_symbols]
+        direct_ready = bool(direct_legs)
+        status, status_reason = _instrument_signal_status(
+            basket=basket,
+            collateral_status=collateral_status,
+            has_direct_legs=direct_ready,
+        )
+        trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else {}
+        rows.append({
+            **template,
+            "region": region_profile.get("region"),
+            "active_signal_direction": clean_signal_direction,
+            "basket_direction": basket_direction,
+            "direction_aligned": direction_aligned,
+            "asset_backed": collateral_status == "asset_backed",
+            "collateral_status": collateral_status,
+            "status": status,
+            "status_reason": status_reason,
+            "latest_signal": _text(basket.get("latest_signal"), "MONITOR"),
+            "signal_reason": _text(basket.get("signal_reason"), _text(basket.get("status_reason"), "Backtest not available.")),
+            "replay_status": _text(basket.get("status"), "NO_REPLAY"),
+            "recommendation": _text(basket.get("recommendation"), "MONITOR_ONLY"),
+            "total_return_pct": _round_units(basket.get("total_return_pct")),
+            "win_rate": _round_units(basket.get("win_rate")),
+            "max_drawdown_pct": _round_units(basket.get("max_drawdown_pct")),
+            "trailing_returns": trailing,
+            "required_symbols": required_symbols,
+            "priced_symbols": priced,
+            "missing_symbols": [symbol for symbol in required_symbols if symbol not in priced],
+            "direct_leg_count": len(direct_legs),
+            "direct_leg_target_ready": direct_ready,
+            "circle_testnet_ask_usdc": _round_money(base_ask if base_ask else 0),
+            "copying_spread": (
+                f"Copies the {template['spread_archetype']} through a priced public basket and "
+                f"direct-event target: {template['direct_leg_target']}."
+            ),
+            "arc_gate": "LOCKED_UNTIL_JUDGE_EXECUTE",
+        })
+    signal_rank = {"BUY": 0, "HOLD": 1, "MONITOR": 2, "SELL": 3}
+    status_rank = {"READY_FOR_JUDGE": 0, "PAPER_BUY_ONLY": 1, "MONITOR_ONLY": 2, "NEEDS_DIRECT_LEGS": 3, "AVOID_OR_SELL": 4}
+    rows.sort(key=lambda row: (
+        0 if row.get("direction_aligned") or clean_signal_direction in {"", "no_signal"} else 1,
+        signal_rank.get(row["latest_signal"], 9),
+        status_rank.get(row["status"], 9),
+        -_num(row.get("total_return_pct")),
+        row["instrument_type"],
+    ))
+    return rows
+
+
 def propose_synthetic_instrument(
     *,
     spread: dict[str, Any],
@@ -819,6 +1175,9 @@ def propose_synthetic_instrument(
     verdicts: list[dict[str, Any]],
     positions: list[dict[str, Any]] | None = None,
     public_hedges: list[dict[str, Any]] | None = None,
+    spread_family_validation: dict[str, Any] | None = None,
+    proxy_basket_validation: dict[str, Any] | None = None,
+    oracle_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the current agent-authored instrument proposal.
 
@@ -861,6 +1220,17 @@ def propose_synthetic_instrument(
         signal_latest=signal_latest,
         hedge_basket=hedge_basket,
         direct_legs=direct_legs,
+        spread_family_validation=spread_family_validation,
+        proxy_basket_validation=proxy_basket_validation,
+    )
+    syndicated_menu = _syndicated_instrument_menu(
+        region_profile=region_profile,
+        signal_direction=direction,
+        collateral_status=collateral_status,
+        direct_legs=direct_legs,
+        hedge_basket=hedge_basket,
+        mock_construction=mock_construction,
+        proxy_basket_validation=proxy_basket_validation,
     )
     build_instructions = _build_instructions(direct_legs, hedge_basket, discovery_gaps, collateral_status, mock_construction)
     schematic_steps = _schematic_steps(
@@ -870,6 +1240,7 @@ def propose_synthetic_instrument(
         discovery_gaps=discovery_gaps,
     )
     agent_search_plan = _agent_search_plan(region_profile, direction_profile, direct_legs, discovery_gaps)
+    oracle_judge_evidence = _oracle_judge_evidence(oracle_evidence)
 
     thesis = (
         f"Hedge a forward compute sale in {region_profile['short_name']} against AI compute demand. "
@@ -934,6 +1305,7 @@ def propose_synthetic_instrument(
             "z": _num(signal_latest.get("z")),
             "energy_stack": region_profile["energy_stack"],
             "oracle_role": "Opoint/Nebius evidence can propose or criticize links, but cannot replace scorer or judge gates.",
+            "oracle_evidence_hash": oracle_judge_evidence.get("oracle_evidence_hash"),
             "search_adjustment": {
                 "tested_candidates": len(direct_inventory) + len(public_hedges or []) + len(verdicts),
                 "rule": "FDR-style search penalty: every tested slug/model counts before promoting a robust product.",
@@ -944,6 +1316,10 @@ def propose_synthetic_instrument(
             "proxy_reference_legs": proxy_legs,
             "priced_hedge_basket": hedge_basket,
             "mock_hedge_construction": mock_construction,
+            "syndicated_instrument_menu": syndicated_menu,
+            "spread_family_validation": spread_family_validation or {},
+            "proxy_basket_validation": proxy_basket_validation or {},
+            "oracle_judge_evidence": oracle_judge_evidence,
             "discovery_gaps": discovery_gaps,
             "build_instructions": build_instructions,
             "agent_search_plan": agent_search_plan,

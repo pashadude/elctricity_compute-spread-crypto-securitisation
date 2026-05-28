@@ -69,6 +69,7 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert construction["score_scale"] == "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users"
     assert len(construction["decision_basis_hash"]) == 16
     assert construction["decision_basis"]["signal"]["z"] == -2.2
+    assert construction["decision_basis"]["spread"]["kWh_per_gpu_hr"] == 0.7
     assert construction["judge_verdict"]["label"] == "EXECUTE"
     assert construction["judge_verdict"]["reason_code"] == "all_gates_passed"
     assert len(construction["judge_candidate_hash"]) == 16
@@ -193,6 +194,232 @@ def test_mock_recommendation_blocks_buy_when_judge_defers(monkeypatch):
     assert construction["recommended_action"] == "MONITOR_ONLY"
     assert construction["recommendation_label"] == "Monitor: judge defer"
     assert construction["judge_verdict"] == {"label": "DEFER", "reason_code": "stale_data", "confidence": 0.9}
+
+
+def test_mock_recommendation_blocks_fresh_buy_when_proxy_signal_sells(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "1.5", "S_t": "1.47"}},
+        signal={"latest": {"signal_id": "sig-sell-proxy", "direction": "compute_expensive", "region": "PJM", "z": "4.0"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
+        spread_family_validation={
+            "entry_gate_pass": True,
+            "primary_family": {
+                "family_id": "compute_net_power_margin",
+                "status": "PROMOTABLE",
+                "tested_trades": 12,
+                "win_rate": 60.0,
+                "total_pnl_per_unit": 0.5,
+            },
+        },
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "compute_scarcity_ai_infra",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "SELL",
+                "signal_reason": "Recent 5d proxy PnL is below the sell threshold.",
+                "trailing_returns": {"5d": {"return_pct": -3.1, "observations": 5}},
+                "total_return_pct": 12.0,
+                "win_rate": 55.0,
+                "max_drawdown_pct": -8.0,
+            },
+        },
+    )
+
+    construction = proposal["outputs"]["mock_hedge_construction"]
+
+    assert construction["recommended_action"] == "MONITOR_ONLY"
+    assert construction["recommendation_label"] == "Sell/avoid: proxy PnL"
+    assert "5d proxy PnL" in construction["recommendation_reason"]
+    assert construction["decision_basis"]["proxy_basket_validation"]["primary_latest_signal"] == "SELL"
+
+
+def test_mock_recommendation_uses_proxy_basket_matching_signal_direction(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "1.5", "S_t": "1.47"}},
+        signal={"latest": {"signal_id": "sig-direction-proxy", "direction": "compute_expensive", "region": "PJM", "z": "4.0"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
+        spread_family_validation={
+            "entry_gate_pass": True,
+            "primary_family": {
+                "family_id": "compute_net_power_margin",
+                "status": "PROMOTABLE",
+                "tested_trades": 12,
+                "win_rate": 60.0,
+                "total_pnl_per_unit": 0.5,
+            },
+        },
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "miner_margin_power_pair",
+                "direction": "electricity_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Electricity basket is green, but it is not the active signal.",
+                "is_promotable": True,
+            },
+            "baskets": [
+                {
+                    "basket_id": "miner_margin_power_pair",
+                    "direction": "electricity_expensive",
+                    "status": "PROMOTABLE",
+                    "recommendation": "BUY_OR_HOLD",
+                    "latest_signal": "BUY",
+                    "signal_reason": "Electricity basket is green, but it is not the active signal.",
+                    "is_promotable": True,
+                },
+                {
+                    "basket_id": "compute_scarcity_ai_infra",
+                    "direction": "compute_expensive",
+                    "status": "PROMOTABLE",
+                    "recommendation": "BUY_OR_HOLD",
+                    "latest_signal": "SELL",
+                    "signal_reason": "Both 5d and 1m proxy PnL are negative.",
+                    "trailing_returns": {"5d": {"return_pct": -0.4}, "1m": {"return_pct": -1.4}},
+                    "total_return_pct": 2.2,
+                    "win_rate": 43.0,
+                    "max_drawdown_pct": -8.0,
+                    "is_promotable": True,
+                },
+            ],
+        },
+    )
+
+    construction = proposal["outputs"]["mock_hedge_construction"]
+
+    assert construction["recommended_action"] == "MONITOR_ONLY"
+    assert construction["recommendation_label"] == "Sell/avoid: proxy PnL"
+    assert construction["decision_basis"]["proxy_basket_validation"]["primary_basket"] == "compute_scarcity_ai_infra"
+    assert construction["decision_basis"]["proxy_basket_validation"]["primary_latest_signal"] == "SELL"
+    menu = proposal["outputs"]["syndicated_instrument_menu"]
+    assert menu[0]["instrument_type"] == "compute_receivable_hedge_note"
+    assert menu[0]["basket_direction"] == "compute_expensive"
+    assert menu[0]["direction_aligned"] is True
+    assert menu[0]["latest_signal"] == "SELL"
+    assert menu[1]["direction_aligned"] is False
+
+
+def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "ERCOT", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "1.5", "S_t": "1.47"}},
+        signal={"latest": {"signal_id": "sig-menu", "direction": "electricity_expensive", "region": "ERCOT", "z": "-3.2"}},
+        direct_inventory=[{
+            "surface": "polymarket",
+            "leg_title": "AI data center moratorium passed before 2027?",
+            "leg_slug": "ai-data-center-moratorium-passed-before-2027",
+            "direct_pair_role": "energy/grid-stress leg",
+            "pricing_status": "priced_watchlist",
+            "label": "WATCHLIST",
+        }],
+        packages=[],
+        verdicts=[],
+        public_hedges=[
+            {"surface": "public_market", "instrument": "NRG", "leg_slug": "NRG", "last_price": 80, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "CEG", "leg_slug": "CEG", "last_price": 250, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "BTC-USD", "leg_slug": "BTC-USD", "last_price": 100000, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "ETH-USD", "leg_slug": "ETH-USD", "last_price": 4000, "pricing_status": "priced_public_market", "label": "PRICED"},
+        ],
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "miner_margin_power_pair",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
+                "weights": {"BTC-USD": -0.45, "ETH-USD": -0.25, "NRG": 0.18, "CEG": 0.12},
+                "trailing_returns": {"5d": {"return_pct": 2.2}, "1m": {"return_pct": 6.1}},
+                "total_return_pct": 1.5,
+                "win_rate": 46.67,
+                "max_drawdown_pct": -6.88,
+            },
+            "baskets": [{
+                "basket_id": "miner_margin_power_pair",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
+                "weights": {"BTC-USD": -0.45, "ETH-USD": -0.25, "NRG": 0.18, "CEG": 0.12},
+                "trailing_returns": {"5d": {"return_pct": 2.2}, "1m": {"return_pct": 6.1}},
+                "total_return_pct": 1.5,
+                "win_rate": 46.67,
+                "max_drawdown_pct": -6.88,
+            }],
+        },
+        oracle_evidence={
+            "status": "EVIDENCE_LOGGED",
+            "role": "news-grounded evidence only",
+            "row_count": 2,
+            "latest_title": "AI data center moratorium passed before 2027?",
+            "latest_slug": "ai-data-center-moratorium-passed-before-2027",
+            "latest_pricing_status": "DEFER",
+            "latest_model": "deepseek-ai/DeepSeek-V3.2",
+            "latest_reason_code": "insufficient_evidence",
+            "verdict_counts": {"DEFER": 2},
+            "reason_counts": {"insufficient_evidence": 2},
+            "raw_articles": 40,
+            "filtered_articles": 8,
+        },
+    )
+
+    menu = proposal["outputs"]["syndicated_instrument_menu"]
+
+    assert len(menu) >= 5
+    assert menu[0]["instrument_type"] == "miner_margin_power_pair"
+    assert menu[0]["latest_signal"] == "BUY"
+    assert menu[0]["status"] == "PAPER_BUY_ONLY"
+    assert menu[0]["spread_archetype"] == "fuel_stack_compute_spread"
+    assert menu[0]["priced_symbols"] == ["BTC-USD", "ETH-USD", "NRG", "CEG"]
+    assert menu[0]["arc_gate"] == "LOCKED_UNTIL_JUDGE_EXECUTE"
+    assert "priced public basket" in menu[0]["copying_spread"]
+    oracle = proposal["outputs"]["oracle_judge_evidence"]
+    assert oracle["status"] == "EVIDENCE_LOGGED"
+    assert oracle["latest_verdict"] == "DEFER"
+    assert oracle["verdict_counts"] == {"DEFER": 2}
+    assert oracle["can_drive_arc"] is False
+    assert oracle["oracle_evidence_hash"]
+    assert proposal["inputs"]["oracle_evidence_hash"] == oracle["oracle_evidence_hash"]
 
 
 def test_proposal_prefers_execute_package_legs_over_watchlist():

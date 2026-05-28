@@ -9,6 +9,7 @@ This report is intentionally conservative:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from agent import energy_oracle_backtest
+from agent import spread_family_backtest
+from agent import proxy_basket_backtest
 
 DEFAULT_BACKWARD_CHECK = (
     Path(__file__).resolve().parent.parent
@@ -68,10 +71,19 @@ def load_backward_summary(path: Path = DEFAULT_BACKWARD_CHECK) -> HistoricalSumm
     )
 
 
+def _read_spread_history(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh, delimiter="\t"))
+
+
 def summarize(
     *,
     backward_check: Path = DEFAULT_BACKWARD_CHECK,
     master_fills_tsv: Path | None = None,
+    spread_history_tsv: Path | None = None,
+    proxy_basket_json: Path | None = None,
 ) -> dict[str, Any]:
     historical = load_backward_summary(backward_check)
     out: dict[str, Any] = {
@@ -106,6 +118,23 @@ def summarize(
             "status": "not_run",
             "reason": "master_fills_v4.tsv not present in this workspace",
         }
+    if spread_history_tsv is not None and spread_history_tsv.exists():
+        rows = _read_spread_history(spread_history_tsv)
+    else:
+        default_spread_history = Path(__file__).resolve().parent.parent / "logs" / "spread_history.tsv"
+        rows = _read_spread_history(default_spread_history)
+    out["spread_family_replay"] = spread_family_backtest.summarize(rows)
+    proxy_path = proxy_basket_json or (Path(__file__).resolve().parent.parent / "logs" / "proxy_basket_backtest.json")
+    if proxy_path.exists():
+        try:
+            proxy_summary = json.loads(proxy_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            proxy_summary = proxy_basket_backtest.summarize({})
+            proxy_summary["status_reason"] = "proxy_basket_backtest.json exists but is not valid JSON"
+    else:
+        proxy_summary = proxy_basket_backtest.summarize({})
+        proxy_summary["status_reason"] = "Run npm run proxy:backtest to attach Yahoo close-history proxy replay."
+    out["proxy_basket_replay"] = proxy_summary
     return out
 
 
@@ -162,6 +191,36 @@ def render_report(summary: dict[str, Any]) -> str:
             f"Gate-kept WR: {premium['gate_kept']['wr']:.3f}",
             f"Gate-kept PnL: {premium['gate_kept']['pnl']:.3f}",
         ])
+    replay = summary.get("spread_family_replay") or {}
+    primary = replay.get("primary_family") or {}
+    if primary:
+        lines.extend([
+            "",
+            "## Spread-Family Replay",
+            "",
+            f"Primary family: {primary.get('label')} ({primary.get('status')})",
+            f"Latest z: {float(primary.get('latest_z') or 0):.3f}",
+            f"Walk-forward trades: {int(primary.get('tested_trades') or 0)}",
+            f"WR: {float(primary.get('win_rate') or 0):.2f}%",
+            f"Total PnL/unit: {float(primary.get('total_pnl_per_unit') or 0):.6f}",
+            "",
+            primary.get("status_reason", ""),
+        ])
+    proxy = summary.get("proxy_basket_replay") or {}
+    proxy_primary = proxy.get("primary_basket") or {}
+    if proxy_primary:
+        lines.extend([
+            "",
+            "## Proxy Basket Replay",
+            "",
+            f"Primary basket: {proxy_primary.get('label')} ({proxy_primary.get('status')})",
+            f"Recommendation: {proxy_primary.get('recommendation')}",
+            f"Return: {float(proxy_primary.get('total_return_pct') or 0):.2f}%",
+            f"WR: {float(proxy_primary.get('win_rate') or 0):.2f}%",
+            f"Max DD: {float(proxy_primary.get('max_drawdown_pct') or 0):.2f}%",
+            "",
+            proxy_primary.get("status_reason", proxy.get("status_reason", "")),
+        ])
     return "\n".join(lines) + "\n"
 
 
@@ -169,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Backtest canonical spread-package evidence")
     parser.add_argument("--backward-check", type=Path, default=DEFAULT_BACKWARD_CHECK)
     parser.add_argument("--master-fills-tsv", type=Path)
+    parser.add_argument("--spread-history-tsv", type=Path)
+    parser.add_argument("--proxy-basket-json", type=Path)
     parser.add_argument("--report-out", type=Path)
     parser.add_argument("--metrics-out", type=Path)
     args = parser.parse_args(argv)
@@ -176,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = summarize(
         backward_check=args.backward_check,
         master_fills_tsv=args.master_fills_tsv,
+        spread_history_tsv=args.spread_history_tsv,
+        proxy_basket_json=args.proxy_basket_json,
     )
     report = render_report(summary)
     print(report, end="")

@@ -193,6 +193,11 @@ const requestBackendScan = async () => {
 const tgMockConstruction = (data) => data.syntheticInstrument?.outputs?.mock_hedge_construction || {};
 const tgSearchPlan = (data) => data.syntheticInstrument?.outputs?.agent_search_plan || [];
 const tgWeightedLegs = (data) => tgMockConstruction(data).weighted_legs || [];
+const tgSpreadFamilies = (data) => data.spreadFamilies?.families || [];
+const tgProxyBaskets = (data) => data.proxyBaskets?.baskets || [];
+const tgInstrumentMenu = (data) => data.syntheticInstrument?.outputs?.syndicated_instrument_menu || [];
+const tgVenueEvidence = (data) => data.venueEvidence?.rows || [];
+const tgOracleEvidence = (data) => data.oracleResults || {};
 const tgUsdc = (value, fallback = 'Pending') => {
   const n = Number(value || 0);
   return n > 0 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : fallback;
@@ -274,6 +279,14 @@ const TgHome = ({ setScreen, data, requestScan }) => {
         <div style={{ fontSize: '13px', color: TG_THEME.secondary }}>
           z = {Number(data.z || 0).toFixed(2)} · S_t = ${data.spread.st || '0.0000'}
         </div>
+        {data.spread.source && (
+          <div style={{ fontSize: '11px', color: TG_THEME.tertiary, marginTop: '4px', lineHeight: 1.35 }}>
+            elec: {data.spread.source === 'eia_plus_power_proxy' ? 'EIA + power proxy' : data.spread.source.replaceAll('_', ' ')}
+            {data.spread.proxyMovePct !== null && data.spread.proxyMovePct !== undefined
+              ? ` · ${Number(data.spread.proxyMovePct) >= 0 ? '+' : ''}${Number(data.spread.proxyMovePct).toFixed(2)}%`
+              : ''}
+          </div>
+        )}
       </div>
     </div>
 
@@ -331,7 +344,129 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
             </div>
           ))}
         </div>
+        {data.spread.source && (
+          <div style={{ fontSize: '11px', color: TG_THEME.tertiary, lineHeight: 1.35, marginTop: '10px' }}>
+            Electricity mark: {data.spread.source === 'eia_plus_power_proxy' ? 'EIA anchor + public power/fuel proxy' : data.spread.source.replaceAll('_', ' ')}
+            {data.spread.baseElec ? ` · base $${Number(data.spread.baseElec).toFixed(2)}/MWh` : ''}
+            {data.spread.proxyMovePct !== null && data.spread.proxyMovePct !== undefined
+              ? ` · move ${Number(data.spread.proxyMovePct) >= 0 ? '+' : ''}${Number(data.spread.proxyMovePct).toFixed(2)}%`
+              : ''}
+          </div>
+        )}
+        {tgSpreadFamilies(data).length > 0 && (
+          <div style={{ marginTop: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700 }}>Spread-family replay</div>
+              <TgBadge color={data.spreadFamilies?.entryGatePass ? TG_THEME.green : TG_THEME.orange}>
+                {data.spreadFamilies?.entryGatePass ? 'PASS' : 'MONITOR'}
+              </TgBadge>
+            </div>
+            {data.spreadFamilies?.primarySource && (
+              <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginBottom: '6px' }}>
+                source: {String(data.spreadFamilies.primarySource).replaceAll('_', ' ')}
+              </div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {tgSpreadFamilies(data).slice(0, 3).map(family => (
+                <div key={`${family.family_id}-${family.strategy_id || 'default'}`} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{family.label}</div>
+                      <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                        {family.strategy_label || 'Replay'} · z {Number(family.latest_z || 0).toFixed(2)} · {family.tested_trades || 0} trades · WR {Number(family.win_rate || 0).toFixed(0)}%
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '10px', color: family.is_promotable ? TG_THEME.green : TG_THEME.orange, fontWeight: 800, textAlign: 'right' }}>
+                      {String(family.status || '').replaceAll('_', ' ')}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                    {family.status_reason}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {tgProxyBaskets(data).length > 0 && (
+          <div style={{ marginTop: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700 }}>Proxy basket replay</div>
+              <TgBadge color={data.proxyBaskets?.entryGatePass ? TG_THEME.green : TG_THEME.orange}>
+                {data.proxyBaskets?.entryGatePass ? 'PASS' : 'MONITOR'}
+              </TgBadge>
+            </div>
+            {tgProxyBaskets(data).slice(0, 2).map(basket => (
+              <div key={basket.basket_id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px', marginBottom: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{basket.label}</div>
+                    <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                      {(basket.latest_signal || 'MONITOR').replaceAll('_', ' ')} · 5d {Number(basket.trailing_returns?.['5d']?.return_pct || 0).toFixed(1)}% · 1m {Number(basket.trailing_returns?.['1m']?.return_pct || 0).toFixed(1)}%
+                    </div>
+                    <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                      {basket.recommendation?.replaceAll('_', ' ') || 'MONITOR'} · total {Number(basket.total_return_pct || 0).toFixed(1)}% · WR {Number(basket.win_rate || 0).toFixed(0)}%
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: basket.latest_signal === 'SELL' ? TG_THEME.red : (basket.latest_signal === 'BUY' ? TG_THEME.green : TG_THEME.orange), fontWeight: 800, textAlign: 'right' }}>
+                    {String(basket.latest_signal || basket.status || '').replaceAll('_', ' ')}
+                  </div>
+                </div>
+                <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                  {basket.signal_reason || basket.status_reason}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {data.pnl && (
+          <div style={{ marginTop: '12px', background: TG_THEME.elevated, borderRadius: '8px', padding: '9px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700 }}>Settled PnL ledger</div>
+              <TgBadge color={data.pnl.hasReconciled ? TG_THEME.green : TG_THEME.orange}>
+                {data.pnl.statusLabel || 'No settled PnL'}
+              </TgBadge>
+            </div>
+            <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '5px' }}>
+              {data.pnl.totalDisplay || 'No settled PnL'} · {data.pnl.tradesDisplay || '0 settled'} trades. Replay and local tickets are not realized PnL.
+            </div>
+          </div>
+        )}
       </div>
+
+      {tgInstrumentMenu(data).length > 0 && (
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              Syndicated structures
+            </div>
+            <TgBadge color={TG_THEME.orange}>NOT ABS YET</TgBadge>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {tgInstrumentMenu(data).slice(0, 4).map(item => (
+              <div key={item.instrument_type} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{item.title}</div>
+                    <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                      {item.direction_aligned ? 'active spread · ' : ''}{item.spread_archetype} · {String(item.basket_direction || 'unmapped').replaceAll('_', ' ')}
+                    </div>
+                    <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                      5d {Number(item.trailing_returns?.['5d']?.return_pct || 0).toFixed(1)}% · 1m {Number(item.trailing_returns?.['1m']?.return_pct || 0).toFixed(1)}%
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: item.latest_signal === 'SELL' ? TG_THEME.red : (item.latest_signal === 'BUY' ? TG_THEME.green : TG_THEME.orange), fontWeight: 800, textAlign: 'right' }}>
+                    {item.latest_signal || 'MONITOR'}
+                  </div>
+                </div>
+                <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                  {item.status?.replaceAll('_', ' ')} · {item.status_reason}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {data.syntheticInstrument && (
         <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
@@ -352,6 +487,13 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
           <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '6px' }}>
             Priced hedges: {((data.syntheticInstrument.outputs?.priced_hedge_basket || []).slice(0, 3).map(leg => leg.slug || leg.title).join(', ')) || 'needs live Yahoo/public prices'}
           </div>
+          {data.syntheticInstrument.outputs?.oracle_judge_evidence && (
+            <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginBottom: '6px', background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+              LLM/news evidence: {String(data.syntheticInstrument.outputs.oracle_judge_evidence.status || 'NO_RECEIPTS').replaceAll('_', ' ')}
+              {' '}· {data.syntheticInstrument.outputs.oracle_judge_evidence.row_count || 0} receipts
+              {' '}· {data.syntheticInstrument.outputs.oracle_judge_evidence.latest_verdict || 'no verdict'}
+            </div>
+          )}
           {data.syntheticInstrument.outputs?.mock_hedge_construction && (
             <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '6px' }}>
               <div style={{ fontSize: '10px', color: TG_THEME.secondary, textTransform: 'uppercase', fontWeight: 700 }}>Mock contract entry check</div>
@@ -474,11 +616,41 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
 
 const TgScouting = ({ setScreen, goBack, data }) => {
   const searchPlan = tgSearchPlan(data);
+  const venueRows = tgVenueEvidence(data);
+  const oracle = tgOracleEvidence(data);
+  const verdictCounts = oracle.verdict_counts || {};
+  const verdictText = Object.entries(verdictCounts).map(([k, v]) => `${k}:${v}`).join(' · ') || 'none';
   return (
   <TgScreen title="Agent Scouting" subtitle="Research only" onBack={goBack}>
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div style={{ background: TG_THEME.surface, borderRadius: '10px', padding: '14px', fontSize: '13px', color: TG_THEME.secondary, lineHeight: 1.45 }}>
         These rows are not the contract. The agent uses Opoint/Nebius, IBKR ForecastTrader, and Polymarket to find legs that are actually driven by the compute/energy spread. Public channel posts stay quiet until the mock contract changes or an operator action is needed.
+      </div>
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+          <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            LLM / News judge evidence
+          </div>
+          <TgBadge color={oracle.status === 'EVIDENCE_LOGGED' ? TG_THEME.green : TG_THEME.orange}>
+            {String(oracle.status || 'NO RECEIPTS').replaceAll('_', ' ')}
+          </TgBadge>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          {[
+            ['Receipts', oracle.row_count || 0],
+            ['Verdicts', verdictText],
+            ['Articles', `${oracle.filtered_articles || 0}/${oracle.raw_articles || 0}`],
+            ['Reason', oracle.latest_reason_code || 'none'],
+          ].map(([label, value]) => (
+            <div key={label} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px', minWidth: 0 }}>
+              <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>{label}</div>
+              <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{value}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '8px' }}>
+          Evidence only: Opoint/Nebius can support or criticize a leg, but Arc stays locked until scorer and judge gates clear.
+        </div>
       </div>
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
         <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
@@ -497,6 +669,33 @@ const TgScouting = ({ setScreen, goBack, data }) => {
         )) : (
           <div style={{ padding: '12px 16px', fontSize: '12px', color: TG_THEME.secondary }}>
             Search queue is empty in this snapshot.
+          </div>
+        )}
+      </div>
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          Venue evidence matrix
+        </div>
+        {venueRows.length ? venueRows.slice(0, 6).map((row, i) => (
+          <div key={row.surface || i} style={{ padding: '10px 16px', borderTop: i ? `0.5px solid ${TG_THEME.separator}` : 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{row.label || row.surface}</div>
+                <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                  {row.role || 'evidence'} · priced {row.priced_count || 0} · proxy {row.external_proxy_count || 0}
+                </div>
+              </div>
+              <TgBadge color={row.status === 'LIVE_PRICED' || row.status === 'EVIDENCE_LOGGED' ? TG_THEME.green : TG_THEME.orange}>
+                {String(row.status || 'watch').replaceAll('_', ' ')}
+              </TgBadge>
+            </div>
+            <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+              {(row.gaps || [data.venueEvidence?.guardrail || 'Judge required before Arc.'])[0]}
+            </div>
+          </div>
+        )) : (
+          <div style={{ padding: '12px 16px', fontSize: '12px', color: TG_THEME.secondary }}>
+            Venue evidence matrix is empty in this snapshot.
           </div>
         )}
       </div>

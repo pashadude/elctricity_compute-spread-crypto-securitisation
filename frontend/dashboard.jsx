@@ -177,7 +177,10 @@ const derivePrimaryExposure = ({ positions = [], verdicts = [], candidates = [] 
 };
 
 const emptyDashboardData = (status = 'loading', error = '') => ({
-  spread: { elec: '0.00', compute: '0.0000', st: '0.0000', k: 0.5, kwh: 0.7 },
+  spread: { elec: '0.00', compute: '0.0000', st: '0.0000', k: 0.5, kwh: 0.7, source: '', sourceStatus: '' },
+  spreadFamilies: { families: [], primaryFamily: null, entryGatePass: false },
+  proxyBaskets: { baskets: [], primaryBasket: null, entryGatePass: false },
+  venueEvidence: { rows: [], summary: {}, guardrail: '' },
   history: [],
   z: 0,
   mean: 0,
@@ -194,10 +197,33 @@ const emptyDashboardData = (status = 'loading', error = '') => ({
   pnl: {
     total: 0, totalDisplay: 'Pending', winRate: 0, trades: 0,
     tradesDisplay: 'Pending', wrappedJobs: 0, executes: 0, hasReconciled: false,
+    status: 'UNKNOWN', statusLabel: 'Pending', note: '',
   },
-  oracleResults: genOracleResults(),
+  oracleResults: { status: 'NO_RECEIPTS', row_count: 0 },
   connection: { status, error, updatedAt: Date.now() },
 });
+
+const selectProxyBasketForDirection = (proxyBaskets, direction) => {
+  const validation = proxyBaskets || {};
+  if (validation.active_basket) {
+    return {
+      selected: validation.active_basket,
+      entryGatePass: Boolean(validation.active_entry_gate_pass),
+    };
+  }
+  const primary = validation.primary_basket || null;
+  const baskets = Array.isArray(validation.baskets) ? [...validation.baskets] : [];
+  if (primary && !baskets.some(basket => basket?.basket_id === primary.basket_id)) baskets.push(primary);
+  const cleanDirection = String(direction || '').trim();
+  const matched = cleanDirection && cleanDirection !== 'no_signal'
+    ? baskets.find(basket => String(basket?.direction || '').trim() === cleanDirection)
+    : null;
+  const selected = matched || primary || baskets[0] || null;
+  const entryGatePass = selected
+    ? Boolean(selected.is_promotable || selected.status === 'PROMOTABLE')
+    : Boolean(validation.entry_gate_pass);
+  return { selected, entryGatePass };
+};
 
 const mapSnapshotToDashboardData = (snapshot) => {
   const spreadLatest = snapshot?.spread?.latest || {};
@@ -379,6 +405,9 @@ const mapSnapshotToDashboardData = (snapshot) => {
   const reconciledTrades = numberOr(pnl.reconciled_trades, numberOr(pnl.trades, 0));
   const wrappedJobs = numberOr(pnl.wrapped_jobs, positions.filter(p => !String(p.jobId).startsWith('local-')).length);
   const executes = numberOr(pnl.executed_verdicts, verdicts.filter(v => v.label === 'EXECUTE').length);
+  const selectedProxyBasket = selectProxyBasketForDirection(snapshot?.proxy_baskets, signal.direction || 'no_signal');
+  const selectedProxy = selectedProxyBasket.selected || {};
+  const selectedProxyTrailing = selectedProxy.trailing_returns || {};
   return {
     spread: {
       elec: numberOr(spreadLatest.electricity_per_mwh).toFixed(2),
@@ -386,6 +415,43 @@ const mapSnapshotToDashboardData = (snapshot) => {
       st: numberOr(spreadLatest.S_t).toFixed(4),
       k: numberOr(spreadLatest.k, 0.5),
       kwh: numberOr(spreadLatest.kwh_per_gpu_hr, 0.7),
+      source: spreadLatest.electricity_source || '',
+      sourceStatus: spreadLatest.electricity_source_status || '',
+      baseElec: spreadLatest.electricity_base_per_mwh === '' || spreadLatest.electricity_base_per_mwh === undefined
+        ? null
+        : numberOr(spreadLatest.electricity_base_per_mwh, null),
+      proxyMovePct: spreadLatest.electricity_proxy_weighted_return_pct === '' || spreadLatest.electricity_proxy_weighted_return_pct === undefined
+        ? null
+        : numberOr(spreadLatest.electricity_proxy_weighted_return_pct, null),
+      proxySymbols: spreadLatest.electricity_proxy_symbols || [],
+      proxyUsedQuotes: numberOr(spreadLatest.electricity_proxy_used_quotes, 0),
+      eiaPeriod: spreadLatest.eia_period || '',
+      computeSource: spreadLatest.compute_source || '',
+      computeInstance: spreadLatest.compute_instance || '',
+    },
+    spreadFamilies: {
+      entryGatePass: Boolean(snapshot?.spread_families?.entry_gate_pass),
+      primaryFamily: snapshot?.spread_families?.primary_family || null,
+      families: snapshot?.spread_families?.families || [],
+      policy: snapshot?.spread_families?.policy || '',
+      caveat: snapshot?.spread_families?.caveat || '',
+      primarySource: snapshot?.spread_families?.primary_source || '',
+      sourceStatus: snapshot?.spread_families?.source_status || '',
+      indexCatalog: snapshot?.spread_families?.index_catalog || { electricity: [], compute: [] },
+    },
+    proxyBaskets: {
+      entryGatePass: selectedProxyBasket.entryGatePass,
+      primaryBasket: selectedProxyBasket.selected,
+      baskets: snapshot?.proxy_baskets?.baskets || [],
+      policy: snapshot?.proxy_baskets?.policy || '',
+      caveat: snapshot?.proxy_baskets?.caveat || '',
+      statusReason: snapshot?.proxy_baskets?.status_reason || '',
+      fetchEnabled: Boolean(snapshot?.proxy_baskets?.fetch_enabled),
+    },
+    venueEvidence: {
+      rows: snapshot?.venue_evidence?.rows || [],
+      summary: snapshot?.venue_evidence?.summary || {},
+      guardrail: snapshot?.venue_evidence?.guardrail || '',
     },
     history,
     z: numberOr(signal.z),
@@ -402,15 +468,30 @@ const mapSnapshotToDashboardData = (snapshot) => {
     syntheticInstrument: snapshot?.synthetic_instrument || null,
     pnl: {
       total: numberOr(pnl.total),
-      totalDisplay: hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'Pending',
+      totalDisplay: pnl.display_total || (hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'No settled PnL'),
       winRate: numberOr(pnl.win_rate),
       trades: reconciledTrades,
-      tradesDisplay: hasReconciled ? String(reconciledTrades) : 'Pending',
+      tradesDisplay: pnl.display_trades || (hasReconciled ? String(reconciledTrades) : '0 settled'),
       wrappedJobs,
       executes,
       hasReconciled,
+      status: pnl.status || '',
+      statusLabel: pnl.status_label || '',
+      note: pnl.mark_to_market_note || '',
+      spreadReplayStatus: pnl.spread_replay_status || '',
+      spreadMarkChanges: numberOr(pnl.spread_mark_changes, 0),
+      spreadRawObservations: numberOr(pnl.spread_raw_observations, 0),
+      spreadCollapsedPolls: numberOr(pnl.spread_collapsed_polls, 0),
+      proxyLatestSignal: selectedProxy.latest_signal || pnl.proxy_latest_signal || '',
+      proxyReplayStatus: selectedProxy.status || pnl.proxy_replay_status || '',
+      proxy5dReturnPct: selectedProxyTrailing['5d']?.return_pct === undefined
+        ? ((pnl.proxy_5d_return_pct === '' || pnl.proxy_5d_return_pct === undefined || pnl.proxy_5d_return_pct === null) ? null : numberOr(pnl.proxy_5d_return_pct))
+        : numberOr(selectedProxyTrailing['5d']?.return_pct),
+      proxy1mReturnPct: selectedProxyTrailing['1m']?.return_pct === undefined
+        ? ((pnl.proxy_1m_return_pct === '' || pnl.proxy_1m_return_pct === undefined || pnl.proxy_1m_return_pct === null) ? null : numberOr(pnl.proxy_1m_return_pct))
+        : numberOr(selectedProxyTrailing['1m']?.return_pct),
     },
-    oracleResults: genOracleResults(),
+    oracleResults: snapshot?.oracle || { status: 'NO_RECEIPTS', row_count: 0 },
     connection: {
       status: 'live',
       error: '',
@@ -518,6 +599,14 @@ const StatCard = ({ label, value, suffix, prefix, change, sparkData, color, valu
 const SignalPanel = ({ data }) => {
   const zColor = Math.abs(data.z) > 2 ? THEME.red[400] : Math.abs(data.z) > 1 ? THEME.amber[400] : THEME.primary[400];
   const isNarrow = useIsMobile(560);
+  const families = data.spreadFamilies?.families || [];
+  const primaryFamily = data.spreadFamilies?.primaryFamily || families[0] || null;
+  const sourceLabel = data.spread.source === 'eia_plus_power_proxy'
+    ? 'EIA anchor + public power/fuel proxy'
+    : (data.spread.source === 'eia_retail_sales' ? 'EIA monthly retail anchor' : 'Source pending');
+  const proxyLine = data.spread.baseElec && data.spread.proxyMovePct !== null && data.spread.proxyMovePct !== undefined
+    ? `base $${Number(data.spread.baseElec).toFixed(2)} · proxy ${Number(data.spread.proxyMovePct) >= 0 ? '+' : ''}${Number(data.spread.proxyMovePct).toFixed(2)}%`
+    : '';
   return (
     <Card glow>
       <div style={{
@@ -532,6 +621,9 @@ const SignalPanel = ({ data }) => {
           <SectionLabel>Spread Signal</SectionLabel>
           <div style={{ fontFamily: THEME.font.heading, fontSize: '14px', color: THEME.text.secondary }}>
             S_t = compute − k × (elec/1000) × kWh
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px' }}>
+            {sourceLabel}{data.spread.sourceStatus ? ` · ${String(data.spread.sourceStatus).replaceAll('_', ' ')}` : ''}
           </div>
         </div>
         <Badge color={data.direction === 'compute_expensive' ? 'blue' : 'amber'}>
@@ -548,6 +640,11 @@ const SignalPanel = ({ data }) => {
         <div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Electricity</div>
           <MonoText style={{ fontSize: '18px', fontWeight: 700, color: THEME.amber[400] }}>${data.spread.elec}/MWh</MonoText>
+          {proxyLine && (
+            <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.3, marginTop: '2px' }}>
+              {proxyLine}
+            </div>
+          )}
         </div>
         <div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Compute</div>
@@ -574,6 +671,319 @@ const SignalPanel = ({ data }) => {
           <span style={{ position: 'absolute', right: 0, top: '-14px', fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.red[400] }}>-σ</span>
         </div>
       </div>
+      {families.length > 0 && (
+        <div style={{ marginTop: '14px' }}>
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            gap: '10px', marginBottom: '8px',
+          }}>
+            <div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Spread-family replay</div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35 }}>
+                Walk-forward, no lookahead. Flat marks do not promote a buy signal.
+                {data.spreadFamilies?.primarySource ? ` Source: ${String(data.spreadFamilies.primarySource).replaceAll('_', ' ')}.` : ''}
+              </div>
+            </div>
+            {primaryFamily?.status && (
+              <Badge color={primaryFamily.is_promotable ? 'primary' : 'amber'}>{String(primaryFamily.status).replaceAll('_', ' ')}</Badge>
+            )}
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isNarrow ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+            gap: '8px',
+          }}>
+            {families.slice(0, 4).map(family => (
+              <div key={`${family.family_id}-${family.strategy_id || 'default'}`} style={{ padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                      {family.label}
+                    </div>
+                    {family.strategy_label && (
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, marginTop: '2px' }}>
+                        {family.strategy_label}
+                      </div>
+                    )}
+                    <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '3px', overflowWrap: 'anywhere' }}>
+                      {family.formula}
+                    </div>
+                  </div>
+                  <MonoText style={{ fontSize: '11px', color: family.is_promotable ? THEME.primary[400] : THEME.amber[400], fontWeight: 800 }}>
+                    {String(family.status || '').replaceAll('_', ' ')}
+                  </MonoText>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginTop: '8px' }}>
+                  {[
+                    ['z', Number(family.latest_z || 0).toFixed(2)],
+                    ['trades', family.tested_trades || 0],
+                    ['WR', `${Number(family.win_rate || 0).toFixed(0)}%`],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                      <MonoText style={{ fontSize: '11px', color: THEME.text.secondary }}>{value}</MonoText>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '6px' }}>
+                  {family.status_reason}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const ProxyBasketReplayPanel = ({ data }) => {
+  const baskets = data.proxyBaskets?.baskets || [];
+  const primary = data.proxyBaskets?.primaryBasket || baskets[0] || {};
+  const isNarrow = useIsMobile(560);
+  if (!primary || !Object.keys(primary).length) return null;
+  const status = String(primary.status || 'MONITOR').replaceAll('_', ' ');
+  const recommendation = String(primary.recommendation || 'MONITOR_ONLY').replaceAll('_', ' ');
+  const latestSignal = String(primary.latest_signal || 'MONITOR').replaceAll('_', ' ');
+  const signalColor = primary.latest_signal === 'SELL'
+    ? THEME.red[400]
+    : (primary.latest_signal === 'BUY' ? THEME.primary[400] : THEME.amber[400]);
+  const trailing = primary.trailing_returns || {};
+  const ret = (label) => trailing[label]?.return_pct;
+  const color = primary.is_promotable ? THEME.primary[400] : (primary.recommendation === 'SELL_OR_AVOID' ? THEME.red[400] : THEME.amber[400]);
+  return (
+    <Card glow>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Proxy Basket Replay</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '18px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
+            {primary.label || 'Public proxy basket'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
+            Yahoo/IBKR/crypto close-history validation for the liquid expression, separate from the spread-index replay.
+          </div>
+        </div>
+        <Badge color={primary.is_promotable ? 'primary' : (primary.recommendation === 'SELL_OR_AVOID' ? 'red' : 'amber')}>{status}</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? 'repeat(2, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))', gap: '8px', marginBottom: '10px' }}>
+        {[
+          ['Signal', latestSignal, signalColor],
+          ['5d', ret('5d') === undefined ? '-' : `${Number(ret('5d') || 0).toFixed(2)}%`, Number(ret('5d') || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+          ['1m', ret('1m') === undefined ? '-' : `${Number(ret('1m') || 0).toFixed(2)}%`, Number(ret('1m') || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+          ['Total', `${Number(primary.total_return_pct || 0).toFixed(2)}%`, Number(primary.total_return_pct || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+          ['WR', `${Number(primary.win_rate || 0).toFixed(0)}%`, THEME.text.secondary],
+          ['Max DD', `${Number(primary.max_drawdown_pct || 0).toFixed(2)}%`, THEME.amber[400]],
+        ].map(([label, value, itemColor]) => (
+          <div key={label} style={{ padding: '8px', borderRadius: '6px', background: THEME.bg.elevated, minWidth: 0 }}>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted }}>{label}</div>
+            <MonoText style={{ fontSize: label === 'Signal' ? '11px' : '13px', color: itemColor, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</MonoText>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.4, marginBottom: '8px' }}>
+        {primary.signal_reason || primary.status_reason || data.proxyBaskets?.statusReason || 'Run proxy replay before promoting a syndicated basket.'}
+        <span style={{ color: THEME.text.faint }}> Recommendation: {recommendation}.</span>
+      </div>
+      {baskets.length > 1 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+          {baskets.slice(1, 4).map(basket => (
+            <div key={basket.basket_id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 54px 54px 62px', gap: '8px', alignItems: 'center', fontSize: '11px', color: THEME.text.muted }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basket.label}</span>
+              <MonoText style={{ color: basket.latest_signal === 'SELL' ? THEME.red[400] : (basket.latest_signal === 'BUY' ? THEME.primary[400] : THEME.text.faint) }}>{basket.latest_signal || 'MONITOR'}</MonoText>
+              <MonoText style={{ color: Number(basket.trailing_returns?.['5d']?.return_pct || 0) >= 0 ? THEME.primary[400] : THEME.red[400] }}>{Number(basket.trailing_returns?.['5d']?.return_pct || 0).toFixed(1)}%</MonoText>
+              <MonoText style={{ color: basket.is_promotable ? THEME.primary[400] : THEME.text.faint }}>{Number(basket.total_return_pct || 0).toFixed(1)}%</MonoText>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const SyndicatedInstrumentMenuPanel = ({ proposal }) => {
+  const menu = proposal?.outputs?.syndicated_instrument_menu || [];
+  if (!menu.length) return null;
+  const signalColor = (signal) => signal === 'SELL' ? THEME.red[400] : (signal === 'BUY' ? THEME.primary[400] : THEME.amber[400]);
+  const statusColor = (status) => status === 'PAPER_BUY_ONLY' || status === 'READY_FOR_JUDGE'
+    ? 'primary'
+    : (status === 'AVOID_OR_SELL' ? 'red' : 'amber');
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Syndicated Instrument Menu</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Spread-copying structures
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
+            These are synthetic expressions of the compute/energy spread. They become asset-backed only after collateral is attached and the judge gate clears.
+          </div>
+        </div>
+        <Badge color="amber">NOT ABS YET</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+        {menu.slice(0, 5).map(item => {
+          const trailing = item.trailing_returns || {};
+          const ret5 = trailing['5d']?.return_pct;
+          const ret1 = trailing['1m']?.return_pct;
+          return (
+            <div key={item.instrument_type} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
+                    {item.title}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '3px' }}>
+                    {item.spread_archetype} · {String(item.basket_direction || 'unmapped').replaceAll('_', ' ')}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {item.direction_aligned && <Badge color="primary">ACTIVE</Badge>}
+                  <Badge color={statusColor(item.status)}>{String(item.status || '').replaceAll('_', ' ')}</Badge>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
+                {[
+                  ['Signal', item.latest_signal || 'MONITOR', signalColor(item.latest_signal)],
+                  ['5d', ret5 === undefined ? '-' : `${Number(ret5 || 0).toFixed(1)}%`, Number(ret5 || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+                  ['1m', ret1 === undefined ? '-' : `${Number(ret1 || 0).toFixed(1)}%`, Number(ret1 || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+                ].map(([label, value, color]) => (
+                  <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                    <MonoText style={{ fontSize: '11px', color, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</MonoText>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35 }}>
+                {item.status_reason}
+              </div>
+              <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                priced: {(item.priced_symbols || []).slice(0, 5).join(', ') || 'none'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+};
+
+const statusBadgeColor = (status) => {
+  const text = String(status || '').toUpperCase();
+  if (['LIVE_PRICED', 'EVIDENCE_LOGGED', 'SETTLED_PNL'].includes(text)) return 'primary';
+  if (['PROXY_PRICED', 'NO_SETTLED_PNL', 'NEEDS_PRICE', 'NEEDS_QUOTES', 'NEEDS_EVENT_MATCH'].includes(text)) return 'amber';
+  if (['FAILED', 'ERROR'].some(part => text.includes(part))) return 'red';
+  return 'blue';
+};
+
+const PnlStatusPanel = ({ pnl }) => {
+  if (!pnl) return null;
+  const proxyBits = [];
+  if (pnl.proxyLatestSignal) proxyBits.push(`${pnl.proxyLatestSignal}/${pnl.proxyReplayStatus || 'replay'}`);
+  if (pnl.proxy5dReturnPct !== null && pnl.proxy5dReturnPct !== undefined) proxyBits.push(`5d ${Number(pnl.proxy5dReturnPct).toFixed(2)}%`);
+  if (pnl.proxy1mReturnPct !== null && pnl.proxy1mReturnPct !== undefined) proxyBits.push(`1m ${Number(pnl.proxy1mReturnPct).toFixed(2)}%`);
+  return (
+    <Card style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div>
+          <SectionLabel>Profitability Ledger</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '18px', color: THEME.text.primary, fontWeight: 800 }}>
+            {pnl.statusLabel || 'PnL status'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
+            Settled PnL is shown only after reconciliation. Replay and local tickets stay labelled separately.
+          </div>
+        </div>
+        <Badge color={statusBadgeColor(pnl.status)}>{String(pnl.status || 'UNKNOWN').replaceAll('_', ' ')}</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px' }}>
+        {[
+          ['Settled PnL', pnl.totalDisplay || 'No settled PnL', pnl.hasReconciled ? THEME.primary[400] : THEME.amber[400]],
+          ['Trades', pnl.tradesDisplay || '0 settled', THEME.text.secondary],
+          ['Wrapped Jobs', pnl.wrappedJobs || 0, THEME.text.secondary],
+          ['Judge EXECUTEs', pnl.executes || 0, THEME.text.secondary],
+        ].map(([label, value, color]) => (
+          <div key={label} style={{ padding: '8px', borderRadius: '6px', background: THEME.bg.elevated, minWidth: 0 }}>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted }}>{label}</div>
+            <MonoText style={{ fontSize: '13px', color, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</MonoText>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.4, marginTop: '9px' }}>
+        {pnl.note || 'No reconciled PnL note available.'}
+      </div>
+      <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '5px' }}>
+        spread replay: {pnl.spreadReplayStatus || 'unknown'} · {pnl.spreadMarkChanges || 0}/{pnl.spreadRawObservations || 0} mark changes · {pnl.spreadCollapsedPolls || 0} repeated polls collapsed
+        {proxyBits.length ? ` · proxy replay: ${proxyBits.join(' · ')}` : ''}
+      </div>
+    </Card>
+  );
+};
+
+const VenueEvidencePanel = ({ evidence }) => {
+  const rows = evidence?.rows || [];
+  if (!rows.length) return null;
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Venue Evidence Matrix</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Real feeds, proxy feeds, and evidence gaps
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
+            Polymarket, Kalshi, IBKR, public quotes, crypto, and Opoint/Nebius are labelled by role before any judge or Arc action.
+          </div>
+        </div>
+        <Badge color="amber">EVIDENCE ONLY</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '8px' }}>
+        {rows.map(row => (
+          <div key={row.surface} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                  {row.label}
+                </div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '2px' }}>
+                  {row.role}
+                </div>
+              </div>
+              <Badge color={statusBadgeColor(row.status)}>{String(row.status || '').replaceAll('_', ' ')}</Badge>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '7px' }}>
+              {[
+                ['Rows', row.row_count || 0],
+                ['Priced', row.priced_count || 0],
+                ['Proxy', row.external_proxy_count || 0],
+              ].map(([label, value]) => (
+                <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                  <MonoText style={{ fontSize: '11px', color: THEME.text.secondary }}>{value}</MonoText>
+                </div>
+              ))}
+            </div>
+            {(row.latest_title || row.latest_pricing_status) && (
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
+                {row.latest_title || row.latest_slug}{row.latest_pricing_status ? ` · ${row.latest_pricing_status}` : ''}
+              </div>
+            )}
+            {(row.gaps || []).slice(0, 1).map(gap => (
+              <div key={gap} style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
+                {gap}
+              </div>
+            ))}
+            <div style={{ fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.text.faint, marginTop: '5px' }}>
+              judge required · Arc ready: {row.can_drive_arc ? 'yes' : 'no'}
+            </div>
+          </div>
+        ))}
+      </div>
+      {evidence.guardrail && (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '9px' }}>
+          {evidence.guardrail}
+        </div>
+      )}
     </Card>
   );
 };
@@ -1011,6 +1421,7 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   const inputs = proposal.inputs || {};
   const searchPlan = proposal.outputs?.agent_search_plan || [];
   const mockConstruction = proposal.outputs?.mock_hedge_construction || null;
+  const oracleEvidence = proposal.outputs?.oracle_judge_evidence || {};
   const weightedLegs = mockConstruction?.weighted_legs || [];
   const tooling = mockConstruction?.agent_tooling || [];
   const { ticket, marked, buy, monitor, sell, reset } = useMockContractTicket(proposal, mockConstruction, weightedLegs);
@@ -1085,6 +1496,21 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
               spread judge: {mockConstruction.judge_verdict.label}/{mockConstruction.judge_verdict.reason_code || 'checked'}
             </div>
           )}
+        </div>
+        <div style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '5px' }}>LLM / news evidence</div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.4 }}>
+            {oracleEvidence.status
+              ? `${String(oracleEvidence.status).replaceAll('_', ' ')} · ${oracleEvidence.row_count || 0} receipts · ${oracleEvidence.filtered_articles || 0}/${oracleEvidence.raw_articles || 0} articles`
+              : 'No Opoint/Nebius receipt attached.'}
+          </div>
+          <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '6px', overflowWrap: 'anywhere' }}>
+            {oracleEvidence.latest_verdict ? `latest: ${oracleEvidence.latest_verdict}/${oracleEvidence.latest_reason_code || 'checked'} · ` : ''}
+            hash {oracleEvidence.oracle_evidence_hash || 'none'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
+            Evidence only; scorer and judge gates remain mandatory.
+          </div>
         </div>
       </div>
       {mockConstruction && (
@@ -1248,26 +1674,69 @@ const SyntheticInstrumentPanel = ({ proposal }) => {
   );
 };
 
-const OraclePanel = ({ oracle }) => (
-  <Card>
-    <SectionLabel>Oracle Backtest — 280K Sources · 200 Languages</SectionLabel>
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-      {[
-        { label: 'News Sources', value: '280,000', color: THEME.text.primary },
-        { label: 'Languages', value: '200', color: THEME.amber[400] },
-        { label: 'AI-Infra WR', value: `${oracle.aiInfra.wr}%`, color: THEME.primary[400] },
-        { label: 'AI-Infra PnL', value: `+${oracle.aiInfra.pnl.toFixed(3)}`, color: THEME.primary[400] },
-        { label: 'Frontier Model WR', value: `${oracle.geopolitics.wr}%`, color: THEME.amber[400] },
-        { label: 'Gate-Kept PnL', value: `+${oracle.gatePnl.toFixed(3)}`, color: THEME.primary[400] },
-      ].map((item, i) => (
-        <div key={i} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
-          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '4px' }}>{item.label}</div>
-          <MonoText style={{ fontSize: '16px', fontWeight: 700, color: item.color }}>{item.value}</MonoText>
+const OraclePanel = ({ oracle = {} }) => {
+  const isReceiptState = oracle.status || oracle.row_count !== undefined;
+  const verdictCounts = oracle.verdict_counts || {};
+  const verdictText = Object.entries(verdictCounts).map(([k, v]) => `${k}:${v}`).join(' · ') || 'none';
+  if (!isReceiptState && oracle.aiInfra) {
+    return (
+      <Card>
+        <SectionLabel>Oracle Backtest — 280K Sources · 200 Languages</SectionLabel>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+          {[
+            { label: 'News Sources', value: '280,000', color: THEME.text.primary },
+            { label: 'Languages', value: '200', color: THEME.amber[400] },
+            { label: 'AI-Infra WR', value: `${oracle.aiInfra.wr}%`, color: THEME.primary[400] },
+            { label: 'AI-Infra PnL', value: `+${oracle.aiInfra.pnl.toFixed(3)}`, color: THEME.primary[400] },
+            { label: 'Frontier Model WR', value: `${oracle.geopolitics.wr}%`, color: THEME.amber[400] },
+            { label: 'Gate-Kept PnL', value: `+${oracle.gatePnl.toFixed(3)}`, color: THEME.primary[400] },
+          ].map((item, i) => (
+            <div key={i} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '4px' }}>{item.label}</div>
+              <MonoText style={{ fontSize: '16px', fontWeight: 700, color: item.color }}>{item.value}</MonoText>
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
-  </Card>
-);
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div>
+          <SectionLabel>LLM / News Judge Evidence</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Opoint + Nebius receipts
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
+            Evidence only. Missing or DEFER receipts cannot bypass premium scoring or judge.classify().
+          </div>
+        </div>
+        <Badge color={oracle.status === 'EVIDENCE_LOGGED' ? 'primary' : 'amber'}>{String(oracle.status || 'NO_RECEIPTS').replaceAll('_', ' ')}</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px' }}>
+        {[
+          ['Receipts', oracle.row_count || 0, THEME.text.secondary],
+          ['Verdicts', verdictText, THEME.primary[400]],
+          ['Raw articles', oracle.raw_articles || 0, THEME.text.secondary],
+          ['Filtered', oracle.filtered_articles || 0, THEME.amber[400]],
+          ['Latest reason', oracle.latest_reason_code || 'none', THEME.text.secondary],
+          ['Model', oracle.latest_model || 'not run', THEME.text.secondary],
+        ].map(([label, value, color]) => (
+          <div key={label} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, minWidth: 0 }}>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '4px' }}>{label}</div>
+            <MonoText style={{ fontSize: '13px', fontWeight: 700, color, overflowWrap: 'anywhere' }}>{value}</MonoText>
+          </div>
+        ))}
+      </div>
+      {(oracle.latest_title || oracle.latest_slug) && (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.35, marginTop: '9px', overflowWrap: 'anywhere' }}>
+          Latest: {oracle.latest_title || oracle.latest_slug}
+        </div>
+      )}
+    </Card>
+  );
+};
 
 const DashboardPage = ({ refreshRate }) => {
   const data = useLiveData(refreshRate);
@@ -1315,11 +1784,20 @@ const DashboardPage = ({ refreshRate }) => {
         <StatCard label="Quote Source" value={quoteSourceText || 'Pending'} valueSize={16} />
       </div>
 
+      <PnlStatusPanel pnl={data.pnl} />
+
       {/* Signal + Candidates */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
         <SignalPanel data={data} />
-        <MockContractSummaryPanel proposal={data.syntheticInstrument} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <MockContractSummaryPanel proposal={data.syntheticInstrument} />
+          <ProxyBasketReplayPanel data={data} />
+        </div>
       </div>
+
+      <SyndicatedInstrumentMenuPanel proposal={data.syntheticInstrument} />
+
+      <VenueEvidencePanel evidence={data.venueEvidence} />
 
       <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />
 
