@@ -35,6 +35,7 @@ class SpreadFamily:
     expensive_side: str
     trade_rule: str
     value_fn: Callable[[dict[str, float]], float]
+    series_fn: Callable[[list[dict[str, Any]]], list[float]] | None = None
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -66,6 +67,58 @@ def _safe_ratio(num: float, den: float) -> float:
     if abs(den) < 1e-12:
         return 0.0
     return num / den
+
+
+def _prior_mean(values: list[float], idx: int, window: int) -> float | None:
+    if idx < window:
+        return None
+    sample = values[idx - window:idx]
+    if not sample:
+        return None
+    return _mean(sample)
+
+
+def _input_series(rows: list[dict[str, Any]], key: str) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        value = _row_inputs(row).get(key, 0.0)
+        if math.isfinite(value):
+            values.append(value)
+    return values
+
+
+def _calendar_series(rows: list[dict[str, Any]], key: str, *, window: int = 21) -> list[float]:
+    """Front mark minus trailing prior-mark term proxy.
+
+    The term proxy excludes the current row, so this remains no-lookahead even
+    though the repo does not yet have a real forward GPU or power curve.
+    """
+    values = _input_series(rows, key)
+    out: list[float] = []
+    for idx, value in enumerate(values):
+        term = _prior_mean(values, idx, window)
+        if term is None:
+            continue
+        out.append(value - term)
+    return out
+
+
+def _calendar_pct_basis_series(rows: list[dict[str, Any]], *, window: int = 21) -> list[float]:
+    """Prompt compute premium minus prompt electricity premium.
+
+    Values are ratios, not dollars. This is a curve-shape basis: it asks
+    whether front GPU rentals are tightening faster than front power marks.
+    """
+    compute = _input_series(rows, "compute_per_gpu_hr")
+    power = _input_series(rows, "electricity_per_mwh")
+    out: list[float] = []
+    for idx in range(min(len(compute), len(power))):
+        compute_term = _prior_mean(compute, idx, window)
+        power_term = _prior_mean(power, idx, window)
+        if compute_term is None or power_term is None:
+            continue
+        out.append(_safe_ratio(compute[idx] - compute_term, compute_term) - _safe_ratio(power[idx] - power_term, power_term))
+    return out
 
 
 SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
@@ -109,6 +162,39 @@ SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
         trade_rule="Mean-revert: short when z is high, long when z is low.",
         value_fn=lambda x: x["compute_per_gpu_hr"] - x["raw_power_cost_per_gpu_hr"],
     ),
+    SpreadFamily(
+        family_id="compute_prompt_calendar_21d",
+        archetype_id="compute_calendar_spread",
+        label="Compute prompt calendar proxy",
+        formula="spot GPU rental - prior 21-mark GPU rental average",
+        unit="USD/GPU-hr",
+        expensive_side="High = front compute tight versus trailing term proxy.",
+        trade_rule="Mean-revert or momentum depending on replay mode; no current mark enters the term proxy.",
+        value_fn=lambda x: 0.0,
+        series_fn=lambda rows: _calendar_series(rows, "compute_per_gpu_hr", window=21),
+    ),
+    SpreadFamily(
+        family_id="electricity_prompt_calendar_21d",
+        archetype_id="electricity_calendar_spread",
+        label="Electricity prompt calendar proxy",
+        formula="front electricity $/MWh - prior 21-mark electricity average",
+        unit="USD/MWh",
+        expensive_side="High = front power tight versus trailing term proxy.",
+        trade_rule="Mean-revert or momentum depending on replay mode; no current mark enters the term proxy.",
+        value_fn=lambda x: 0.0,
+        series_fn=lambda rows: _calendar_series(rows, "electricity_per_mwh", window=21),
+    ),
+    SpreadFamily(
+        family_id="compute_power_prompt_basis_21d",
+        archetype_id="compute_power_calendar_basis",
+        label="Compute-power prompt basis",
+        formula="compute prompt premium % - electricity prompt premium %",
+        unit="ratio",
+        expensive_side="High = front compute tightening faster than front power.",
+        trade_rule="Mean-revert or momentum depending on replay mode; both terms use prior 21 marks only.",
+        value_fn=lambda x: 0.0,
+        series_fn=lambda rows: _calendar_pct_basis_series(rows, window=21),
+    ),
 )
 
 
@@ -125,6 +211,27 @@ ELECTRICITY_INDEX_CATALOG = [
         "label": "EIA PJM/data-center corridor electricity proxy",
         "venue": "EIA public feed",
         "role": "regional power index for US-East compute loads",
+        "status": "planned",
+    },
+    {
+        "id": "ercot_hub_rt_lmp",
+        "label": "ERCOT hub real-time LMP",
+        "venue": "ERCOT market data",
+        "role": "physical prompt power index for Texas datacenter load",
+        "status": "planned",
+    },
+    {
+        "id": "pjm_da_rt_lmp",
+        "label": "PJM day-ahead / real-time LMP",
+        "venue": "PJM market data",
+        "role": "physical prompt power index for US-East datacenter load",
+        "status": "planned",
+    },
+    {
+        "id": "caiso_sp15_np15_lmp",
+        "label": "CAISO SP15/NP15 LMP",
+        "venue": "CAISO OASIS",
+        "role": "physical prompt power index for California compute loads",
         "status": "planned",
     },
     {
@@ -176,6 +283,13 @@ ELECTRICITY_INDEX_CATALOG = [
         "role": "liquid public power-beneficiary proxy",
         "status": "proxy",
     },
+    {
+        "id": "power_curve_prompt_term_proxy",
+        "label": "Prompt vs trailing-term electricity curve proxy",
+        "venue": "derived from physical or public proxy marks",
+        "role": "calendar-spread input for front power tightness",
+        "status": "derived_active",
+    },
 ]
 
 COMPUTE_INDEX_CATALOG = [
@@ -185,6 +299,27 @@ COMPUTE_INDEX_CATALOG = [
         "venue": "AWS public spot feed",
         "role": "primary live compute mark",
         "status": "active",
+    },
+    {
+        "id": "aws_gpu_region_basis",
+        "label": "AWS p5/p4d regional spot basis",
+        "venue": "AWS public spot feed",
+        "role": "regional compute rental basis",
+        "status": "planned",
+    },
+    {
+        "id": "gcp_a3_gpu_price",
+        "label": "GCP A3 / H100 GPU rental marks",
+        "venue": "GCP public price pages",
+        "role": "cloud GPU rental benchmark",
+        "status": "planned",
+    },
+    {
+        "id": "azure_nc_h100_price",
+        "label": "Azure NC H100 GPU rental marks",
+        "venue": "Azure public price pages",
+        "role": "cloud GPU rental benchmark",
+        "status": "planned",
     },
     {
         "id": "silicondata_h100_rental",
@@ -242,6 +377,13 @@ COMPUTE_INDEX_CATALOG = [
         "role": "direct miner revenue per hash proxy",
         "status": "planned",
     },
+    {
+        "id": "compute_curve_prompt_term_proxy",
+        "label": "Spot vs trailing-term compute curve proxy",
+        "venue": "derived from GPU rental marks",
+        "role": "calendar-spread input for prompt compute tightness",
+        "status": "derived_active",
+    },
 ]
 
 SPREAD_ARCHETYPE_CATALOG = [
@@ -280,10 +422,26 @@ SPREAD_ARCHETYPE_CATALOG = [
     {
         "id": "compute_calendar_spread",
         "label": "Compute calendar spread",
-        "formula": "front GPU-hour rental - forward/term GPU-hour rental",
+        "formula": "front GPU-hour rental - prior term-proxy GPU-hour rental",
         "oil_analogy": "front-month calendar spread",
-        "status": "planned",
-        "required_indexes": ["spot GPU rental", "term/forward GPU rental"],
+        "status": "derived_active",
+        "required_indexes": ["spot GPU rental", "prior-mark term proxy"],
+    },
+    {
+        "id": "electricity_calendar_spread",
+        "label": "Electricity calendar spread",
+        "formula": "front electricity $/MWh - prior term-proxy electricity $/MWh",
+        "oil_analogy": "prompt power calendar spread",
+        "status": "derived_active",
+        "required_indexes": ["front electricity mark", "prior-mark term proxy"],
+    },
+    {
+        "id": "compute_power_calendar_basis",
+        "label": "Compute-power calendar basis",
+        "formula": "compute prompt premium % - electricity prompt premium %",
+        "oil_analogy": "calendar crack / curve-shape basis",
+        "status": "derived_active",
+        "required_indexes": ["spot GPU rental history", "front electricity history"],
     },
     {
         "id": "fuel_stack_compute_spread",
@@ -380,8 +538,11 @@ def _status(
 
 
 def _series(rows: Iterable[dict[str, Any]], family: SpreadFamily) -> list[float]:
+    row_list = list(rows)
+    if family.series_fn is not None:
+        return [value for value in family.series_fn(row_list) if math.isfinite(value)]
     values: list[float] = []
-    for row in rows:
+    for row in row_list:
         inputs = _row_inputs(row)
         value = family.value_fn(inputs)
         if math.isfinite(value):

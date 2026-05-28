@@ -18,6 +18,14 @@ from agent.spread_family_backtest import SPREAD_ARCHETYPE_CATALOG
 
 SYNTHETIC_INSTRUMENT_VERSION = "synthetic_instrument_v1"
 DIRECT_SURFACES = {"polymarket", "ibkr_prediction", "kalshi"}
+VENUE_COPY_ORDER = {
+    "polymarket": 0,
+    "kalshi": 1,
+    "ibkr_prediction": 2,
+    "public_market": 3,
+    "crypto": 4,
+    "opoint_nebius": 5,
+}
 DEFAULT_DEMO_GPU_HOURS = 5_000.0
 DEFAULT_GPU_KWH = 0.7
 DEFAULT_HEDGE_RATIO = 0.35
@@ -1326,6 +1334,7 @@ def _syndicated_instrument_menu(
             has_direct_legs=direct_ready,
         )
         trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else {}
+        paper_trade_replay = basket.get("paper_trade_replay") if isinstance(basket.get("paper_trade_replay"), dict) else {}
         rows.append({
             **template,
             "region": region_profile.get("region"),
@@ -1344,6 +1353,7 @@ def _syndicated_instrument_menu(
             "win_rate": _round_units(basket.get("win_rate")),
             "max_drawdown_pct": _round_units(basket.get("max_drawdown_pct")),
             "trailing_returns": trailing,
+            "paper_trade_replay": paper_trade_replay,
             "required_symbols": required_symbols,
             "priced_symbols": priced,
             "missing_symbols": [symbol for symbol in required_symbols if symbol not in priced],
@@ -1522,6 +1532,8 @@ def _spread_archetype_trade_map(
             basket_id = _text(structure.get("basket_id"))
             basket = baskets_by_id.get(basket_id, {})
             trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else structure.get("trailing_returns", {})
+            recent_marks = basket.get("recent_index_marks") if isinstance(basket.get("recent_index_marks"), list) else structure.get("recent_index_marks", [])
+            paper_trade_replay = basket.get("paper_trade_replay") if isinstance(basket.get("paper_trade_replay"), dict) else structure.get("paper_trade_replay", {})
             expression_rows.append({
                 "instrument_type": structure.get("instrument_type"),
                 "title": structure.get("title"),
@@ -1538,6 +1550,8 @@ def _spread_archetype_trade_map(
                 "return_1m_pct": ((trailing.get("1m") or {}).get("return_pct") if isinstance(trailing.get("1m"), dict) else ""),
                 "total_return_pct": _round_units(_first_nonempty(basket.get("total_return_pct"), structure.get("total_return_pct"), default=0)),
                 "win_rate": _round_units(_first_nonempty(basket.get("win_rate"), structure.get("win_rate"), default=0)),
+                "recent_index_marks": recent_marks,
+                "paper_trade_replay": paper_trade_replay,
                 "priced_symbols": structure.get("priced_symbols") or [],
                 "missing_symbols": structure.get("missing_symbols") or [],
                 "direct_leg_target": structure.get("direct_leg_target"),
@@ -1556,18 +1570,18 @@ def _spread_archetype_trade_map(
         elif selected_signal == "SELL" or "AVOID" in selected_status:
             action = "AVOID_OR_SELL"
             reason = _text(selected.get("status_reason"), "Mapped proxy basket says sell/avoid.")
+        elif replay_status == "NEEDS_INDEX_HISTORY":
+            action = "NEEDS_INDEX_HISTORY"
+            reason = "Required index history is not available yet, so proxy PnL alone cannot promote a fresh buy."
+        elif not replay_promotable:
+            action = "WAIT_FOR_SPREAD_REPLAY"
+            reason = _text(replay.get("status_reason"), "Mapped proxy expression is constructive, but spread replay has not cleared the promotion gate.")
         elif selected_signal == "BUY" and selected_status in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE"}:
             action = selected_status
             reason = _text(selected.get("status_reason"), "Mapped proxy basket says buy, but Arc still needs the judge gate.")
         elif replay_promotable and selected_signal in {"BUY", "HOLD"}:
             action = "PAPER_BUY_CANDIDATE"
             reason = "Spread replay and mapped proxy expression are both constructive."
-        elif replay_promotable:
-            action = "SPREAD_REPLAY_ONLY"
-            reason = "Spread replay is promotable, but mapped proxy expression is not yet confirming a fresh buy."
-        elif replay_status == "NEEDS_INDEX_HISTORY":
-            action = "NEEDS_INDEX_HISTORY"
-            reason = "Required index history is not available yet."
         else:
             action = "MONITOR"
             reason = _text(replay.get("status_reason"), _text(selected.get("status_reason"), "Keep monitoring replay and venue evidence."))
@@ -1599,9 +1613,10 @@ def _spread_archetype_trade_map(
         "PAPER_BUY_CANDIDATE": 2,
         "AVOID_OR_SELL": 3,
         "SPREAD_REPLAY_ONLY": 4,
-        "MONITOR": 5,
-        "NEEDS_INDEX_HISTORY": 6,
-        "NEEDS_EXPRESSION": 7,
+        "WAIT_FOR_SPREAD_REPLAY": 5,
+        "MONITOR": 6,
+        "NEEDS_INDEX_HISTORY": 7,
+        "NEEDS_EXPRESSION": 8,
     }
     rows.sort(key=lambda row: (
         0 if (row.get("selected_expression") or {}).get("direction_aligned") else 1,
@@ -1613,7 +1628,59 @@ def _spread_archetype_trade_map(
     return rows
 
 
-def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, Any]:
+def _scaled_recent_paper_marks(recent_marks: list[dict[str, Any]], notional_usdc: float) -> list[dict[str, Any]]:
+    if not recent_marks:
+        return []
+    notional = max(0.0, _num(notional_usdc))
+    rows: list[dict[str, Any]] = []
+    for idx, mark in enumerate(recent_marks):
+        pnl_pct = _num(mark.get("paper_return_since_entry_pct"))
+        daily_pct = _num(mark.get("daily_return_pct"))
+        rows.append({
+            "date": mark.get("date") or "",
+            "index_close": _round_units(mark.get("index_close")),
+            "daily_return_pct": _round_units(daily_pct),
+            "paper_return_since_entry_pct": _round_units(pnl_pct),
+            "paper_pnl_usdc": _round_money(notional * pnl_pct / 100.0),
+            "daily_pnl_usdc": _round_money(0.0 if idx == 0 else notional * daily_pct / 100.0),
+        })
+    return rows
+
+
+def _scale_trade_pnl(value_pct: Any, notional_usdc: float) -> float:
+    return _round_money(max(0.0, _num(notional_usdc)) * _num(value_pct) / 100.0)
+
+
+def _scaled_paper_trade_replay(replay: dict[str, Any], notional_usdc: float) -> dict[str, Any]:
+    if not replay:
+        return {}
+    closed_trades: list[dict[str, Any]] = []
+    for trade in replay.get("closed_trades") or []:
+        if not isinstance(trade, dict):
+            continue
+        closed_trades.append({
+            **trade,
+            "pnl_usdc": _scale_trade_pnl(trade.get("return_pct"), notional_usdc),
+        })
+    open_trade = replay.get("open_trade") if isinstance(replay.get("open_trade"), dict) else None
+    scaled_open = None
+    if open_trade:
+        scaled_open = {
+            **open_trade,
+            "pnl_usdc": _scale_trade_pnl(open_trade.get("return_pct"), notional_usdc),
+        }
+    return {
+        **replay,
+        "closed_trades": closed_trades,
+        "open_trade": scaled_open,
+        "paper_notional_usdc": _round_money(notional_usdc),
+        "realized_pnl_usdc": _scale_trade_pnl(replay.get("realized_return_pct"), notional_usdc),
+        "open_pnl_usdc": _scale_trade_pnl(replay.get("open_return_pct"), notional_usdc),
+        "total_pnl_usdc": _scale_trade_pnl(replay.get("total_return_pct"), notional_usdc),
+    }
+
+
+def _spread_profitability_ledger(trade_map: list[dict[str, Any]], *, paper_notional_usdc: float = 0.0) -> dict[str, Any]:
     """Rank spread expressions by actionable paper profitability.
 
     The ledger is deliberately labelled as paper replay. It uses public proxy
@@ -1628,6 +1695,15 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, A
         ret_1m = selected.get("return_1m_pct", "")
         total_return = selected.get("total_return_pct", "")
         replay_pnl = item.get("total_pnl_per_unit", 0)
+        recent_marks = _scaled_recent_paper_marks(
+            selected.get("recent_index_marks") if isinstance(selected.get("recent_index_marks"), list) else [],
+            paper_notional_usdc,
+        )
+        trade_replay = _scaled_paper_trade_replay(
+            selected.get("paper_trade_replay") if isinstance(selected.get("paper_trade_replay"), dict) else {},
+            paper_notional_usdc,
+        )
+        latest_mark = recent_marks[-1] if recent_marks else {}
         supports_buy = action in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE", "PAPER_BUY_CANDIDATE"} and latest_signal in {"BUY", "HOLD"}
         requires_close = "AVOID" in action or latest_signal == "SELL"
         if supports_buy:
@@ -1636,6 +1712,8 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, A
             status = "SELL_OR_AVOID"
         elif action == "SPREAD_REPLAY_ONLY":
             status = "WAIT_FOR_PROXY_CONFIRMATION"
+        elif action == "WAIT_FOR_SPREAD_REPLAY":
+            status = "WAIT_FOR_SPREAD_REPLAY"
         elif action in {"NEEDS_INDEX_HISTORY", "NEEDS_EXPRESSION"}:
             status = action
         else:
@@ -1658,6 +1736,19 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, A
             "paper_1m_return_pct": ret_1m,
             "paper_total_return_pct": total_return,
             "paper_win_rate": selected.get("win_rate", 0),
+            "paper_notional_usdc": _round_money(paper_notional_usdc),
+            "recent_paper_marks": recent_marks,
+            "latest_paper_mark": latest_mark,
+            "latest_paper_pnl_usdc": latest_mark.get("paper_pnl_usdc", ""),
+            "latest_paper_return_pct": latest_mark.get("paper_return_since_entry_pct", ""),
+            "paper_trade_replay": trade_replay,
+            "paper_trade_action": trade_replay.get("latest_trade_action", ""),
+            "paper_trade_total_pnl_usdc": trade_replay.get("total_pnl_usdc", ""),
+            "paper_trade_realized_pnl_usdc": trade_replay.get("realized_pnl_usdc", ""),
+            "paper_trade_open_pnl_usdc": trade_replay.get("open_pnl_usdc", ""),
+            "paper_trade_hit_rate": trade_replay.get("hit_rate", ""),
+            "paper_trade_closed_count": trade_replay.get("closed_trade_count", 0),
+            "paper_trade_open_count": trade_replay.get("open_trade_count", 0),
             "priced_symbols": selected.get("priced_symbols") or [],
             "missing_symbols": selected.get("missing_symbols") or [],
             "supports_fresh_buy": supports_buy,
@@ -1668,9 +1759,10 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, A
         "PAPER_BUY": 0,
         "SELL_OR_AVOID": 1,
         "WAIT_FOR_PROXY_CONFIRMATION": 2,
-        "MONITOR": 3,
-        "NEEDS_INDEX_HISTORY": 4,
-        "NEEDS_EXPRESSION": 5,
+        "WAIT_FOR_SPREAD_REPLAY": 3,
+        "MONITOR": 4,
+        "NEEDS_INDEX_HISTORY": 5,
+        "NEEDS_EXPRESSION": 6,
     }
     rows.sort(key=lambda row: (
         status_rank.get(str(row.get("profitability_status")), 9),
@@ -1687,7 +1779,8 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, A
         "version": "spread_profitability_ledger_v1",
         "source": "spread_replay_plus_public_proxy_replay",
         "realized": False,
-        "realized_note": "These are replay and live paper signals, not reconciled fills or settled PnL.",
+        "paper_notional_usdc": _round_money(paper_notional_usdc),
+        "realized_note": "These are replay and live paper marks scaled to mock notional, not reconciled fills or settled PnL.",
         "best_buy_candidate": best_buy,
         "first_avoid_candidate": first_avoid,
         "counts": {
@@ -1697,6 +1790,170 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]]) -> dict[str, A
             "monitor": sum(1 for row in rows if row.get("profitability_status") == "MONITOR"),
         },
         "rows": rows,
+    }
+
+
+def _venue_copy_role(row: dict[str, Any]) -> tuple[str, str]:
+    surface = _text(row.get("surface"))
+    evidence_only = bool(row.get("evidence_only"))
+    direct = bool(row.get("direct_event_surface")) or surface in DIRECT_SURFACES
+    if evidence_only or surface == "opoint_nebius":
+        return "evidence_only", "News/LLM evidence only; cannot define or price the instrument."
+    if surface == "public_market":
+        return "liquid_proxy_hedge", "Public equities/futures are liquid proxy legs for sizing and mark-to-market."
+    if surface == "crypto":
+        return "miner_margin_proxy", "BTC/ETH are only miner-margin proxies when power cost matters."
+    if direct:
+        return "direct_event_leg", "Prediction/forecast contract can be a direct leg if priced, thesis-matched, and judged."
+    return "research_surface", "Research surface; keep scouting until role and pricing are explicit."
+
+
+def _surface_sample_legs(
+    surface: str,
+    *,
+    direct_inventory: list[dict[str, Any]],
+    hedge_basket: list[dict[str, Any]],
+    direct_legs: list[dict[str, Any]],
+    oracle_evidence: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if surface == "public_market":
+        rows = [leg for leg in hedge_basket if leg.get("surface") in {"public_market", "ibkr"}]
+    elif surface == "crypto":
+        rows = [
+            leg for leg in hedge_basket
+            if "BTC" in str(leg.get("slug") or leg.get("instrument") or "") or "ETH" in str(leg.get("slug") or leg.get("instrument") or "")
+        ]
+    elif surface == "opoint_nebius":
+        rows = [{
+            "surface": "opoint_nebius",
+            "leg_title": oracle_evidence.get("latest_title") or "latest oracle receipt",
+            "leg_slug": oracle_evidence.get("latest_slug") or oracle_evidence.get("oracle_evidence_hash") or "oracle-evidence",
+            "direct_pair_role": "news-grounded evidence only",
+            "pricing_status": oracle_evidence.get("latest_verdict") or oracle_evidence.get("status") or "EVIDENCE",
+        }]
+    else:
+        rows = [leg for leg in direct_inventory if _text(leg.get("surface")) == surface]
+        if not rows:
+            rows = [leg for leg in direct_legs if _text(leg.get("surface")) == surface]
+    return _dedupe_legs(rows, limit=4)
+
+
+def _venue_spread_links(surface: str, copy_role: str, spread_trade_map: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    linked: list[dict[str, Any]] = []
+    for item in spread_trade_map:
+        selected = item.get("selected_expression") if isinstance(item.get("selected_expression"), dict) else {}
+        direct_ready = bool(selected.get("direct_leg_target_ready"))
+        basket_id = _text(selected.get("basket_id"))
+        include = False
+        if copy_role == "direct_event_leg":
+            include = direct_ready
+        elif copy_role == "liquid_proxy_hedge":
+            include = bool(basket_id)
+        elif copy_role == "miner_margin_proxy":
+            include = basket_id == "miner_margin_power_pair" or "miner" in _text(item.get("label")).lower()
+        elif copy_role == "evidence_only":
+            include = bool(item.get("archetype_id"))
+        if not include:
+            continue
+        linked.append({
+            "archetype_id": item.get("archetype_id"),
+            "label": item.get("label"),
+            "action": item.get("tradability_action"),
+            "replay_status": item.get("replay_status"),
+            "latest_signal": selected.get("latest_signal") or "MONITOR",
+            "basket_id": basket_id,
+        })
+        if len(linked) >= 4:
+            break
+    return linked
+
+
+def _venue_copy_status(row: dict[str, Any], copy_role: str) -> tuple[str, str]:
+    status = _text(row.get("status"), "UNKNOWN")
+    priced = _num(row.get("priced_count"))
+    proxy = _num(row.get("external_proxy_count"))
+    if copy_role == "evidence_only":
+        return "EVIDENCE_ONLY", "Use as support/critique evidence; never as execution or collateral."
+    if copy_role == "liquid_proxy_hedge":
+        return ("PROXY_LIVE" if priced > 0 else "NEEDS_PROXY_PRICE", "Liquid proxy basket can mark PnL, but is not a direct compute/power claim.")
+    if copy_role == "miner_margin_proxy":
+        return ("PROXY_LIVE" if priced > 0 else "NEEDS_PROXY_PRICE", "Use only for miner-margin/power-cost packages, not generic compute securitization.")
+    if copy_role == "direct_event_leg":
+        if status == "LIVE_PRICED" and priced > 0:
+            if row.get("premium_gate_required"):
+                return "NEEDS_PREMIUM_AND_JUDGE", "Run premium scorer, pair with the opposite leg, then judge.classify()."
+            return "NEEDS_JUDGE_PAIR", "Pair with the opposite energy/compute leg, then judge.classify()."
+        if proxy > 0:
+            return "DIRECT_METADATA_PROXY_PRICED", "Direct venue contract is identified, but only external proxy marks are priced."
+        return "NEEDS_DIRECT_PRICE", "Fetch venue bid/ask/last before promotion."
+    return "SCOUTING", "Keep in research until pricing and spread linkage are explicit."
+
+
+def _real_venue_copy_matrix(
+    *,
+    venue_evidence: dict[str, Any] | None,
+    direct_inventory: list[dict[str, Any]],
+    hedge_basket: list[dict[str, Any]],
+    direct_legs: list[dict[str, Any]],
+    spread_trade_map: list[dict[str, Any]],
+    oracle_judge_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    evidence_rows = [
+        row for row in ((venue_evidence or {}).get("rows") or [])
+        if isinstance(row, dict)
+    ]
+    rows: list[dict[str, Any]] = []
+    for source_row in evidence_rows:
+        surface = _text(source_row.get("surface"))
+        copy_role, role_note = _venue_copy_role(source_row)
+        copy_status, action = _venue_copy_status(source_row, copy_role)
+        sample_legs = _surface_sample_legs(
+            surface,
+            direct_inventory=direct_inventory,
+            hedge_basket=hedge_basket,
+            direct_legs=direct_legs,
+            oracle_evidence=oracle_judge_evidence,
+        )
+        spread_links = _venue_spread_links(surface, copy_role, spread_trade_map)
+        rows.append({
+            "surface": surface,
+            "label": source_row.get("label") or surface,
+            "feed_status": source_row.get("status") or "UNKNOWN",
+            "copy_status": copy_status,
+            "copy_role": copy_role,
+            "role_note": role_note,
+            "action": action,
+            "real_feed": bool(source_row.get("real_feed")),
+            "direct_event_surface": bool(source_row.get("direct_event_surface")),
+            "evidence_only": bool(source_row.get("evidence_only")),
+            "premium_gate_required": bool(source_row.get("premium_gate_required")),
+            "judge_required": True,
+            "can_drive_arc": False,
+            "priced_count": int(_num(source_row.get("priced_count"))),
+            "watchlist_count": int(_num(source_row.get("watchlist_count"))),
+            "external_proxy_count": int(_num(source_row.get("external_proxy_count"))),
+            "latest_title": source_row.get("latest_title") or "",
+            "latest_slug": source_row.get("latest_slug") or "",
+            "sample_legs": sample_legs,
+            "spread_links": spread_links,
+            "gaps": source_row.get("gaps") or [],
+        })
+    rows.sort(key=lambda row: (
+        VENUE_COPY_ORDER.get(str(row.get("surface")), 99),
+        str(row.get("surface") or ""),
+    ))
+    return {
+        "version": "real_venue_copy_matrix_v1",
+        "rows": rows,
+        "summary": {
+            "surfaces": len(rows),
+            "direct_event_surfaces": sum(1 for row in rows if row.get("direct_event_surface")),
+            "proxy_surfaces": sum(1 for row in rows if str(row.get("copy_role")).endswith("proxy") or row.get("copy_role") == "liquid_proxy_hedge"),
+            "evidence_only_surfaces": sum(1 for row in rows if row.get("evidence_only")),
+            "priced_surfaces": sum(1 for row in rows if _num(row.get("priced_count")) > 0),
+            "arc_ready_surfaces": 0,
+        },
+        "guardrail": "Venue rows can copy or evidence the package, but no Circle/Arc action can happen before judge.classify() returns EXECUTE.",
     }
 
 
@@ -1712,6 +1969,7 @@ def propose_synthetic_instrument(
     spread_family_validation: dict[str, Any] | None = None,
     proxy_basket_validation: dict[str, Any] | None = None,
     oracle_evidence: dict[str, Any] | None = None,
+    venue_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the current agent-authored instrument proposal.
 
@@ -1779,7 +2037,10 @@ def propose_synthetic_instrument(
         proxy_basket_validation=proxy_basket_validation,
         syndicated_menu=syndicated_menu,
     )
-    profitability_ledger = _spread_profitability_ledger(spread_trade_map)
+    profitability_ledger = _spread_profitability_ledger(
+        spread_trade_map,
+        paper_notional_usdc=_num(mock_construction.get("hedge_notional_usdc")),
+    )
     operator_signal_sheet = _operator_signal_sheet(
         direction=direction,
         mock_construction=mock_construction,
@@ -1797,6 +2058,14 @@ def propose_synthetic_instrument(
     )
     agent_search_plan = _agent_search_plan(region_profile, direction_profile, direct_legs, discovery_gaps)
     oracle_judge_evidence = _oracle_judge_evidence(oracle_evidence)
+    real_venue_copy_matrix = _real_venue_copy_matrix(
+        venue_evidence=venue_evidence,
+        direct_inventory=direct_inventory,
+        hedge_basket=hedge_basket,
+        direct_legs=direct_legs,
+        spread_trade_map=spread_trade_map,
+        oracle_judge_evidence=oracle_judge_evidence,
+    )
 
     thesis = (
         f"Hedge a forward compute sale in {region_profile['short_name']} against AI compute demand. "
@@ -1877,6 +2146,7 @@ def propose_synthetic_instrument(
             "spread_archetype_trade_map": spread_trade_map,
             "spread_profitability_ledger": profitability_ledger,
             "operator_signal_sheet": operator_signal_sheet,
+            "real_venue_copy_matrix": real_venue_copy_matrix,
             "spread_family_validation": spread_family_validation or {},
             "proxy_basket_validation": proxy_basket_validation or {},
             "oracle_judge_evidence": oracle_judge_evidence,

@@ -41,6 +41,15 @@ def test_proxy_basket_replay_promotes_profitable_template():
     assert replay["total_return_pct"] > 0
     assert replay["win_rate"] >= 45
     assert replay["trailing_returns"]["5d"]["return_pct"] > 0
+    assert len(replay["recent_index_marks"]) == 7
+    assert replay["recent_index_marks"][0]["paper_return_since_entry_pct"] == 0.0
+    assert replay["recent_index_marks"][-1]["paper_return_since_entry_pct"] > 0
+    assert replay["recent_entry_date"] == replay["recent_index_marks"][0]["date"]
+    assert replay["recent_exit_date"] == replay["recent_index_marks"][-1]["date"]
+    assert replay["paper_trade_replay"]["version"] == "proxy_paper_trade_replay_v1"
+    assert replay["paper_trade_replay"]["latest_trade_action"] == "HOLD_OPEN"
+    assert replay["paper_trade_replay"]["open_trade"]["return_pct"] > 0
+    assert replay["paper_trade_replay"]["total_return_pct"] > 0
 
 
 def test_proxy_basket_replay_fails_loss_making_template():
@@ -61,6 +70,8 @@ def test_proxy_basket_replay_fails_loss_making_template():
     assert replay["recommendation"] == "SELL_OR_AVOID"
     assert replay["latest_signal"] == "SELL"
     assert replay["total_return_pct"] < 0
+    assert replay["paper_trade_replay"]["latest_trade_action"] in {"CLOSE_OR_SELL", "WAIT"}
+    assert replay["paper_trade_replay"]["open_trade_count"] == 0
 
 
 def test_proxy_basket_summary_keeps_missing_data_as_monitor_only():

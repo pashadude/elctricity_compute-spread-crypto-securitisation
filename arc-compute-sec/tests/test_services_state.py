@@ -64,6 +64,29 @@ def test_runtime_status_json_is_included(tmp_path, monkeypatch):
     assert state.snapshot()["runtime"] == {"state": "idle", "last_error": ""}
 
 
+def test_telegram_campaign_state_reads_sent_keys_without_message_bodies(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    (tmp_path / "telegram_sent.jsonl").write_text(
+        "\n".join([
+            json.dumps({"ts": 1, "key": "channel-campaign:v1:indexes-spreads", "text": "must-not-leak"}),
+            json.dumps({"ts": 2, "key": "channel-campaign:v1:profitability"}),
+        ])
+    )
+
+    campaign = state.telegram_campaign_state()
+
+    assert campaign["version"] == "telegram_campaign_state_v1"
+    assert campaign["channel_configured"] is True
+    assert campaign["total_posts"] == 4
+    assert campaign["posted_count"] == 2
+    assert campaign["pending_count"] == 2
+    assert campaign["status"] == "READY_TO_POST"
+    assert campaign["posts"][0]["status"] == "POSTED"
+    assert campaign["posts"][2]["status"] == "READY_TO_POST"
+    assert "must-not-leak" not in json.dumps(campaign)
+
+
 def test_snapshot_includes_spread_family_replay_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     rows = []

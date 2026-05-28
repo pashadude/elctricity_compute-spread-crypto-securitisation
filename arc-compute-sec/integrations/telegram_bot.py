@@ -5,6 +5,8 @@ import argparse
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ CHANNEL_FEEDBACK_UPDATE_KEY = "channel-feedback-update:v1"
 CHANNEL_MARKET_DATA_UPDATE_KEY = "channel-market-data-update:v1"
 CHANNEL_INSTRUMENT_MENU_UPDATE_KEY = "channel-instrument-menu-update:v1"
 CHANNEL_PROFITABILITY_UPDATE_KEY = "channel-profitability-update:v1"
+CHANNEL_CAMPAIGN_PREFIX = "channel-campaign:v1"
 
 
 def admin_ids() -> set[str]:
@@ -231,6 +234,15 @@ def _fmt_operator_pct(value: Any) -> str:
         return ""
 
 
+def _fmt_operator_usd(value: Any) -> str:
+    if value in ("", None):
+        return ""
+    try:
+        return f"${float(value):+,.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
 def _operator_row_line(row: dict[str, Any]) -> str:
     label = str(row.get("label") or row.get("key") or "signal row")
     action = str(row.get("action") or row.get("signal") or "MONITOR")
@@ -342,6 +354,20 @@ def _profitability_ledger_line(snap: dict[str, Any], *, limit: int = 3) -> str:
             metrics.append(f"5d {five_day}")
         if one_month:
             metrics.append(f"1m {one_month}")
+        latest_pnl = _fmt_operator_usd(row.get("latest_paper_pnl_usdc"))
+        latest_ret = _fmt_operator_pct(row.get("latest_paper_return_pct"))
+        if latest_pnl:
+            metrics.append(f"mark {latest_pnl}" + (f" / {latest_ret}" if latest_ret else ""))
+        ticket_pnl = _fmt_operator_usd(row.get("paper_trade_total_pnl_usdc"))
+        ticket_action = row.get("paper_trade_action") or ""
+        ticket_hit = _fmt_operator_pct(row.get("paper_trade_hit_rate"))
+        if ticket_pnl:
+            ticket_text = f"tickets {ticket_pnl}"
+            if ticket_action:
+                ticket_text += f" {ticket_action}"
+            if ticket_hit:
+                ticket_text += f" hit {ticket_hit}"
+            metrics.append(ticket_text)
         metric_text = ", ".join(metrics) if metrics else "paper replay"
         parts.append(f"{label}:{status}/{signal} ({metric_text})")
     note = "not realized PnL" if ledger.get("realized") is False else "ledger"
@@ -374,6 +400,26 @@ def _venue_evidence_line(snap: dict[str, Any]) -> str:
             suffix += f", {proxy} proxy"
         compact.append(f"{surface}:{status} ({suffix})")
     return "venue evidence: " + "; ".join(compact) + "; Arc-ready 0 before judge EXECUTE"
+
+
+def _venue_copy_matrix_line(snap: dict[str, Any], *, limit: int = 4) -> str:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    matrix = outputs.get("real_venue_copy_matrix") if isinstance(outputs.get("real_venue_copy_matrix"), dict) else {}
+    rows = [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    parts = []
+    for row in rows[:limit]:
+        surface = row.get("surface") or "surface"
+        role = str(row.get("copy_role") or "watch").replace("_", " ")
+        status = str(row.get("copy_status") or "UNKNOWN").replace("_", " ")
+        links = row.get("spread_links") if isinstance(row.get("spread_links"), list) else []
+        link_text = ""
+        if links:
+            link_text = " -> " + ",".join(str(link.get("archetype_id") or "spread") for link in links[:2])
+        parts.append(f"{surface}:{role}/{status}{link_text}")
+    return "venue copy matrix: " + "; ".join(parts) + "; judge before Arc"
 
 
 def _oracle_line(snap: dict[str, Any]) -> str:
@@ -433,6 +479,9 @@ def format_status(snap: dict[str, Any]) -> str:
     pnl_line = _pnl_line(snap)
     if pnl_line:
         parts.append(pnl_line)
+    venue_copy_line = _venue_copy_matrix_line(snap)
+    if venue_copy_line:
+        parts.append(venue_copy_line)
     venue_line = _venue_evidence_line(snap)
     if venue_line:
         parts.append(venue_line)
@@ -508,6 +557,9 @@ def format_latest(snap: dict[str, Any]) -> str:
         pnl_line = _pnl_line(snap)
         if pnl_line:
             lines.append(pnl_line)
+        venue_copy_line = _venue_copy_matrix_line(snap)
+        if venue_copy_line:
+            lines.append(venue_copy_line)
         venue_line = _venue_evidence_line(snap)
         if venue_line:
             lines.append(venue_line)
@@ -897,6 +949,158 @@ def channel_profitability_update_message() -> str:
     ])
 
 
+def _index_catalog_counts(snap: dict[str, Any]) -> dict[str, int]:
+    spread_families = snap.get("spread_families") if isinstance(snap.get("spread_families"), dict) else {}
+    catalog = spread_families.get("index_catalog") if isinstance(spread_families.get("index_catalog"), dict) else {}
+    return {
+        "electricity": len(catalog.get("electricity") or []),
+        "compute": len(catalog.get("compute") or []),
+        "spreads": len(catalog.get("spread_archetypes") or []),
+    }
+
+
+def _profitability_rows(snap: dict[str, Any]) -> list[dict[str, Any]]:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    ledger = outputs.get("spread_profitability_ledger") if isinstance(outputs.get("spread_profitability_ledger"), dict) else {}
+    return [row for row in (ledger.get("rows") or []) if isinstance(row, dict)]
+
+
+def _venue_copy_rows(snap: dict[str, Any]) -> list[dict[str, Any]]:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    matrix = outputs.get("real_venue_copy_matrix") if isinstance(outputs.get("real_venue_copy_matrix"), dict) else {}
+    return [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
+
+
+def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return the operator-reviewed campaign posts without sending them."""
+    counts = _index_catalog_counts(snap)
+    ledger_rows = _profitability_rows(snap)
+    best = next((row for row in ledger_rows if row.get("profitability_status") == "PAPER_BUY"), ledger_rows[0] if ledger_rows else {})
+    avoid = next((row for row in ledger_rows if str(row.get("profitability_status")).upper().startswith("SELL")), {})
+    venue_rows = _venue_copy_rows(snap)
+    venue_line = "; ".join(
+        f"{row.get('surface')}={str(row.get('copy_role') or '').replace('_', ' ')}"
+        for row in venue_rows[:6]
+    ) or "venue roles loading"
+    best_ticket = _fmt_operator_usd(best.get("paper_trade_total_pnl_usdc")) or "ticket replay loading"
+    best_mark = _fmt_operator_usd(best.get("latest_paper_pnl_usdc")) or "mark loading"
+    avoid_text = ""
+    if avoid:
+        avoid_text = (
+            f"\nAvoid/close example: {avoid.get('label') or avoid.get('archetype_id')} is "
+            f"{avoid.get('profitability_status')} with ticket action {avoid.get('paper_trade_action') or 'WAIT'}."
+        )
+    return [
+        (
+            f"{CHANNEL_CAMPAIGN_PREFIX}:indexes-spreads",
+            "\n".join([
+                "Power by Botozen campaign 1/4: the index layer",
+                "",
+                "We are not pretending BTC, NVDA, or one prediction market is the product.",
+                "",
+                f"The desk tracks {counts['electricity']} electricity indexes, {counts['compute']} compute indexes, and {counts['spreads']} oil-style spread forms.",
+                "",
+                "Core idea: all is compute, compute is energy, and the tradable object is the judged compute/energy spread package.",
+                "",
+                "Examples: compute spark spread, power-cost share, regional compute-power basis, compute calendar, electricity calendar, fuel-stack/miner-margin spread.",
+                "",
+                "Mini App: https://power.botozen.com/tg",
+            ]),
+        ),
+        (
+            f"{CHANNEL_CAMPAIGN_PREFIX}:profitability",
+            "\n".join([
+                "Power by Botozen campaign 2/4: profitability discipline",
+                "",
+                "Each spread has two checks before it becomes a user-facing signal:",
+                "1. no-lookahead spread-family replay",
+                "2. public proxy basket replay with simulated paper tickets",
+                "",
+                f"Current top paper candidate: {best.get('label') or best.get('archetype_id') or 'loading'}",
+                f"status: {best.get('profitability_status') or 'loading'} / {best.get('latest_signal') or 'MONITOR'}",
+                f"paper ticket PnL: {best_ticket}; latest mark PnL: {best_mark}",
+                f"ticket action: {best.get('paper_trade_action') or 'WAIT'}",
+                avoid_text,
+                "",
+                "An entry-day $0.00 mark is not a broken spread. It is just the entry mark; ticket replay shows what the proposed arb would have made after entry.",
+                "",
+                "Dashboard: https://power.botozen.com/dashboard",
+            ]),
+        ),
+        (
+            f"{CHANNEL_CAMPAIGN_PREFIX}:venue-copy",
+            "\n".join([
+                "Power by Botozen campaign 3/4: real venue roles",
+                "",
+                "The same spread package can be copied across several real surfaces, but the roles are different:",
+                venue_line,
+                "",
+                "Polymarket, Kalshi, and IBKR ForecastTrader are direct event/forecast-leg candidates when they are priced, thesis-matched, and judged.",
+                "Yahoo/IBKR public quotes and equities are liquid proxy hedges for sizing and mark-to-market.",
+                "BTC/ETH are only miner-margin proxies when power cost matters.",
+                "Opoint/Nebius is evidence only: news and LLM receipts can support a thesis but cannot execute it.",
+                "Live gate labels stay in the Mini App so this campaign does not publish stale per-venue pricing states.",
+                "",
+                "No raw REJECT/DEFER/watchlist spam belongs in this channel.",
+            ]),
+        ),
+        (
+            f"{CHANNEL_CAMPAIGN_PREFIX}:arc-collateral",
+            "\n".join([
+                "Power by Botozen campaign 4/4: what is securitized",
+                "",
+                "The securitized object is not BTC or a generic compute index.",
+                "",
+                "The product starts from a commercial exposure: a forward compute sale, GPU-hour receivable, power hedge, PPA, or metered delivery claim.",
+                "The agent then attaches direct event legs and liquid proxy hedges that are tested against the compute/energy spread.",
+                "",
+                "Arc is the wrapper: ERC-8004 identity, ERC-8183 job escrow, USDC budget, completion, reputation, and audit trail.",
+                "",
+                "Guardrail: judge.classify() first, Arc second. If the verdict is not EXECUTE, Circle and Arc stay locked.",
+                "",
+                "Repo: https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation",
+            ]),
+        ),
+    ]
+
+
+def channel_campaign_draft_text(snap: dict[str, Any]) -> str:
+    return "\n\n---\n\n".join(text for _key, text in channel_campaign_messages(snap))
+
+
+def campaign_snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
+    """Build a campaign snapshot without forcing fresh adapter probes."""
+    url = os.environ.get("TELEGRAM_CAMPAIGN_SNAPSHOT_URL", "http://127.0.0.1:8080/api/snapshot").strip()
+    if url and url not in {"0", "false", "False"}:
+        try:
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, dict) and data.get("ok") is not False:
+                return data
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+            pass
+
+    disabled = {
+        "KALSHI_DIRECT_EVENT_FETCH": "0",
+        "POLYMARKET_DIRECT_EVENT_FETCH": "0",
+        "PUBLIC_HEDGE_FETCH": "0",
+        "IBKR_FORECAST_PROXY_QUOTE_FETCH": "0",
+        "PROXY_BASKET_BACKTEST_FETCH": "0",
+    }
+    prior = {name: os.environ.get(name) for name in disabled}
+    os.environ.update(disabled)
+    try:
+        return snapshot(logs=logs)
+    finally:
+        for name, value in prior.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
     proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
     if not proposal:
@@ -1040,6 +1244,21 @@ def notify_channel_profitability_update_once(*, logs: Path | str | None = None) 
     return 1
 
 
+def notify_channel_campaign_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    count = 0
+    for key, text in channel_campaign_messages(campaign_snapshot(logs=logs)):
+        if key in sent:
+            continue
+        send_message(channel_id, text)
+        _mark_sent(key, logs=logs)
+        count += 1
+    return count
+
+
 def notify_channel_once(*, logs: Path | str | None = None) -> int:
     channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
     if not channel_id:
@@ -1095,6 +1314,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--post-market-data-update", action="store_true", help="Post the deduped IBKR/proxy market-data update")
     parser.add_argument("--post-instrument-menu-update", action="store_true", help="Post the deduped index/spread/instrument menu update")
     parser.add_argument("--post-profitability-update", action="store_true", help="Post the deduped profitability-ledger channel update")
+    parser.add_argument("--draft-campaign", action="store_true", help="Print the four-post Telegram campaign draft without sending")
+    parser.add_argument("--post-campaign", action="store_true", help="Post the deduped four-post Telegram campaign")
     args = parser.parse_args(argv)
     if args.set_webhook:
         print(json.dumps(set_webhook(), sort_keys=True))
@@ -1119,6 +1340,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.post_profitability_update:
         print(notify_channel_profitability_update_once())
+        return 0
+    if args.draft_campaign:
+        print(channel_campaign_draft_text(campaign_snapshot()))
+        return 0
+    if args.post_campaign:
+        print(notify_channel_campaign_once())
         return 0
     if args.notify_once:
         print(notify_channel_once() + notify_ibkr_reauth_reminder_once())

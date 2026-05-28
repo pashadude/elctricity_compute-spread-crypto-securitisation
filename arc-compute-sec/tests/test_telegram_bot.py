@@ -1,3 +1,5 @@
+import json
+
 from integrations import telegram_bot
 from services import scan_requests
 
@@ -150,6 +152,22 @@ def test_latest_includes_direct_inventory_watchlist():
                         "1m": {"return_pct": 6.1},
                     },
                 }],
+                "real_venue_copy_matrix": {
+                    "rows": [
+                        {
+                            "surface": "polymarket",
+                            "copy_role": "direct_event_leg",
+                            "copy_status": "NEEDS_PREMIUM_AND_JUDGE",
+                            "spread_links": [{"archetype_id": "fuel_stack_compute_spread"}],
+                        },
+                        {
+                            "surface": "public_market",
+                            "copy_role": "liquid_proxy_hedge",
+                            "copy_status": "PROXY_LIVE",
+                            "spread_links": [{"archetype_id": "fuel_stack_compute_spread"}],
+                        },
+                    ],
+                },
             },
         },
         "direct_inventory": [{
@@ -212,6 +230,8 @@ def test_latest_includes_direct_inventory_watchlist():
     assert "proxy replay: BUY/PROMOTABLE/BUY_OR_HOLD" in text
     assert "5d +2.10%" in text
     assert "settled PnL: No settled PnL" in text
+    assert "venue copy matrix: polymarket:direct event leg/NEEDS PREMIUM AND JUDGE -> fuel_stack_compute_spread" in text
+    assert "public_market:liquid proxy hedge/PROXY LIVE" in text
     assert "venue evidence: polymarket:LIVE PRICED (1 priced)" in text
     assert "ibkr_prediction:PROXY PRICED (0 priced, 1 proxy)" in text
     assert "syndicated structures:" in text
@@ -342,6 +362,11 @@ def test_latest_includes_operator_signal_sheet():
                             "latest_signal": "BUY",
                             "paper_5d_return_pct": 2.2,
                             "paper_1m_return_pct": 6.1,
+                            "latest_paper_pnl_usdc": 52.5,
+                            "latest_paper_return_pct": 2.0,
+                            "paper_trade_total_pnl_usdc": 48.0,
+                            "paper_trade_action": "HOLD_OPEN",
+                            "paper_trade_hit_rate": 50.0,
                         },
                         {
                             "archetype_id": "compute_spark_spread",
@@ -361,7 +386,7 @@ def test_latest_includes_operator_signal_sheet():
     assert "operator signal: AVOID_OR_CLOSE | compute_expensive | compute_scarcity_ai_infra" in text
     assert "Compute scarcity AI-infra basket: AVOID_OR_CLOSE/SELL/OBSERVE | 5d -0.40%, 1m -1.50%" in text
     assert "Raw compute minus power: PROMOTABLE | WR 62%" in text
-    assert "profitability ledger: Fuel-stack compute spread:PAPER_BUY/BUY (5d +2.20%, 1m +6.10%)" in text
+    assert "profitability ledger: Fuel-stack compute spread:PAPER_BUY/BUY (5d +2.20%, 1m +6.10%, mark $+52.50 / +2.00%, tickets $+48.00 HOLD_OPEN hit +50.00%)" in text
     assert "not realized PnL" in text
     assert "spread trade map: Compute spark spread:AVOID_OR_SELL/SELL via compute_scarcity_ai_infra" in text
 
@@ -638,6 +663,124 @@ def test_channel_profitability_update_dedupes(tmp_path, monkeypatch):
     assert "realized PnL remains separate" in sent[0][1]
     assert "Kalshi, Polymarket, IBKR ForecastTrader" in sent[0][1]
     assert "judge.classify() returns EXECUTE" in sent[0][1]
+
+
+def test_channel_campaign_messages_are_snapshot_grounded_and_mute_rejects():
+    snap = {
+        "spread_families": {
+            "index_catalog": {
+                "electricity": [{"id": "ercot"}, {"id": "pjm"}],
+                "compute": [{"id": "aws"}, {"id": "h100"}, {"id": "runpod"}],
+                "spread_archetypes": [{"id": "spark"}, {"id": "calendar"}],
+            },
+        },
+        "synthetic_instrument": {
+            "outputs": {
+                "spread_profitability_ledger": {
+                    "rows": [
+                        {
+                            "archetype_id": "fuel_stack_compute_spread",
+                            "label": "Fuel-stack compute spread",
+                            "profitability_status": "PAPER_BUY",
+                            "latest_signal": "BUY",
+                            "paper_trade_total_pnl_usdc": 80.15,
+                            "paper_trade_action": "HOLD_OPEN",
+                            "latest_paper_pnl_usdc": 30.21,
+                        },
+                        {
+                            "archetype_id": "compute_spark_spread",
+                            "label": "Compute spark spread",
+                            "profitability_status": "SELL_OR_AVOID",
+                            "paper_trade_action": "CLOSE_OR_SELL",
+                        },
+                    ],
+                },
+                "real_venue_copy_matrix": {
+                    "rows": [
+                        {"surface": "polymarket", "copy_role": "direct_event_leg", "copy_status": "NEEDS_PREMIUM_AND_JUDGE"},
+                        {"surface": "kalshi", "copy_role": "direct_event_leg", "copy_status": "NEEDS_JUDGE_PAIR"},
+                        {"surface": "public_market", "copy_role": "liquid_proxy_hedge", "copy_status": "PROXY_LIVE"},
+                        {"surface": "crypto", "copy_role": "miner_margin_proxy", "copy_status": "PROXY_LIVE"},
+                    ],
+                },
+            },
+        },
+        "verdicts": [{"label": "REJECT", "reason_code": "premium_gate_fail"}],
+    }
+
+    messages = telegram_bot.channel_campaign_messages(snap)
+    text = "\n".join(message for _key, message in messages)
+
+    assert len(messages) == 4
+    assert "2 electricity indexes, 3 compute indexes, and 2 oil-style spread forms" in text
+    assert "Fuel-stack compute spread" in text
+    assert "paper ticket PnL: $+80.15; latest mark PnL: $+30.21" in text
+    assert "Compute spark spread is SELL_OR_AVOID with ticket action CLOSE_OR_SELL" in text
+    assert "polymarket=direct event leg" in text
+    assert "public_market=liquid proxy hedge" in text
+    assert "Live gate labels stay in the Mini App" in text
+    assert "judge.classify() first, Arc second" in text
+    assert "premium_gate_fail" not in text
+
+
+def test_campaign_snapshot_prefers_running_api(monkeypatch):
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"ok": True, "source": "api"}).encode()
+
+    monkeypatch.setenv("TELEGRAM_CAMPAIGN_SNAPSHOT_URL", "http://api.test/snapshot")
+    monkeypatch.setattr(telegram_bot.urllib.request, "urlopen", lambda *args, **kwargs: Resp())
+    monkeypatch.setattr(telegram_bot, "snapshot", lambda logs=None: (_ for _ in ()).throw(AssertionError("fallback should not run")))
+
+    assert telegram_bot.campaign_snapshot()["source"] == "api"
+
+
+def test_campaign_snapshot_fallback_disables_fresh_adapter_probes(monkeypatch):
+    seen = {}
+
+    def fake_snapshot(logs=None):
+        for name in (
+            "KALSHI_DIRECT_EVENT_FETCH",
+            "POLYMARKET_DIRECT_EVENT_FETCH",
+            "PUBLIC_HEDGE_FETCH",
+            "IBKR_FORECAST_PROXY_QUOTE_FETCH",
+            "PROXY_BASKET_BACKTEST_FETCH",
+        ):
+            seen[name] = telegram_bot.os.environ.get(name)
+        return {"ok": True, "source": "fallback"}
+
+    monkeypatch.setenv("TELEGRAM_CAMPAIGN_SNAPSHOT_URL", "http://api.test/snapshot")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "1")
+    monkeypatch.setattr(telegram_bot.urllib.request, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(telegram_bot.urllib.error.URLError("down")))
+    monkeypatch.setattr(telegram_bot, "snapshot", fake_snapshot)
+
+    assert telegram_bot.campaign_snapshot()["source"] == "fallback"
+    assert set(seen.values()) == {"0"}
+    assert telegram_bot.os.environ["PUBLIC_HEDGE_FETCH"] == "1"
+
+
+def test_channel_campaign_post_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    monkeypatch.setenv("TELEGRAM_CAMPAIGN_SNAPSHOT_URL", "0")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+    monkeypatch.setattr(telegram_bot, "snapshot", lambda logs=None: {
+        "spread_families": {"index_catalog": {"electricity": [], "compute": [], "spread_archetypes": []}},
+        "synthetic_instrument": {"outputs": {"spread_profitability_ledger": {"rows": []}, "real_venue_copy_matrix": {"rows": []}}},
+    })
+
+    assert telegram_bot.notify_channel_campaign_once(logs=tmp_path) == 4
+    assert telegram_bot.notify_channel_campaign_once(logs=tmp_path) == 0
+    assert len(sent) == 4
+    assert sent[0][0] == "@desk"
+    assert "campaign 1/4" in sent[0][1]
+    assert "campaign 4/4" in sent[-1][1]
 
 
 def test_ibkr_reauth_reminder_goes_to_private_admin_and_dedupes(tmp_path, monkeypatch):

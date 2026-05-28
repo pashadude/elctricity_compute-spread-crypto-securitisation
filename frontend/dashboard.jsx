@@ -185,6 +185,7 @@ const emptyDashboardData = (status = 'loading', error = '') => ({
   spreadFamilies: { families: [], archetypeScoreboard: [], primaryFamily: null, entryGatePass: false },
   proxyBaskets: { baskets: [], primaryBasket: null, entryGatePass: false },
   venueEvidence: { rows: [], summary: {}, guardrail: '' },
+  telegramCampaign: { posts: [], total_posts: 0, posted_count: 0, pending_count: 0, status: 'READY_TO_POST' },
   history: [],
   z: 0,
   mean: 0,
@@ -464,6 +465,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
       summary: snapshot?.venue_evidence?.summary || {},
       guardrail: snapshot?.venue_evidence?.guardrail || '',
     },
+    telegramCampaign: snapshot?.telegram_campaign || { posts: [], total_posts: 0, posted_count: 0, pending_count: 0, status: 'READY_TO_POST' },
     history,
     z: numberOr(signal.z),
     mean,
@@ -1020,6 +1022,67 @@ const SpreadTradeMapPanel = ({ proposal }) => {
   );
 };
 
+const IndexCatalogPanel = ({ data }) => {
+  const catalog = data.spreadFamilies?.indexCatalog || {};
+  const electricity = catalog.electricity || [];
+  const compute = catalog.compute || [];
+  const archetypes = catalog.spread_archetypes || [];
+  if (!electricity.length && !compute.length && !archetypes.length) return null;
+  const statusColor = (status) => {
+    const text = String(status || '').toLowerCase();
+    if (text.includes('active')) return THEME.primary[400];
+    if (text.includes('proxy') || text.includes('derived')) return THEME.blue[400];
+    if (text.includes('watchlist')) return THEME.amber[400];
+    return THEME.text.faint;
+  };
+  const Column = ({ title, rows }) => (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, marginBottom: '7px', textTransform: 'uppercase', fontWeight: 800 }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {rows.slice(0, 8).map(item => (
+          <div key={item.id} style={{ padding: '8px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>{item.label}</div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '2px' }}>{item.venue || item.formula || ''}</div>
+              </div>
+              <MonoText style={{ fontSize: '9px', color: statusColor(item.status), fontWeight: 800, textAlign: 'right' }}>
+                {String(item.status || 'planned').replaceAll('_', ' ')}
+              </MonoText>
+            </div>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '4px' }}>
+              {item.role || item.oil_analogy || ''}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div>
+          <SectionLabel>Index Catalog</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Electricity and compute surfaces
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
+            Active marks, derived curve proxies, watchlist direct events, and planned physical indexes used to build the spread menu.
+          </div>
+        </div>
+        <Badge color="blue">{electricity.length + compute.length} INDEXES</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' }}>
+        <Column title={`Electricity (${electricity.length})`} rows={electricity} />
+        <Column title={`Compute (${compute.length})`} rows={compute} />
+        <Column title={`Spread Forms (${archetypes.length})`} rows={archetypes} />
+      </div>
+    </Card>
+  );
+};
+
 const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
   const ledger = proposal?.outputs?.spread_profitability_ledger || null;
   const rows = ledger?.rows || [];
@@ -1031,6 +1094,16 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
     if (text.includes('WAIT')) return THEME.blue[400];
     return THEME.amber[400];
   };
+  const fmtMaybeMoney = (value) => (
+    value === '' || value === undefined || value === null
+      ? '-'
+      : Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+  );
+  const fmtMaybePct = (value) => (
+    value === '' || value === undefined || value === null
+      ? '-'
+      : `${Number(value).toFixed(2)}%`
+  );
   return (
     <Card glow style={{ marginBottom: '16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
@@ -1041,6 +1114,7 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
           </div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
             {ledger.realized_note || 'Replay and local tickets are separate from realized PnL.'}
+            {ledger.paper_notional_usdc ? ` Paper notional: ${fmtMaybeMoney(ledger.paper_notional_usdc)}.` : ''}
           </div>
         </div>
         <Badge color="amber">PAPER</Badge>
@@ -1048,6 +1122,18 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
         {rows.slice(0, 6).map(row => {
           const color = statusColor(row.profitability_status);
+          const recentMarks = row.recent_paper_marks || [];
+          const tradeReplay = row.paper_trade_replay || {};
+          const recentTrades = tradeReplay.closed_trades || [];
+          const openTrade = tradeReplay.open_trade || null;
+          const latestPnl = Number(row.latest_paper_pnl_usdc || 0);
+          const tradePnl = Number(row.paper_trade_total_pnl_usdc || 0);
+          const pnlColor = row.latest_paper_pnl_usdc === '' || row.latest_paper_pnl_usdc === undefined
+            ? THEME.text.secondary
+            : latestPnl < 0 ? THEME.red[400] : THEME.primary[400];
+          const tradePnlColor = row.paper_trade_total_pnl_usdc === '' || row.paper_trade_total_pnl_usdc === undefined
+            ? THEME.text.secondary
+            : tradePnl < 0 ? THEME.red[400] : THEME.primary[400];
           return (
             <div key={row.archetype_id} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
@@ -1063,18 +1149,55 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
                   {String(row.profitability_status || 'MONITOR').replaceAll('_', ' ')}
                 </MonoText>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
                 {[
-                  ['5d', row.paper_5d_return_pct === '' || row.paper_5d_return_pct === undefined ? '-' : `${Number(row.paper_5d_return_pct).toFixed(2)}%`],
-                  ['1m', row.paper_1m_return_pct === '' || row.paper_1m_return_pct === undefined ? '-' : `${Number(row.paper_1m_return_pct).toFixed(2)}%`],
-                  ['WR', `${Number(row.paper_win_rate || row.spread_replay_win_rate || 0).toFixed(0)}%`],
-                ].map(([label, value]) => (
+                  ['Mark PnL', fmtMaybeMoney(row.latest_paper_pnl_usdc), pnlColor],
+                  ['Ticket PnL', fmtMaybeMoney(row.paper_trade_total_pnl_usdc), tradePnlColor],
+                  ['Mark %', fmtMaybePct(row.latest_paper_return_pct), pnlColor],
+                  ['Ticket hit', row.paper_trade_hit_rate === '' || row.paper_trade_hit_rate === undefined ? '-' : `${Number(row.paper_trade_hit_rate).toFixed(0)}%`, THEME.text.secondary],
+                ].map(([label, value, itemColor]) => (
                   <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
                     <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
-                    <MonoText style={{ fontSize: '11px', color: THEME.text.secondary, fontWeight: 800 }}>{value}</MonoText>
+                    <MonoText style={{ fontSize: '11px', color: itemColor, fontWeight: 800 }}>{value}</MonoText>
                   </div>
                 ))}
               </div>
+              {recentMarks.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '6px' }}>
+                  {recentMarks.slice(-3).map(mark => (
+                    <div key={`${row.archetype_id}-${mark.date}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr 72px', gap: '6px', fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint }}>
+                      <span>{mark.date || '-'}</span>
+                      <span>close {Number(mark.index_close || 0).toFixed(2)}</span>
+                      <span style={{ textAlign: 'right', color: Number(mark.paper_pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400] }}>
+                        {fmtMaybeMoney(mark.paper_pnl_usdc)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(openTrade || recentTrades.length > 0) && (
+                <div style={{ marginBottom: '6px', padding: '7px', borderRadius: '6px', background: THEME.bg.surface, border: `1px solid ${THEME.border.subtle}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>Paper ticket replay</div>
+                    <MonoText style={{ fontSize: '9px', color: tradePnlColor, fontWeight: 800 }}>{row.paper_trade_action || 'WAIT'}</MonoText>
+                  </div>
+                  {openTrade && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 72px', gap: '6px', fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginBottom: '3px' }}>
+                      <span>open {openTrade.entry_date} → {openTrade.mark_date}</span>
+                      <span style={{ textAlign: 'right', color: Number(openTrade.pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400] }}>{fmtMaybeMoney(openTrade.pnl_usdc)}</span>
+                    </div>
+                  )}
+                  {recentTrades.slice(-2).map((trade, idx) => (
+                    <div key={`${row.archetype_id}-ticket-${trade.entry_date}-${trade.exit_date}-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1fr 72px', gap: '6px', fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginBottom: '3px' }}>
+                      <span>{trade.entry_date} → {trade.exit_date}</span>
+                      <span style={{ textAlign: 'right', color: Number(trade.pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400] }}>{fmtMaybeMoney(trade.pnl_usdc)}</span>
+                    </div>
+                  ))}
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, lineHeight: 1.35 }}>
+                    {tradeReplay.latest_trade_reason || 'Prior-close ticket replay; not a fill ledger.'}
+                  </div>
+                </div>
+              )}
               <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35 }}>
                 {row.reason}
               </div>
@@ -1200,6 +1323,89 @@ const VenueEvidencePanel = ({ evidence }) => {
       {evidence.guardrail && (
         <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '9px' }}>
           {evidence.guardrail}
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const RealVenueCopyMatrixPanel = ({ proposal }) => {
+  const matrix = proposal?.outputs?.real_venue_copy_matrix || {};
+  const rows = matrix.rows || [];
+  if (!rows.length) return null;
+  const roleColor = (role, status) => {
+    const text = `${role || ''} ${status || ''}`.toUpperCase();
+    if (text.includes('DIRECT')) return THEME.blue[400];
+    if (text.includes('PROXY')) return THEME.primary[400];
+    if (text.includes('EVIDENCE')) return THEME.amber[400];
+    return THEME.text.secondary;
+  };
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Real Venue Copy Matrix</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            How real surfaces copy the spread
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
+            Direct events, liquid proxy hedges, miner-margin proxies, and LLM/news evidence are separated before judge and Arc.
+          </div>
+        </div>
+        <Badge color="blue">{matrix.summary?.surfaces || rows.length} SURFACES</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '8px' }}>
+        {rows.map(row => {
+          const color = roleColor(row.copy_role, row.copy_status);
+          const sample = row.sample_legs || [];
+          const links = row.spread_links || [];
+          return (
+            <div key={row.surface} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                    {row.label || row.surface}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '2px' }}>
+                    {String(row.copy_role || '').replaceAll('_', ' ')}
+                  </div>
+                </div>
+                <MonoText style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                  {String(row.copy_status || '').replaceAll('_', ' ')}
+                </MonoText>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '7px' }}>
+                {[
+                  ['Priced', row.priced_count || 0],
+                  ['Watch', row.watchlist_count || 0],
+                  ['Proxy', row.external_proxy_count || 0],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                    <MonoText style={{ fontSize: '11px', color: THEME.text.secondary }}>{value}</MonoText>
+                  </div>
+                ))}
+              </div>
+              {links.length > 0 && (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35, marginBottom: '5px' }}>
+                  Copies: {links.slice(0, 3).map(link => `${link.label || link.archetype_id}:${String(link.action || 'MONITOR').replaceAll('_', ' ')}`).join('; ')}
+                </div>
+              )}
+              {sample.length > 0 && (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginBottom: '5px', overflowWrap: 'anywhere' }}>
+                  Legs: {sample.slice(0, 3).map(leg => leg.slug || leg.title).join(', ')}
+                </div>
+              )}
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35 }}>
+                {row.action}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {matrix.guardrail && (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '9px' }}>
+          {matrix.guardrail}
         </div>
       )}
     </Card>
@@ -2071,6 +2277,57 @@ const OperatorSignalSheetPanel = ({ proposal }) => {
   );
 };
 
+const TelegramCampaignPanel = ({ campaign }) => {
+  if (!campaign || !Array.isArray(campaign.posts) || campaign.posts.length === 0) return null;
+  const posted = Number(campaign.posted_count || 0);
+  const total = Number(campaign.total_posts || campaign.posts.length || 0);
+  const pending = Number(campaign.pending_count || Math.max(0, total - posted));
+  const allPosted = pending === 0 && total > 0;
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Telegram Campaign</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            {allPosted ? 'Campaign posted' : 'Campaign ready to post'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
+            {campaign.note || 'Status is read from the local sent-key ledger.'}
+          </div>
+        </div>
+        <Badge color={allPosted ? 'primary' : 'amber'}>{posted}/{total} POSTED</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))', gap: '8px', marginBottom: '8px' }}>
+        {(campaign.posts || []).map(post => (
+          <div key={post.key} style={{ padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>{post.title}</div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '3px' }}>{post.description}</div>
+              </div>
+              <MonoText style={{ fontSize: '9px', color: post.posted ? THEME.primary[400] : THEME.amber[400], fontWeight: 800, textAlign: 'right' }}>
+                {String(post.status || (post.posted ? 'POSTED' : 'READY')).replaceAll('_', ' ')}
+              </MonoText>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
+        {[
+          ['Draft', campaign.draft_command || 'npm run telegram:campaign-draft'],
+          ['Post', campaign.post_command || 'npm run telegram:campaign-post'],
+          ['Channel', campaign.channel_configured ? 'configured' : 'missing TELEGRAM_CHANNEL_ID'],
+        ].map(([label, value]) => (
+          <div key={label} style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>{label}</div>
+            <MonoText style={{ fontSize: '10px', color: THEME.text.secondary, fontWeight: 700, overflowWrap: 'anywhere' }}>{value}</MonoText>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+};
+
 const DashboardPage = ({ refreshRate }) => {
   const data = useLiveData(refreshRate);
   const isMobile = useIsMobile(820);
@@ -2120,6 +2377,7 @@ const DashboardPage = ({ refreshRate }) => {
       <PnlStatusPanel pnl={data.pnl} />
       <SpreadProfitabilityLedgerPanel proposal={data.syntheticInstrument} />
       <OperatorSignalSheetPanel proposal={data.syntheticInstrument} />
+      <TelegramCampaignPanel campaign={data.telegramCampaign} />
 
       {/* Signal + Candidates */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
@@ -2131,8 +2389,10 @@ const DashboardPage = ({ refreshRate }) => {
       </div>
 
       <SyndicatedInstrumentMenuPanel proposal={data.syntheticInstrument} />
+      <IndexCatalogPanel data={data} />
       <SpreadTradeMapPanel proposal={data.syntheticInstrument} />
 
+      <RealVenueCopyMatrixPanel proposal={data.syntheticInstrument} />
       <VenueEvidencePanel evidence={data.venueEvidence} />
 
       <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />

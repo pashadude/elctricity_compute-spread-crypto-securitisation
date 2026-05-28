@@ -55,6 +55,13 @@ DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES = ("yahoo",)
 DEFAULT_IBKR_FORECAST_PROXY_PRICE_SOURCES = ("ibkr", "yahoo")
 DEFAULT_PROXY_BASKET_HISTORY_RANGE = "6mo"
 DEFAULT_PROXY_BASKET_HISTORY_INTERVAL = "1d"
+TELEGRAM_SENT_NAME = "telegram_sent.jsonl"
+TELEGRAM_CAMPAIGN_POSTS = (
+    ("channel-campaign:v1:indexes-spreads", "Index layer", "Electricity/compute indexes and oil-style spread forms."),
+    ("channel-campaign:v1:profitability", "Profitability discipline", "Backtested spread replay and paper-ticket PnL."),
+    ("channel-campaign:v1:venue-copy", "Real venue roles", "Polymarket/Kalshi/IBKR/direct legs versus public/crypto proxies."),
+    ("channel-campaign:v1:arc-collateral", "Securitization shape", "Collateral, Arc wrapper, and judge-before-Arc guardrail."),
+)
 IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
     "RETXC": {
         "title": "Texas Commercial Electricity Generation Sales Revenue",
@@ -1684,6 +1691,50 @@ def runtime_status(*, logs: Path | str | None = None) -> dict[str, Any]:
     return sanitize_row(status)
 
 
+def _telegram_sent_keys(*, logs: Path | str | None = None) -> set[str]:
+    path = log_dir(logs) / TELEGRAM_SENT_NAME
+    if not path.exists():
+        return set()
+    out: set[str] = set()
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict) and record.get("key"):
+                out.add(str(record["key"]))
+    return out
+
+
+def telegram_campaign_state(*, logs: Path | str | None = None) -> dict[str, Any]:
+    sent = _telegram_sent_keys(logs=logs)
+    posts = [
+        {
+            "key": key,
+            "title": title,
+            "description": description,
+            "posted": key in sent,
+            "status": "POSTED" if key in sent else "READY_TO_POST",
+        }
+        for key, title, description in TELEGRAM_CAMPAIGN_POSTS
+    ]
+    posted_count = sum(1 for post in posts if post["posted"])
+    return {
+        "version": "telegram_campaign_state_v1",
+        "draft_command": "npm run telegram:campaign-draft",
+        "post_command": "npm run telegram:campaign-post",
+        "draft_available": True,
+        "channel_configured": bool(os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()),
+        "total_posts": len(posts),
+        "posted_count": posted_count,
+        "pending_count": len(posts) - posted_count,
+        "status": "POSTED" if posted_count == len(posts) else "READY_TO_POST",
+        "note": "Campaign status is read from telegram_sent.jsonl keys only; message bodies and bot tokens are not exposed.",
+        "posts": posts,
+    }
+
+
 def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
     now = time.time()
     spread = spread_state(logs=logs)
@@ -1722,6 +1773,7 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         spread_family_validation=spread_families,
         proxy_basket_validation=proxy_baskets,
         oracle_evidence=oracle_evidence,
+        venue_evidence=venue_evidence,
     )
     pnl = pnl_state(logs=logs)
     real_positions = _visible_leg_rows(positions)
@@ -1768,4 +1820,5 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         "arc_txs": arc_tx_state(logs=logs),
         "pnl": pnl,
         "oracle": oracle_evidence,
+        "telegram_campaign": telegram_campaign_state(logs=logs),
     }

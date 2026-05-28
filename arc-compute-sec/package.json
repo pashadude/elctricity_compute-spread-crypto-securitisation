@@ -28,6 +28,8 @@
     "telegram:market-data-update": ".venv/bin/python -m integrations.telegram_bot --post-market-data-update",
     "telegram:instrument-menu-update": ".venv/bin/python -m integrations.telegram_bot --post-instrument-menu-update",
     "telegram:profitability-update": ".venv/bin/python -m integrations.telegram_bot --post-profitability-update",
+    "telegram:campaign-draft": ".venv/bin/python -m integrations.telegram_bot --draft-campaign",
+    "telegram:campaign-post": ".venv/bin/python -m integrations.telegram_bot --post-campaign",
     "telegram:webhook:set": ".venv/bin/python -m integrations.telegram_bot --set-webhook",
     "telegram:webhook:delete": ".venv/bin/python -m integrations.telegram_bot --delete-webhook",
     "docker:up": "docker compose up --build api worker",

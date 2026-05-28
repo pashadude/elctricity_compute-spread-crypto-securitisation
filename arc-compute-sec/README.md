@@ -60,15 +60,21 @@ story:
 | Power cost share | `k * (electricity/1000) * kWh / compute` | high means power consumes more GPU-hour revenue |
 | Compute / power ratio | `compute / (k * electricity/1000 * kWh)` | high means compute rich versus power input |
 | Raw compute minus power | `compute - (electricity/1000) * kWh` | same spread before PUE/utilization haircut |
+| Compute prompt calendar proxy | `spot GPU rental - prior 21-mark GPU rental average` | front compute tightness versus a term proxy |
+| Electricity prompt calendar proxy | `front electricity - prior 21-mark electricity average` | front power tightness versus a term proxy |
+| Compute-power prompt basis | `compute prompt premium % - electricity prompt premium %` | curve-shape basis between compute and power |
 
 The catalog also names the next spread archetypes the agent is expected to
-scout: regional compute-power basis, compute calendar spread, and fuel-stack
-compute spread. Current electricity indexes include EIA regional power proxies,
-IBKR ForecastTrader power-generation and price indexes, Henry Hub, Brent/WTI,
-and public merchant-power proxies. Current compute indexes include AWS GPU
-spot, SiliconData H100 rental, cloud GPU provider marks, IBKR/Kalshi/Polymarket
-AI compute events, NVDA/VRT/ETN infrastructure proxies, BTC/ETH miner-margin
-proxies, and planned hashprice inputs.
+scout: regional compute-power basis, compute calendar spread, electricity
+calendar spread, compute-power calendar basis, and fuel-stack compute spread.
+Current electricity indexes include EIA regional power proxies, ERCOT/PJM/CAISO
+physical LMP targets, IBKR ForecastTrader power-generation and price indexes,
+Henry Hub, Brent/WTI, derived prompt/term power proxies, and public
+merchant-power proxies. Current compute indexes include AWS GPU spot and
+regional basis targets, GCP/Azure GPU rental targets, SiliconData H100 rental,
+cloud GPU provider marks, IBKR/Kalshi/Polymarket AI compute events,
+NVDA/VRT/ETN infrastructure proxies, BTC/ETH miner-margin proxies, derived
+prompt/term compute proxies, and planned hashprice inputs.
 
 Each family is replayed walk-forward: collapse repeated worker polls, use only
 prior mark changes for the z-score, enter mean-reversion when the z gate
@@ -86,9 +92,18 @@ grid-equipment load growth, miner-margin power pair, and fuel-stack power
 input. Mixed calendars are handled with a union daily calendar and carried
 last closes, so crypto weekends and equity holidays do not collapse the replay
 to one common timestamp. It reports 5d, 1m, 3m, and 6m returns and emits a
-conservative `BUY`, `HOLD`, `SELL`, or `MONITOR` profitability signal. A
-recent proxy `SELL` blocks a fresh mock-contract buy even if the longer replay
-is otherwise promotable.
+conservative `BUY`, `HOLD`, `SELL`, or `MONITOR` profitability signal. It also
+keeps a dated recent mark series: synthetic index close, daily return, return
+since the recent entry date, and paper USDC PnL after scaling by the mock hedge
+notional. A recent proxy `SELL` blocks a fresh mock-contract buy even if the
+longer replay is otherwise promotable.
+
+The proxy replay also emits `paper_trade_replay`: a prior-close simulated
+ticket blotter with closed trades, any open ticket, realized paper PnL, open
+paper PnL, hit rate, and the current ticket action (`OPEN_BUY`, `HOLD_OPEN`,
+`CLOSE_OR_SELL`, `WAIT`, or `WAIT_FOR_HISTORY`). This is the operator answer
+to "what would the recent proposed synthetic arb tickets have made?" It remains
+paper replay, not a broker fill ledger.
 
 Run it with:
 
@@ -106,15 +121,20 @@ layers. Each oil-style spread archetype now points to the expression that can
 copy it: syndicated structure, proxy basket, direct-leg target, replay status,
 current `BUY`/`SELL`/`MONITOR` signal, and remaining data gaps. This is the
 table that explains why a spread can be `PROMOTABLE` as an index replay but
-still be `SELL_OR_AVOID` if its mapped liquid proxy basket is losing.
+still be `SELL_OR_AVOID` if its mapped liquid proxy basket is losing. A mapped
+proxy `BUY` is not enough by itself: fresh buys require a promotable spread
+replay plus a constructive mapped proxy. Otherwise the trade map returns
+`WAIT_FOR_SPREAD_REPLAY` or `NEEDS_INDEX_HISTORY`.
 
 `synthetic_instrument.outputs.spread_profitability_ledger` ranks those mapped
 spreads for the operator. It reports paper 5d and 1m proxy PnL, spread replay
-PnL, win rate, priced symbols, and statuses such as `PAPER_BUY`,
-`SELL_OR_AVOID`, `WAIT_FOR_PROXY_CONFIRMATION`, `NEEDS_INDEX_HISTORY`, and
-`NEEDS_EXPRESSION`. The dashboard, Telegram Mini App, and bot `/latest` show
-this ledger near the top of the flow. It is paper/replay evidence only, not
-settled PnL.
+PnL, win rate, priced symbols, recent dated paper marks, and statuses such as
+`PAPER_BUY`, `SELL_OR_AVOID`, `WAIT_FOR_PROXY_CONFIRMATION`,
+`WAIT_FOR_SPREAD_REPLAY`, `NEEDS_INDEX_HISTORY`, and `NEEDS_EXPRESSION`. The
+dashboard, Telegram Mini App, and bot `/latest` show this ledger near the top
+of the flow. Each row includes both mark-to-market PnL and ticket-level replay
+PnL so an entry-day `$0.00` mark is not confused with a broken spread
+calculation. It is paper/replay evidence only, not settled PnL.
 
 The snapshot also separates realized accounting from replay evidence. `pnl`
 returns `NO_SETTLED_PNL` and `display_total = "No settled PnL"` until
@@ -143,6 +163,14 @@ Polymarket Gamma, Kalshi public events, IBKR ForecastTrader/ForecastEx,
 Yahoo/IBKR/Alpaca public quotes, BTC/ETH, and Opoint/Nebius receipts. It is
 read-only evidence. `can_drive_arc` is false for every row; promotion still
 requires premium scoring where applicable and `judge.classify() == EXECUTE`.
+
+`synthetic_instrument.outputs.real_venue_copy_matrix` turns that feed matrix
+into the product view: which real venue can copy the spread as a direct event
+leg, which venue is only a liquid proxy hedge, which crypto rows are only
+miner-margin proxies, and which Opoint/Nebius receipts are evidence only. It
+also lists the spread archetypes each venue can copy and the blocking gate:
+`NEEDS_PREMIUM_AND_JUDGE`, `NEEDS_JUDGE_PAIR`,
+`DIRECT_METADATA_PROXY_PRICED`, `PROXY_LIVE`, or `EVIDENCE_ONLY`.
 
 `oracle` exposes the Opoint/Nebius receipt ledger separately from the venue
 matrix. `agent/synthetic_instrument.py` copies that state into
@@ -248,6 +276,9 @@ between "we watch slugs" and "we can structure a product":
 - it exposes an agent search queue for Opoint/Nebius evidence, Polymarket
   direct events, IBKR ForecastTrader pricing, public-market hedges, and
   walk-forward validation;
+- it exposes a real venue copy matrix so the frontend and Mini App explain how
+  Polymarket, Kalshi, IBKR, Yahoo/public quotes, crypto, and Opoint/Nebius map
+  to spread archetypes before any Arc action;
 - it states the collateral status. v1 is `not_asset_backed_v0`; it becomes
   asset-backed only if real collateral such as GPU rental receivables, compute
   invoices, power purchase agreements, miner power hedges, escrowed USDC, or a
@@ -666,6 +697,8 @@ Safe offline checks:
 | `npm run proxy:backtest -- --range 1mo --interval 1d` | Build public close-history proxy basket replay for the profitability ledger |
 | `npm run spread:proxy-backtest` | Build anchored public electricity/compute proxy history for spread-family replay |
 | `npm run telegram:profitability-update` | Post the deduped Telegram channel explainer for the profitability ledger |
+| `npm run telegram:campaign-draft` | Print the four-post Telegram campaign draft without sending |
+| `npm run telegram:campaign-post` | Post the deduped four-post Telegram campaign to `TELEGRAM_CHANNEL_ID` |
 | `npm run package:mock` | Offline spread-package dry run |
 | `npm run package:scan` | One spread-package live-feed scan in dry-run mode |
 | `npm run crypto:mock` | Alias for the package mock path; crypto remains a proxy leg |

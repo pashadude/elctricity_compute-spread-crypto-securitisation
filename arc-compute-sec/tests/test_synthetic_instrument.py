@@ -148,6 +148,114 @@ def test_mock_recommendation_refresh_key_changes_with_spread_state():
     assert first_decision["profitability_score"] == first_decision["entry_signal_score"]
 
 
+def test_real_venue_copy_matrix_connects_surfaces_to_spread_forms(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "ERCOT", "electricity_per_mwh": "70", "compute_per_gpu_hr": "1.4", "S_t": "1.37"}},
+        signal={"latest": {"signal_id": "sig-venue-copy", "direction": "electricity_expensive", "region": "ERCOT", "z": "-3.0"}},
+        direct_inventory=[
+            {
+                "surface": "polymarket",
+                "leg_title": "AI data center moratorium passed before 2027?",
+                "leg_slug": "ai-data-center-moratorium-passed-before-2027",
+                "direct_pair_role": "energy/grid-stress leg",
+                "pricing_status": "priced_watchlist",
+                "label": "WATCHLIST",
+            },
+            {
+                "surface": "ibkr_prediction",
+                "leg_title": "Texas Commercial Electricity Generation Sales Revenue",
+                "leg_slug": "retxc-ec",
+                "direct_pair_role": "energy/grid-stress leg",
+                "pricing_status": "ibkr_quote_unavailable",
+                "label": "WATCHLIST",
+            },
+        ],
+        packages=[],
+        verdicts=[{
+            "surface": "crypto",
+            "instrument": "BTC/USD",
+            "leg_title": "BTC/USD miner-margin proxy",
+            "leg_role": "miner_margin_proxy",
+            "direction": "short",
+            "label": "EXECUTE",
+        }],
+        public_hedges=[
+            {"surface": "public_market", "instrument": "NRG", "leg_slug": "NRG", "leg_title": "NRG Energy", "direct_pair_role": "merchant power proxy", "last_price": 120, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "BTC-USD", "leg_slug": "BTC-USD", "leg_title": "Bitcoin", "direct_pair_role": "miner-margin proxy", "last_price": 100000, "pricing_status": "priced_public_market", "label": "PRICED"},
+        ],
+        spread_family_validation={
+            "entry_gate_pass": True,
+            "archetype_scoreboard": [{
+                "archetype_id": "fuel_stack_compute_spread",
+                "label": "Fuel-stack compute spread",
+                "status": "PROMOTABLE",
+                "replay_status": "PROMOTABLE",
+                "evidence_level": "replayed",
+                "is_promotable": True,
+                "tested_trades": 10,
+                "win_rate": 62.0,
+                "total_pnl_per_unit": 0.4,
+            }],
+        },
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "miner_margin_power_pair",
+                "direction": "electricity_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "weights": {"BTC-USD": -0.45, "NRG": 0.18},
+                "trailing_returns": {"5d": {"return_pct": 2.0}, "1m": {"return_pct": 4.0}},
+            },
+            "baskets": [{
+                "basket_id": "miner_margin_power_pair",
+                "direction": "electricity_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "weights": {"BTC-USD": -0.45, "NRG": 0.18},
+                "trailing_returns": {"5d": {"return_pct": 2.0}, "1m": {"return_pct": 4.0}},
+            }],
+        },
+        oracle_evidence={
+            "status": "EVIDENCE_LOGGED",
+            "latest_title": "ERCOT data-center power stress",
+            "latest_slug": "ercot-data-center-power-stress",
+            "latest_reason_code": "supporting_evidence",
+            "row_count": 1,
+        },
+        venue_evidence={
+            "rows": [
+                {"surface": "polymarket", "label": "Polymarket Gamma", "status": "LIVE_PRICED", "direct_event_surface": True, "priced_count": 1, "watchlist_count": 1, "premium_gate_required": True, "real_feed": True},
+                {"surface": "ibkr_prediction", "label": "IBKR ForecastTrader", "status": "PROXY_PRICED", "direct_event_surface": True, "priced_count": 0, "external_proxy_count": 1, "watchlist_count": 1, "real_feed": True},
+                {"surface": "public_market", "label": "Yahoo public quotes", "status": "LIVE_PRICED", "priced_count": 2, "watchlist_count": 2, "real_feed": True},
+                {"surface": "crypto", "label": "BTC/ETH miner-margin proxy", "status": "LIVE_PRICED", "priced_count": 1, "watchlist_count": 1, "real_feed": True},
+                {"surface": "opoint_nebius", "label": "Opoint + Nebius", "status": "EVIDENCE_LOGGED", "evidence_only": True, "row_count": 1, "real_feed": True},
+            ],
+        },
+    )
+
+    matrix = proposal["outputs"]["real_venue_copy_matrix"]
+    by_surface = {row["surface"]: row for row in matrix["rows"]}
+
+    assert matrix["version"] == "real_venue_copy_matrix_v1"
+    assert by_surface["polymarket"]["copy_role"] == "direct_event_leg"
+    assert by_surface["polymarket"]["copy_status"] == "NEEDS_PREMIUM_AND_JUDGE"
+    assert by_surface["ibkr_prediction"]["copy_status"] == "DIRECT_METADATA_PROXY_PRICED"
+    assert by_surface["public_market"]["copy_role"] == "liquid_proxy_hedge"
+    assert by_surface["crypto"]["copy_role"] == "miner_margin_proxy"
+    assert by_surface["opoint_nebius"]["copy_status"] == "EVIDENCE_ONLY"
+    assert by_surface["polymarket"]["sample_legs"][0]["slug"] == "ai-data-center-moratorium-passed-before-2027"
+    assert any(link["archetype_id"] == "fuel_stack_compute_spread" for link in by_surface["crypto"]["spread_links"])
+    assert matrix["summary"]["arc_ready_surfaces"] == 0
+    assert "judge.classify()" in matrix["guardrail"]
+
+
 def test_mock_recommendation_blocks_buy_when_energy_materiality_is_too_weak(monkeypatch):
     def fake_classify(candidate, state, scorer_result=None):
         return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
@@ -476,9 +584,29 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
                 "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
                 "weights": {"BTC-USD": -0.45, "ETH-USD": -0.25, "NRG": 0.18, "CEG": 0.12},
                 "trailing_returns": {"5d": {"return_pct": 2.2}, "1m": {"return_pct": 6.1}},
+                "recent_index_marks": [
+                    {"date": "2026-05-26", "index_close": 100.0, "daily_return_pct": 0.0, "paper_return_since_entry_pct": 0.0},
+                    {"date": "2026-05-27", "index_close": 101.0, "daily_return_pct": 1.0, "paper_return_since_entry_pct": 1.0},
+                    {"date": "2026-05-28", "index_close": 102.0, "daily_return_pct": 0.9901, "paper_return_since_entry_pct": 2.0},
+                ],
                 "total_return_pct": 1.5,
                 "win_rate": 46.67,
                 "max_drawdown_pct": -6.88,
+                "paper_trade_replay": {
+                    "latest_trade_action": "HOLD_OPEN",
+                    "latest_trade_reason": "Proxy-ticket is open and no exit rule is active.",
+                    "closed_trade_count": 2,
+                    "open_trade_count": 1,
+                    "realized_return_pct": 1.2,
+                    "open_return_pct": 0.8,
+                    "total_return_pct": 2.0,
+                    "hit_rate": 50.0,
+                    "closed_trades": [
+                        {"entry_date": "2026-05-10", "exit_date": "2026-05-15", "return_pct": 1.0},
+                        {"entry_date": "2026-05-18", "exit_date": "2026-05-20", "return_pct": 0.2},
+                    ],
+                    "open_trade": {"entry_date": "2026-05-26", "mark_date": "2026-05-28", "return_pct": 0.8},
+                },
             },
             "baskets": [{
                 "basket_id": "miner_margin_power_pair",
@@ -488,9 +616,43 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
                 "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
                 "weights": {"BTC-USD": -0.45, "ETH-USD": -0.25, "NRG": 0.18, "CEG": 0.12},
                 "trailing_returns": {"5d": {"return_pct": 2.2}, "1m": {"return_pct": 6.1}},
+                "recent_index_marks": [
+                    {"date": "2026-05-26", "index_close": 100.0, "daily_return_pct": 0.0, "paper_return_since_entry_pct": 0.0},
+                    {"date": "2026-05-27", "index_close": 101.0, "daily_return_pct": 1.0, "paper_return_since_entry_pct": 1.0},
+                    {"date": "2026-05-28", "index_close": 102.0, "daily_return_pct": 0.9901, "paper_return_since_entry_pct": 2.0},
+                ],
                 "total_return_pct": 1.5,
                 "win_rate": 46.67,
                 "max_drawdown_pct": -6.88,
+                "paper_trade_replay": {
+                    "latest_trade_action": "HOLD_OPEN",
+                    "latest_trade_reason": "Proxy-ticket is open and no exit rule is active.",
+                    "closed_trade_count": 2,
+                    "open_trade_count": 1,
+                    "realized_return_pct": 1.2,
+                    "open_return_pct": 0.8,
+                    "total_return_pct": 2.0,
+                    "hit_rate": 50.0,
+                    "closed_trades": [
+                        {"entry_date": "2026-05-10", "exit_date": "2026-05-15", "return_pct": 1.0},
+                        {"entry_date": "2026-05-18", "exit_date": "2026-05-20", "return_pct": 0.2},
+                    ],
+                    "open_trade": {"entry_date": "2026-05-26", "mark_date": "2026-05-28", "return_pct": 0.8},
+                },
+            }],
+        },
+        spread_family_validation={
+            "entry_gate_pass": True,
+            "archetype_scoreboard": [{
+                "archetype_id": "fuel_stack_compute_spread",
+                "label": "Fuel-stack compute spread",
+                "status": "PROMOTABLE",
+                "replay_status": "PROMOTABLE",
+                "evidence_level": "replayed",
+                "is_promotable": True,
+                "tested_trades": 12,
+                "win_rate": 61.0,
+                "total_pnl_per_unit": 0.42,
             }],
         },
         oracle_evidence={
@@ -529,6 +691,16 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
     assert ledger["best_buy_candidate"]["archetype_id"] == "fuel_stack_compute_spread"
     assert ledger["best_buy_candidate"]["profitability_status"] == "PAPER_BUY"
     assert ledger["best_buy_candidate"]["supports_fresh_buy"] is True
+    assert ledger["paper_notional_usdc"] == 2625.0
+    assert ledger["best_buy_candidate"]["latest_paper_pnl_usdc"] == 52.5
+    assert ledger["best_buy_candidate"]["recent_paper_marks"][-1]["date"] == "2026-05-28"
+    assert ledger["best_buy_candidate"]["recent_paper_marks"][-1]["paper_pnl_usdc"] == 52.5
+    assert ledger["best_buy_candidate"]["paper_trade_action"] == "HOLD_OPEN"
+    assert ledger["best_buy_candidate"]["paper_trade_total_pnl_usdc"] == 52.5
+    assert ledger["best_buy_candidate"]["paper_trade_realized_pnl_usdc"] == 31.5
+    assert ledger["best_buy_candidate"]["paper_trade_open_pnl_usdc"] == 21.0
+    assert ledger["best_buy_candidate"]["paper_trade_replay"]["open_trade"]["pnl_usdc"] == 21.0
+    assert ledger["best_buy_candidate"]["paper_trade_replay"]["closed_trades"][0]["pnl_usdc"] == 26.25
     assert ledger["counts"]["paper_buy"] >= 1
     oracle = proposal["outputs"]["oracle_judge_evidence"]
     assert oracle["status"] == "EVIDENCE_LOGGED"
@@ -537,6 +709,67 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
     assert oracle["can_drive_arc"] is False
     assert oracle["oracle_evidence_hash"]
     assert proposal["inputs"]["oracle_evidence_hash"] == oracle["oracle_evidence_hash"]
+
+
+def test_profitability_ledger_does_not_promote_proxy_buy_without_spread_replay(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "ERCOT", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "1.5", "S_t": "1.47"}},
+        signal={"latest": {"signal_id": "sig-no-spread-replay", "direction": "compute_load_growth", "region": "ERCOT", "z": "2.7"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[
+            {"surface": "public_market", "instrument": "VRT", "leg_slug": "VRT", "last_price": 300, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "ETN", "leg_slug": "ETN", "last_price": 400, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "CEG", "leg_slug": "CEG", "last_price": 250, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "NRG", "leg_slug": "NRG", "last_price": 120, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "NVDA", "leg_slug": "NVDA", "last_price": 200, "pricing_status": "priced_public_market", "label": "PRICED"},
+        ],
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "grid_equipment_load_growth",
+                "direction": "compute_load_growth",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "trailing_returns": {"5d": {"return_pct": 3.8}, "1m": {"return_pct": -1.0}},
+                "recent_index_marks": [
+                    {"date": "2026-05-27", "index_close": 100.0, "daily_return_pct": 0.0, "paper_return_since_entry_pct": 0.0},
+                    {"date": "2026-05-28", "index_close": 103.0, "daily_return_pct": 3.0, "paper_return_since_entry_pct": 3.0},
+                ],
+                "total_return_pct": 16.7,
+                "win_rate": 55.0,
+            },
+            "baskets": [{
+                "basket_id": "grid_equipment_load_growth",
+                "direction": "compute_load_growth",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "trailing_returns": {"5d": {"return_pct": 3.8}, "1m": {"return_pct": -1.0}},
+                "recent_index_marks": [
+                    {"date": "2026-05-27", "index_close": 100.0, "daily_return_pct": 0.0, "paper_return_since_entry_pct": 0.0},
+                    {"date": "2026-05-28", "index_close": 103.0, "daily_return_pct": 3.0, "paper_return_since_entry_pct": 3.0},
+                ],
+                "total_return_pct": 16.7,
+                "win_rate": 55.0,
+            }],
+        },
+    )
+
+    trade_map = proposal["outputs"]["spread_archetype_trade_map"]
+    regional = next(row for row in trade_map if row["archetype_id"] == "regional_compute_power_basis")
+    assert regional["selected_expression"]["latest_signal"] == "BUY"
+    assert regional["tradability_action"] == "WAIT_FOR_SPREAD_REPLAY"
+    ledger_row = next(row for row in proposal["outputs"]["spread_profitability_ledger"]["rows"] if row["archetype_id"] == "regional_compute_power_basis")
+    assert ledger_row["profitability_status"] == "WAIT_FOR_SPREAD_REPLAY"
+    assert ledger_row["supports_fresh_buy"] is False
+    assert ledger_row["latest_paper_pnl_usdc"] > 0
 
 
 def test_proposal_prefers_execute_package_legs_over_watchlist():

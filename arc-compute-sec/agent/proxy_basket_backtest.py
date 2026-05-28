@@ -20,6 +20,10 @@ DEFAULT_MIN_SYMBOLS = 3
 DEFAULT_MIN_RETURN_PCT = 0.0
 DEFAULT_MIN_WIN_RATE = 45.0
 DEFAULT_MAX_DRAWDOWN_PCT = -35.0
+DEFAULT_RECENT_MARK_DAYS = 7
+DEFAULT_TRADE_SHORT_WINDOW = 5
+DEFAULT_TRADE_LONG_WINDOW = 21
+DEFAULT_TRADE_EXIT_RETURN_PCT = -2.0
 TRAILING_WINDOWS: tuple[tuple[str, int], ...] = (
     ("5d", 5),
     ("1m", 21),
@@ -186,6 +190,174 @@ def _trailing_returns(index_values: list[float], replay_dates: list[str]) -> dic
     return out
 
 
+def _recent_index_marks(
+    index_values: list[float],
+    replay_dates: list[str],
+    daily_returns: list[float],
+    *,
+    days: int = DEFAULT_RECENT_MARK_DAYS,
+) -> list[dict[str, Any]]:
+    if not index_values or not replay_dates:
+        return []
+    start_idx = max(0, len(index_values) - max(1, days))
+    entry_value = index_values[start_idx]
+    rows: list[dict[str, Any]] = []
+    for idx in range(start_idx, len(index_values)):
+        daily_return = daily_returns[idx - 1] if idx > 0 and idx - 1 < len(daily_returns) else 0.0
+        since_entry = ((index_values[idx] / entry_value) - 1.0) * 100.0 if entry_value else 0.0
+        rows.append({
+            "date": replay_dates[idx] if idx < len(replay_dates) else "",
+            "index_close": round(index_values[idx], 4),
+            "daily_return_pct": round(daily_return * 100.0, 4),
+            "paper_return_since_entry_pct": round(since_entry, 4),
+        })
+    return rows
+
+
+def _window_return_pct(index_values: list[float], end_idx: int, points: int) -> float | None:
+    if points < 2 or end_idx < points - 1 or end_idx >= len(index_values):
+        return None
+    start_idx = end_idx - points + 1
+    start = index_values[start_idx]
+    end = index_values[end_idx]
+    if start <= 0:
+        return None
+    return ((end / start) - 1.0) * 100.0
+
+
+def _paper_trade_replay(
+    index_values: list[float],
+    replay_dates: list[str],
+    *,
+    short_window: int = DEFAULT_TRADE_SHORT_WINDOW,
+    long_window: int = DEFAULT_TRADE_LONG_WINDOW,
+    exit_return_pct: float = DEFAULT_TRADE_EXIT_RETURN_PCT,
+) -> dict[str, Any]:
+    """Simulate simple close-to-close paper tickets from prior close signals.
+
+    This is intentionally conservative and venue-agnostic. It does not infer
+    fills; it asks whether the proxy basket would have generated usable
+    operator tickets if the desk only entered after short and long trailing
+    returns were non-negative, then exited on a short-term loss break.
+    """
+    observations = min(len(index_values), len(replay_dates))
+    if observations < max(short_window, long_window):
+        return {
+            "version": "proxy_paper_trade_replay_v1",
+            "policy": "prior_close_trailing_return_ticket_replay",
+            "closed_trades": [],
+            "open_trade": None,
+            "closed_trade_count": 0,
+            "open_trade_count": 0,
+            "realized_return_pct": 0.0,
+            "open_return_pct": 0.0,
+            "total_return_pct": 0.0,
+            "hit_rate": 0.0,
+            "latest_trade_action": "WAIT_FOR_HISTORY",
+            "latest_trade_reason": f"Need at least {max(short_window, long_window)} index marks for ticket replay.",
+        }
+
+    position: dict[str, Any] | None = None
+    closed: list[dict[str, Any]] = []
+    latest_action = "WAIT"
+    latest_reason = "No open ticket and trailing returns do not clear the entry gate."
+    closed_at_latest = False
+    latest_short = 0.0
+    latest_long = 0.0
+
+    for idx in range(max(short_window, long_window) - 1, observations):
+        short_ret = _window_return_pct(index_values, idx, short_window)
+        long_ret = _window_return_pct(index_values, idx, long_window)
+        if short_ret is None or long_ret is None:
+            continue
+        latest_short = short_ret
+        latest_long = long_ret
+        should_enter = short_ret >= 0.0 and long_ret >= 0.0
+        should_exit = short_ret <= exit_return_pct or (short_ret < 0.0 and long_ret < 0.0)
+
+        if position is not None and should_exit:
+            entry_idx = int(position["entry_idx"])
+            entry_value = index_values[entry_idx]
+            exit_value = index_values[idx]
+            trade_return = ((exit_value / entry_value) - 1.0) * 100.0 if entry_value else 0.0
+            closed.append({
+                "entry_date": replay_dates[entry_idx],
+                "exit_date": replay_dates[idx],
+                "entry_index": round(entry_value, 4),
+                "exit_index": round(exit_value, 4),
+                "return_pct": round(trade_return, 4),
+                "holding_days": max(0, idx - entry_idx),
+                "exit_reason": "short_return_break" if short_ret <= exit_return_pct else "negative_short_and_long_returns",
+            })
+            position = None
+            closed_at_latest = idx == observations - 1
+            if closed_at_latest:
+                latest_action = "CLOSE_OR_SELL"
+                latest_reason = "Latest close tripped the proxy-ticket exit rule."
+            continue
+
+        if position is None and should_enter:
+            position = {
+                "entry_idx": idx,
+                "entry_date": replay_dates[idx],
+                "entry_index": round(index_values[idx], 4),
+                "entry_short_return_pct": round(short_ret, 4),
+                "entry_long_return_pct": round(long_ret, 4),
+            }
+            if idx == observations - 1:
+                latest_action = "OPEN_BUY"
+                latest_reason = "Latest close cleared the proxy-ticket entry rule."
+
+    open_trade = None
+    open_return = 0.0
+    if position is not None:
+        entry_idx = int(position["entry_idx"])
+        entry_value = index_values[entry_idx]
+        mark_value = index_values[observations - 1]
+        open_return = ((mark_value / entry_value) - 1.0) * 100.0 if entry_value else 0.0
+        open_trade = {
+            **{key: value for key, value in position.items() if key != "entry_idx"},
+            "mark_date": replay_dates[observations - 1],
+            "mark_index": round(mark_value, 4),
+            "return_pct": round(open_return, 4),
+            "holding_days": max(0, observations - 1 - entry_idx),
+        }
+        if latest_action != "OPEN_BUY":
+            latest_action = "HOLD_OPEN"
+            latest_reason = "Proxy-ticket is open and no exit rule is active."
+    elif not closed_at_latest:
+        latest_should_enter = latest_short >= 0.0 and latest_long >= 0.0
+        latest_should_exit = latest_short <= exit_return_pct or (latest_short < 0.0 and latest_long < 0.0)
+        if latest_should_enter:
+            latest_action = "OPEN_BUY"
+            latest_reason = "Latest close clears the proxy-ticket entry rule."
+        elif latest_should_exit:
+            latest_action = "CLOSE_OR_SELL"
+            latest_reason = "Latest close is in sell/avoid mode; do not open a fresh ticket."
+
+    realized_return = sum(_num(trade.get("return_pct")) for trade in closed)
+    winners = sum(1 for trade in closed if _num(trade.get("return_pct")) > 0.0)
+    hit_rate = winners / len(closed) * 100.0 if closed else 0.0
+    return {
+        "version": "proxy_paper_trade_replay_v1",
+        "policy": "prior_close_trailing_return_ticket_replay",
+        "entry_rule": f"{short_window}-mark return >= 0 and {long_window}-mark return >= 0",
+        "exit_rule": f"{short_window}-mark return <= {exit_return_pct}% or both windows negative",
+        "latest_short_return_pct": round(latest_short, 4),
+        "latest_long_return_pct": round(latest_long, 4),
+        "closed_trades": closed[-12:],
+        "open_trade": open_trade,
+        "closed_trade_count": len(closed),
+        "open_trade_count": 1 if open_trade else 0,
+        "realized_return_pct": round(realized_return, 4),
+        "open_return_pct": round(open_return, 4),
+        "total_return_pct": round(realized_return + open_return, 4),
+        "hit_rate": round(hit_rate, 2),
+        "latest_trade_action": latest_action,
+        "latest_trade_reason": latest_reason,
+    }
+
+
 def _latest_signal(
     *,
     recommendation: str,
@@ -316,6 +488,8 @@ def replay_basket(
     win_rate = (sum(1 for value in daily_returns if value > 0) / len(daily_returns) * 100.0) if daily_returns else 0.0
     max_dd = _max_drawdown_pct(index_values)
     trailing_returns = _trailing_returns(index_values, replay_dates)
+    recent_index_marks = _recent_index_marks(index_values, replay_dates, daily_returns)
+    paper_trade_replay = _paper_trade_replay(index_values, replay_dates)
     status, reason, promotable, recommendation = _status(
         observations=observations,
         symbols_available=len(available_symbols),
@@ -356,6 +530,10 @@ def replay_basket(
         "signal_reason": signal_reason,
         "trailing_returns": trailing_returns,
         "recent_daily_returns_pct": [round(value * 100.0, 4) for value in daily_returns[-5:]],
+        "recent_index_marks": recent_index_marks,
+        "recent_entry_date": recent_index_marks[0]["date"] if recent_index_marks else "",
+        "recent_exit_date": recent_index_marks[-1]["date"] if recent_index_marks else "",
+        "paper_trade_replay": paper_trade_replay,
     }
 
 

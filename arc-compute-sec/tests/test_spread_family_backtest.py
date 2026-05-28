@@ -98,18 +98,62 @@ def test_walk_forward_replay_can_promote_trend_following_spread_family():
     assert primary["total_pnl_per_unit"] > 0
 
 
+def test_derived_calendar_families_use_prior_marks_without_forward_curves():
+    rows = []
+    for i in range(180):
+        rows.append({
+            "ts": i,
+            "region": "ERCOT|us-east-1",
+            "electricity_per_mwh": 60.0 + 0.04 * i + 1.2 * math.sin(i * 2 * math.pi / 28),
+            "compute_per_gpu_hr": 1.0 + 0.002 * i + 0.025 * math.sin(i * 2 * math.pi / 28),
+            "k": 0.5,
+            "kwh_per_gpu_hr": 0.7,
+        })
+
+    summary = sfb.summarize(
+        rows,
+        strategy_modes=(sfb.STRATEGY_MEAN_REVERSION, sfb.STRATEGY_MOMENTUM),
+        window=12,
+        horizon_steps=3,
+        threshold_z=0.8,
+        min_obs=40,
+        min_distinct=8,
+        min_trades=4,
+    )
+
+    compute_calendar = next(f for f in summary["families"] if f["family_id"] == "compute_prompt_calendar_21d")
+    power_calendar = next(f for f in summary["families"] if f["family_id"] == "electricity_prompt_calendar_21d")
+    curve_basis = next(f for f in summary["families"] if f["family_id"] == "compute_power_prompt_basis_21d")
+    scoreboard = summary["archetype_scoreboard"]
+
+    assert compute_calendar["observations"] > 100
+    assert compute_calendar["raw_observations"] == len(rows) - 21
+    assert power_calendar["observations"] > 100
+    assert curve_basis["observations"] > 100
+    assert "prior 21-mark" in compute_calendar["formula"]
+    assert next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")["evidence_level"] == "replayed"
+    assert next(item for item in scoreboard if item["archetype_id"] == "electricity_calendar_spread")["evidence_level"] == "replayed"
+    assert next(item for item in scoreboard if item["archetype_id"] == "compute_power_calendar_basis")["evidence_level"] == "replayed"
+
+
 def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     summary = sfb.summarize([], min_obs=1, min_distinct=1)
     catalog = summary["index_catalog"]
     scoreboard = summary["archetype_scoreboard"]
 
     assert any(item["id"] == "eia_ercot_tx_proxy" for item in catalog["electricity"])
+    assert any(item["id"] == "ercot_hub_rt_lmp" for item in catalog["electricity"])
+    assert any(item["id"] == "power_curve_prompt_term_proxy" for item in catalog["electricity"])
     assert any(item["id"] == "silicondata_h100_rental" for item in catalog["compute"])
+    assert any(item["id"] == "aws_gpu_region_basis" for item in catalog["compute"])
+    assert any(item["id"] == "compute_curve_prompt_term_proxy" for item in catalog["compute"])
     assert any(item["id"] == "compute_calendar_spread" for item in catalog["spread_archetypes"])
+    assert any(item["id"] == "electricity_calendar_spread" for item in catalog["spread_archetypes"])
+    assert any(item["id"] == "compute_power_calendar_basis" for item in catalog["spread_archetypes"])
     assert any(item["archetype_id"] == "compute_spark_spread" and item["evidence_level"] == "replayed" for item in scoreboard)
     calendar = next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")
-    assert calendar["replay_status"] == "NEEDS_INDEX_HISTORY"
-    assert "term/forward GPU rental" in calendar["required_indexes"]
+    assert calendar["evidence_level"] == "replayed"
+    assert "prior-mark term proxy" in calendar["required_indexes"]
 
 
 def test_archetype_scoreboard_surfaces_promotable_oil_style_spreads():
