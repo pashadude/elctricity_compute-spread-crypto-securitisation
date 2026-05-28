@@ -172,6 +172,20 @@ def _spread_replay_line(snap: dict[str, Any]) -> str:
     return f"spread replay: {status} | {label} | {obs}/{raw} mark changes, {collapsed} repeated polls collapsed"
 
 
+def _spread_archetype_line(snap: dict[str, Any]) -> str:
+    replay = snap.get("spread_families") if isinstance(snap.get("spread_families"), dict) else {}
+    rows = replay.get("archetype_scoreboard") if isinstance(replay.get("archetype_scoreboard"), list) else []
+    if not rows:
+        return ""
+    parts = []
+    for row in rows[:4]:
+        label = row.get("label") or row.get("archetype_id") or "spread"
+        status = row.get("replay_status") or "UNKNOWN"
+        evidence = row.get("evidence_level") or "planned"
+        parts.append(f"{label}:{status}/{evidence}")
+    return "spread archetypes: " + "; ".join(parts)
+
+
 def _proxy_replay_line(snap: dict[str, Any]) -> str:
     replay = snap.get("proxy_baskets") if isinstance(snap.get("proxy_baskets"), dict) else {}
     primary = replay.get("active_basket") if isinstance(replay.get("active_basket"), dict) else {}
@@ -269,6 +283,9 @@ def format_status(snap: dict[str, Any]) -> str:
     spread_line = _spread_replay_line(snap)
     if spread_line:
         parts.append(spread_line)
+    archetype_line = _spread_archetype_line(snap)
+    if archetype_line:
+        parts.append(archetype_line)
     proxy_line = _proxy_replay_line(snap)
     if proxy_line:
         parts.append(proxy_line)
@@ -331,6 +348,9 @@ def format_latest(snap: dict[str, Any]) -> str:
         spread_line = _spread_replay_line(snap)
         if spread_line:
             lines.append(spread_line)
+        archetype_line = _spread_archetype_line(snap)
+        if archetype_line:
+            lines.append(archetype_line)
         proxy_line = _proxy_replay_line(snap)
         if proxy_line:
             lines.append(proxy_line)

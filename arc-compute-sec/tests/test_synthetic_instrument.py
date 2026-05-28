@@ -4,7 +4,7 @@ from agent.synthetic_instrument import propose_synthetic_instrument
 
 def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     proposal = propose_synthetic_instrument(
-        spread={"latest": {"region": "ERCOT|us-east-1", "electricity_per_mwh": "95", "compute_per_gpu_hr": "1.5", "S_t": "1.46"}},
+        spread={"latest": {"region": "ERCOT|us-east-1", "electricity_per_mwh": "95", "compute_per_gpu_hr": "1.5", "S_t": "1.46", "kwh_per_gpu_hr": "1.2"}},
         signal={"latest": {"signal_id": "sig-1", "direction": "electricity_expensive", "region": "ERCOT|us-east-1", "z": "-2.2"}},
         direct_inventory=[
             {
@@ -69,7 +69,8 @@ def test_proposal_is_synthetic_not_asset_backed_and_source_aware():
     assert construction["score_scale"] == "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users"
     assert len(construction["decision_basis_hash"]) == 16
     assert construction["decision_basis"]["signal"]["z"] == -2.2
-    assert construction["decision_basis"]["spread"]["kWh_per_gpu_hr"] == 0.7
+    assert construction["decision_basis"]["spread"]["kWh_per_gpu_hr"] == 1.2
+    assert construction["modeled_power_cost_share_pct"] > 2.5
     assert construction["judge_verdict"]["label"] == "EXECUTE"
     assert construction["judge_verdict"]["reason_code"] == "all_gates_passed"
     assert len(construction["judge_candidate_hash"]) == 16
@@ -125,6 +126,69 @@ def test_mock_recommendation_refresh_key_changes_with_spread_state():
     assert first_decision["judge_candidate_hash"] != second_decision["judge_candidate_hash"]
     assert first_decision["recommended_action"] == "BUY_CONTRACT"
     assert first_decision["profitability_score"] == first_decision["entry_signal_score"]
+
+
+def test_mock_recommendation_blocks_buy_when_energy_materiality_is_too_weak(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "PJM", "electricity_per_mwh": "60.0", "compute_per_gpu_hr": "3.0", "S_t": "2.98", "k": "0.5", "kwh_per_gpu_hr": "0.7"}},
+        signal={"latest": {"signal_id": "sig-weak-energy", "direction": "compute_expensive", "region": "PJM", "z": "4.0"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[{
+            "surface": "public_market",
+            "instrument": "NVDA",
+            "leg_title": "NVIDIA",
+            "leg_slug": "NVDA",
+            "direct_pair_role": "AI compute-demand equity proxy",
+            "label": "PRICED",
+            "pricing_status": "priced_public_market",
+            "last_price": 180.0,
+            "currency": "USD",
+        }],
+        spread_family_validation={
+            "entry_gate_pass": True,
+            "primary_family": {
+                "family_id": "compute_net_power_margin",
+                "status": "PROMOTABLE",
+                "tested_trades": 12,
+                "win_rate": 60.0,
+                "total_pnl_per_unit": 0.5,
+            },
+        },
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "compute_scarcity_ai_infra",
+                "direction": "compute_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
+                "is_promotable": True,
+            },
+            "baskets": [{
+                "basket_id": "compute_scarcity_ai_infra",
+                "direction": "compute_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
+                "is_promotable": True,
+            }],
+        },
+    )
+
+    construction = proposal["outputs"]["mock_hedge_construction"]
+
+    assert construction["recommended_action"] == "MONITOR_ONLY"
+    assert construction["recommendation_label"] == "Monitor: weak energy link"
+    assert construction["modeled_power_cost_share_pct"] < 2.5
+    assert "mostly a compute-price signal" in construction["recommendation_reason"]
 
 
 def test_mock_recommendation_calls_judge_on_decision_basis(monkeypatch):

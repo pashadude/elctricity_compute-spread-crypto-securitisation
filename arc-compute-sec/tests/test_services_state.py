@@ -119,6 +119,8 @@ def test_spread_state_merges_latest_power_proxy_source(tmp_path, monkeypatch):
     assert latest["electricity_base_per_mwh"] == 62.6
     assert latest["electricity_proxy_used_quotes"] == 3
     assert latest["compute_instance"] == "p4d.24xlarge"
+    assert latest["power_cost_per_gpu_hr"] == 0.022237
+    assert latest["power_cost_share_pct"] == 2.5668
 
 
 def test_spread_family_state_uses_proxy_history_when_runtime_marks_are_flat(tmp_path, monkeypatch):

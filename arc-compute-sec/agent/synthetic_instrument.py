@@ -23,6 +23,7 @@ DEFAULT_HEDGE_RATIO = 0.35
 ARC_SETTLEMENT_BUFFER_USDC = 5.0
 LIQUIDITY_BUFFER_RATE = 0.05
 ENTRY_SIGNAL_BUY_THRESHOLD = 70.0
+MIN_MODELED_POWER_COST_SHARE_FOR_BUY = 0.025
 WEIGHTS_ELECTRICITY_EXPENSIVE = {
     "NRG": 0.24,
     "CEG": 0.20,
@@ -176,6 +177,10 @@ def _gpu_kwh(spread_latest: dict[str, Any], signal_latest: dict[str, Any]) -> fl
         spread_latest.get("kwh_per_gpu_hr", spread_latest.get("kWh_per_gpu_hr")),
         _num(signal_latest.get("kwh_per_gpu_hr", signal_latest.get("kWh_per_gpu_hr")), DEFAULT_GPU_KWH),
     )
+
+
+def _k_factor(spread_latest: dict[str, Any], signal_latest: dict[str, Any]) -> float:
+    return _num(spread_latest.get("k"), _num(signal_latest.get("k"), 0.5))
 
 
 def _region_profile(region: str) -> dict[str, Any]:
@@ -653,6 +658,7 @@ def _mock_recommendation(
     proxy_basket_validation: dict[str, Any] | None,
     receivable: float,
     power_cost: float,
+    modeled_power_cost: float,
     margin: float,
     hedge_notional: float,
     circle_ask: float,
@@ -660,6 +666,8 @@ def _mock_recommendation(
     z_score = _num(signal_latest.get("z"))
     abs_z = abs(z_score)
     margin_ratio = margin / receivable if receivable > 0 else 0.0
+    gross_power_share = power_cost / receivable if receivable > 0 else 0.0
+    modeled_power_share = modeled_power_cost / receivable if receivable > 0 else 0.0
     live_prices = [row for row in weighted_legs if _num(row.get("last_price")) > 0]
     primary_family = (spread_family_validation or {}).get("primary_family") or {}
     entry_gate_pass = (spread_family_validation or {}).get("entry_gate_pass")
@@ -685,6 +693,9 @@ def _mock_recommendation(
         "economics": {
             "receivable_usdc": _round_money(receivable),
             "power_cost_usdc": _round_money(power_cost),
+            "power_cost_share_pct": _round_units(gross_power_share * 100.0),
+            "modeled_power_cost_usdc": _round_money(modeled_power_cost),
+            "modeled_power_cost_share_pct": _round_units(modeled_power_share * 100.0),
             "margin_usdc": _round_money(margin),
             "hedge_notional_usdc": _round_money(hedge_notional),
             "circle_ask_usdc": _round_money(circle_ask),
@@ -865,6 +876,22 @@ def _mock_recommendation(
                 "decision_basis": basis,
             })
 
+    if modeled_power_share < MIN_MODELED_POWER_COST_SHARE_FOR_BUY:
+        return with_judge({
+            "recommended_action": "MONITOR_ONLY",
+            "recommendation_label": "Monitor: weak energy link",
+            "recommendation_reason": (
+                f"The modeled electricity component is only {modeled_power_share * 100.0:.2f}% of GPU-hour revenue. "
+                "That makes the current cloud-compute mark mostly a compute-price signal, so a fresh hedge ticket "
+                "needs stronger proxy-basket confirmation or a more power-intensive collateral profile."
+            ),
+            "recommendation_summary": "Monitor only; the live compute sale is profitable, but energy materiality is too weak for a fresh buy.",
+            "entry_signal_score": _round_units(edge_score),
+            "score_scale": "0-100 entry score; buy threshold is 70 and raw z-score is not shown to users",
+            "decision_basis_hash": basis_hash,
+            "decision_basis": basis,
+        })
+
     if edge_score >= ENTRY_SIGNAL_BUY_THRESHOLD:
         return with_judge({
             "recommended_action": "BUY_CONTRACT",
@@ -907,8 +934,10 @@ def _mock_hedge_construction(
     electricity_per_mwh = _num(spread_latest.get("electricity_per_mwh"), _num(signal_latest.get("electricity_per_mwh")))
     gpu_hours = max(1.0, _num(spread_latest.get("demo_gpu_hours"), DEFAULT_DEMO_GPU_HOURS))
     gpu_kwh = max(0.01, _gpu_kwh(spread_latest, signal_latest))
+    k_factor = max(0.01, _k_factor(spread_latest, signal_latest))
     receivable = compute_per_gpu_hr * gpu_hours
     power_cost = electricity_per_mwh / 1000.0 * gpu_kwh * gpu_hours
+    modeled_power_cost = electricity_per_mwh / 1000.0 * gpu_kwh * k_factor * gpu_hours
     margin = receivable - power_cost
     hedge_notional = max(100.0, receivable * DEFAULT_HEDGE_RATIO)
     weighted_legs = _weighted_hedge_legs(hedge_basket, hedge_notional, direction)
@@ -930,6 +959,7 @@ def _mock_hedge_construction(
         proxy_basket_validation=proxy_basket_validation,
         receivable=receivable,
         power_cost=power_cost,
+        modeled_power_cost=modeled_power_cost,
         margin=margin,
         hedge_notional=hedge_notional,
         circle_ask=circle_ask,
@@ -962,8 +992,12 @@ def _mock_hedge_construction(
         "profitability_note": recommendation["recommendation_summary"],
         "demo_gpu_hours": _round_units(gpu_hours),
         "gpu_kwh_per_hr": _round_units(gpu_kwh),
+        "k_factor": _round_units(k_factor),
         "receivable_usdc": _round_money(receivable),
         "estimated_power_cost_usdc": _round_money(power_cost),
+        "modeled_power_cost_usdc": _round_money(modeled_power_cost),
+        "power_cost_share_pct": _round_units((power_cost / receivable) * 100.0 if receivable > 0 else 0.0),
+        "modeled_power_cost_share_pct": _round_units((modeled_power_cost / receivable) * 100.0 if receivable > 0 else 0.0),
         "estimated_compute_margin_usdc": _round_money(margin),
         "hedge_ratio": DEFAULT_HEDGE_RATIO,
         "hedge_notional_usdc": _round_money(hedge_notional),

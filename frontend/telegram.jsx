@@ -194,6 +194,7 @@ const tgMockConstruction = (data) => data.syntheticInstrument?.outputs?.mock_hed
 const tgSearchPlan = (data) => data.syntheticInstrument?.outputs?.agent_search_plan || [];
 const tgWeightedLegs = (data) => tgMockConstruction(data).weighted_legs || [];
 const tgSpreadFamilies = (data) => data.spreadFamilies?.families || [];
+const tgSpreadArchetypes = (data) => data.spreadFamilies?.archetypeScoreboard || [];
 const tgProxyBaskets = (data) => data.proxyBaskets?.baskets || [];
 const tgInstrumentMenu = (data) => data.syntheticInstrument?.outputs?.syndicated_instrument_menu || [];
 const tgVenueEvidence = (data) => data.venueEvidence?.rows || [];
@@ -335,6 +336,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
             { label: 'Electricity', value: `$${data.spread.elec || '0.00'}`, unit: '/MWh', color: TG_THEME.orange },
             { label: 'Compute', value: `$${data.spread.compute || '0.0000'}`, unit: '/GPU-hr', color: TG_THEME.blue },
             { label: 'Spread S_t', value: `$${data.spread.st || '0.0000'}`, unit: '', color: TG_THEME.green },
+            { label: 'Power Share', value: data.spread.powerSharePct === null || data.spread.powerSharePct === undefined ? '-' : `${Number(data.spread.powerSharePct).toFixed(2)}%`, unit: '', color: Number(data.spread.powerSharePct || 0) < 2.5 ? TG_THEME.orange : TG_THEME.green },
             { label: 'Z-Score', value: Number(data.z || 0).toFixed(2), unit: '', color: Math.abs(Number(data.z || 0)) > 1 ? TG_THEME.red : TG_THEME.green },
           ].map((m, i) => (
             <div key={i} style={{ padding: '10px', background: TG_THEME.elevated, borderRadius: '8px' }}>
@@ -351,6 +353,36 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
             {data.spread.proxyMovePct !== null && data.spread.proxyMovePct !== undefined
               ? ` · move ${Number(data.spread.proxyMovePct) >= 0 ? '+' : ''}${Number(data.spread.proxyMovePct).toFixed(2)}%`
               : ''}
+          </div>
+        )}
+        {data.spread.powerSharePct !== null && data.spread.powerSharePct !== undefined && Number(data.spread.powerSharePct) < 2.5 && (
+          <div style={{ fontSize: '11px', color: TG_THEME.orange, lineHeight: 1.35, marginTop: '8px' }}>
+            Weak energy materiality: this cloud mark is mostly compute-price movement unless proxy baskets and direct events confirm the power thesis.
+          </div>
+        )}
+        {tgSpreadArchetypes(data).length > 0 && (
+          <div style={{ marginTop: '12px' }}>
+            <div style={{ fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700, marginBottom: '6px' }}>Oil-style spread menu</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {tgSpreadArchetypes(data).slice(0, 4).map(item => (
+                <div key={item.archetype_id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{item.label}</div>
+                      <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
+                        {item.oil_analogy} · {item.strategy_label || item.evidence_level || 'planned'}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '10px', color: item.is_promotable ? TG_THEME.green : (item.evidence_level === 'planned' ? TG_THEME.tertiary : TG_THEME.orange), fontWeight: 800, textAlign: 'right' }}>
+                      {String(item.replay_status || '').replaceAll('_', ' ')}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
+                    z {Number(item.latest_z || 0).toFixed(2)} · {item.tested_trades || 0} trades · WR {Number(item.win_rate || 0).toFixed(0)}%
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {tgSpreadFamilies(data).length > 0 && (

@@ -28,6 +28,7 @@ DEFAULT_STRATEGY_MODES = (STRATEGY_MEAN_REVERSION,)
 @dataclass(frozen=True, slots=True)
 class SpreadFamily:
     family_id: str
+    archetype_id: str
     label: str
     formula: str
     unit: str
@@ -70,6 +71,7 @@ def _safe_ratio(num: float, den: float) -> float:
 SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
     SpreadFamily(
         family_id="compute_net_power_margin",
+        archetype_id="compute_spark_spread",
         label="Compute minus power cost",
         formula="compute - k * (electricity/1000) * kWh",
         unit="USD/GPU-hr",
@@ -79,6 +81,7 @@ SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
     ),
     SpreadFamily(
         family_id="power_cost_share",
+        archetype_id="power_cost_share",
         label="Power cost share",
         formula="k * (electricity/1000) * kWh / compute",
         unit="ratio",
@@ -88,6 +91,7 @@ SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
     ),
     SpreadFamily(
         family_id="compute_power_ratio",
+        archetype_id="compute_power_ratio",
         label="Compute / power ratio",
         formula="compute / (k * electricity/1000 * kWh)",
         unit="ratio",
@@ -97,6 +101,7 @@ SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
     ),
     SpreadFamily(
         family_id="raw_compute_power_margin",
+        archetype_id="fuel_stack_compute_spread",
         label="Raw compute minus power",
         formula="compute - (electricity/1000) * kWh",
         unit="USD/GPU-hr",
@@ -246,6 +251,7 @@ SPREAD_ARCHETYPE_CATALOG = [
         "formula": "GPU-hour revenue - power input cost",
         "oil_analogy": "refining crack spread",
         "status": "active",
+        "required_indexes": ["electricity $/MWh", "compute $/GPU-hour"],
     },
     {
         "id": "power_cost_share",
@@ -253,6 +259,15 @@ SPREAD_ARCHETYPE_CATALOG = [
         "formula": "power input cost / GPU-hour revenue",
         "oil_analogy": "margin share / cost-cover ratio",
         "status": "active",
+        "required_indexes": ["electricity $/MWh", "compute $/GPU-hour"],
+    },
+    {
+        "id": "compute_power_ratio",
+        "label": "Compute / power ratio",
+        "formula": "GPU-hour revenue / power input cost",
+        "oil_analogy": "refinery margin ratio",
+        "status": "active",
+        "required_indexes": ["electricity $/MWh", "compute $/GPU-hour"],
     },
     {
         "id": "regional_compute_power_basis",
@@ -260,6 +275,7 @@ SPREAD_ARCHETYPE_CATALOG = [
         "formula": "region A compute spark - region B compute spark",
         "oil_analogy": "WTI-Brent or regional basis",
         "status": "planned",
+        "required_indexes": ["two regional electricity marks", "two regional compute rental marks"],
     },
     {
         "id": "compute_calendar_spread",
@@ -267,6 +283,7 @@ SPREAD_ARCHETYPE_CATALOG = [
         "formula": "front GPU-hour rental - forward/term GPU-hour rental",
         "oil_analogy": "front-month calendar spread",
         "status": "planned",
+        "required_indexes": ["spot GPU rental", "term/forward GPU rental"],
     },
     {
         "id": "fuel_stack_compute_spread",
@@ -274,6 +291,7 @@ SPREAD_ARCHETYPE_CATALOG = [
         "formula": "compute margin vs Henry Hub/Brent power-input basket",
         "oil_analogy": "fuel crack / input-cost hedge",
         "status": "proxy",
+        "required_indexes": ["compute $/GPU-hour", "fuel/power proxy basket"],
     },
 ]
 
@@ -440,6 +458,7 @@ def replay_family(
     )
     return {
         "family_id": family.family_id,
+        "archetype_id": family.archetype_id,
         "strategy_id": strategy,
         "strategy_label": "Trend-following" if strategy == STRATEGY_MOMENTUM else "Mean-reversion",
         "label": family.label,
@@ -477,6 +496,71 @@ def replay_family(
     }
 
 
+def _family_sort_key(item: dict[str, Any]) -> tuple[int, float, float, str]:
+    return (
+        0 if item.get("is_promotable") else 1,
+        -abs(float(item.get("latest_z") or 0.0)),
+        -float(item.get("total_pnl_per_unit") or 0.0),
+        str(item.get("family_id") or ""),
+    )
+
+
+def _archetype_scoreboard(families: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for archetype in SPREAD_ARCHETYPE_CATALOG:
+        matches = [family for family in families if family.get("archetype_id") == archetype["id"]]
+        if matches:
+            best = sorted(matches, key=_family_sort_key)[0]
+            rows.append({
+                "archetype_id": archetype["id"],
+                "label": archetype["label"],
+                "formula": archetype["formula"],
+                "oil_analogy": archetype["oil_analogy"],
+                "catalog_status": archetype["status"],
+                "required_indexes": archetype.get("required_indexes", []),
+                "replay_status": best.get("status", "UNKNOWN"),
+                "status_reason": best.get("status_reason", ""),
+                "is_promotable": bool(best.get("is_promotable")),
+                "best_family_id": best.get("family_id", ""),
+                "best_family_label": best.get("label", ""),
+                "strategy_id": best.get("strategy_id", ""),
+                "strategy_label": best.get("strategy_label", ""),
+                "latest_z": best.get("latest_z", 0),
+                "tested_trades": best.get("tested_trades", 0),
+                "win_rate": best.get("win_rate", 0),
+                "total_pnl_per_unit": best.get("total_pnl_per_unit", 0),
+                "evidence_level": "replayed",
+            })
+            continue
+        rows.append({
+            "archetype_id": archetype["id"],
+            "label": archetype["label"],
+            "formula": archetype["formula"],
+            "oil_analogy": archetype["oil_analogy"],
+            "catalog_status": archetype["status"],
+            "required_indexes": archetype.get("required_indexes", []),
+            "replay_status": "NEEDS_INDEX_HISTORY" if archetype["status"] == "planned" else "NO_REPLAY",
+            "status_reason": "Not yet replayed because the required index history is not available in the current feed set.",
+            "is_promotable": False,
+            "best_family_id": "",
+            "best_family_label": "",
+            "strategy_id": "",
+            "strategy_label": "",
+            "latest_z": 0,
+            "tested_trades": 0,
+            "win_rate": 0,
+            "total_pnl_per_unit": 0,
+            "evidence_level": "planned",
+        })
+    rows.sort(key=lambda row: (
+        0 if row["is_promotable"] else 1,
+        0 if row["evidence_level"] == "replayed" else 1,
+        -abs(float(row.get("latest_z") or 0.0)),
+        row["archetype_id"],
+    ))
+    return rows
+
+
 def summarize(
     rows: list[dict[str, Any]],
     *,
@@ -505,13 +589,10 @@ def summarize(
                 )
             )
     families.sort(
-        key=lambda item: (
-            0 if item["is_promotable"] else 1,
-            -abs(float(item.get("latest_z") or 0.0)),
-            item["family_id"],
-        )
+        key=_family_sort_key
     )
     primary = families[0] if families else None
+    archetype_scoreboard = _archetype_scoreboard(families)
     return {
         "version": "spread_family_replay_v1",
         "policy": "walk_forward_mean_reversion_no_lookahead",
@@ -522,6 +603,7 @@ def summarize(
         "entry_gate_pass": any(item["is_promotable"] for item in families),
         "primary_family": primary,
         "families": families,
+        "archetype_scoreboard": archetype_scoreboard,
         "index_catalog": {
             "electricity": ELECTRICITY_INDEX_CATALOG,
             "compute": COMPUTE_INDEX_CATALOG,

@@ -101,7 +101,31 @@ def test_walk_forward_replay_can_promote_trend_following_spread_family():
 def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     summary = sfb.summarize([], min_obs=1, min_distinct=1)
     catalog = summary["index_catalog"]
+    scoreboard = summary["archetype_scoreboard"]
 
     assert any(item["id"] == "eia_ercot_tx_proxy" for item in catalog["electricity"])
     assert any(item["id"] == "silicondata_h100_rental" for item in catalog["compute"])
     assert any(item["id"] == "compute_calendar_spread" for item in catalog["spread_archetypes"])
+    assert any(item["archetype_id"] == "compute_spark_spread" and item["evidence_level"] == "replayed" for item in scoreboard)
+    calendar = next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")
+    assert calendar["replay_status"] == "NEEDS_INDEX_HISTORY"
+    assert "term/forward GPU rental" in calendar["required_indexes"]
+
+
+def test_archetype_scoreboard_surfaces_promotable_oil_style_spreads():
+    rows = []
+    for i in range(240):
+        s_t = 0.80 + 0.0005 * i + 0.005 * math.sin(i * 2 * math.pi / 36)
+        rows.append(_row(s_t, ts=i))
+
+    summary = sfb.summarize(
+        rows,
+        strategy_modes=(sfb.STRATEGY_MEAN_REVERSION, sfb.STRATEGY_MOMENTUM),
+    )
+    scoreboard = summary["archetype_scoreboard"]
+    spark = next(item for item in scoreboard if item["archetype_id"] == "compute_spark_spread")
+
+    assert spark["evidence_level"] == "replayed"
+    assert spark["is_promotable"] is True
+    assert spark["strategy_label"] == "Trend-following"
+    assert spark["oil_analogy"] == "refining crack spread"

@@ -16,6 +16,8 @@ def test_compute_spread_basic():
     )
     # $/GPU-hr units: 1.50 - 0.5 * (80/1000) * 0.7 = 1.50 - 0.028 = 1.472
     assert math.isclose(pt.S_t, 1.472, abs_tol=1e-9)
+    assert math.isclose(pt.power_cost_per_gpu_hr, 0.028, abs_tol=1e-9)
+    assert math.isclose(pt.power_cost_share, 0.028 / 1.50, abs_tol=1e-9)
     assert pt.region == "MOCK"
 
 

@@ -577,7 +577,22 @@ def spread_state(*, logs: Path | str | None = None, limit: int = 120) -> dict[st
             "compute_source": source.get("compute_source", ""),
             "compute_instance": source.get("compute_instance", ""),
             "compute_region": source.get("compute_region", ""),
+            "power_cost_per_gpu_hr": source.get("power_cost_per_gpu_hr", latest.get("power_cost_per_gpu_hr", "")),
+            "power_cost_share": source.get("power_cost_share", latest.get("power_cost_share", "")),
+            "power_cost_share_pct": source.get("power_cost_share_pct", latest.get("power_cost_share_pct", "")),
         })
+    if latest:
+        compute = _as_float(latest.get("compute_per_gpu_hr"))
+        elec = _as_float(latest.get("electricity_per_mwh"))
+        k = _as_float(latest.get("k"))
+        kwh = _as_float(latest.get("kwh_per_gpu_hr") or latest.get("kWh_per_gpu_hr"))
+        if compute and elec and k and kwh and not latest.get("power_cost_per_gpu_hr"):
+            power_cost = k * (elec / 1000.0) * kwh
+            latest["power_cost_per_gpu_hr"] = round(power_cost, 6)
+            latest["power_cost_share"] = round(power_cost / compute, 6) if compute > 0 else 0.0
+            latest["power_cost_share_pct"] = round((power_cost / compute) * 100.0, 4) if compute > 0 else 0.0
+        elif latest.get("power_cost_share") and not latest.get("power_cost_share_pct"):
+            latest["power_cost_share_pct"] = round(_as_float(latest.get("power_cost_share")) * 100.0, 4)
     return {"latest": latest, "history": history, "mark_source": source}
 
 

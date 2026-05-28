@@ -177,8 +177,12 @@ const derivePrimaryExposure = ({ positions = [], verdicts = [], candidates = [] 
 };
 
 const emptyDashboardData = (status = 'loading', error = '') => ({
-  spread: { elec: '0.00', compute: '0.0000', st: '0.0000', k: 0.5, kwh: 0.7, source: '', sourceStatus: '' },
-  spreadFamilies: { families: [], primaryFamily: null, entryGatePass: false },
+  spread: {
+    elec: '0.00', compute: '0.0000', st: '0.0000',
+    k: 0.5, kwh: 0.7, powerCost: '0.0000', powerSharePct: null,
+    source: '', sourceStatus: '',
+  },
+  spreadFamilies: { families: [], archetypeScoreboard: [], primaryFamily: null, entryGatePass: false },
   proxyBaskets: { baskets: [], primaryBasket: null, entryGatePass: false },
   venueEvidence: { rows: [], summary: {}, guardrail: '' },
   history: [],
@@ -415,6 +419,12 @@ const mapSnapshotToDashboardData = (snapshot) => {
       st: numberOr(spreadLatest.S_t).toFixed(4),
       k: numberOr(spreadLatest.k, 0.5),
       kwh: numberOr(spreadLatest.kwh_per_gpu_hr, 0.7),
+      powerCost: numberOr(spreadLatest.power_cost_per_gpu_hr).toFixed(4),
+      powerSharePct: spreadLatest.power_cost_share_pct === '' || spreadLatest.power_cost_share_pct === undefined
+        ? (spreadLatest.power_cost_share === '' || spreadLatest.power_cost_share === undefined
+          ? null
+          : numberOr(spreadLatest.power_cost_share) * 100)
+        : numberOr(spreadLatest.power_cost_share_pct),
       source: spreadLatest.electricity_source || '',
       sourceStatus: spreadLatest.electricity_source_status || '',
       baseElec: spreadLatest.electricity_base_per_mwh === '' || spreadLatest.electricity_base_per_mwh === undefined
@@ -433,6 +443,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
       entryGatePass: Boolean(snapshot?.spread_families?.entry_gate_pass),
       primaryFamily: snapshot?.spread_families?.primary_family || null,
       families: snapshot?.spread_families?.families || [],
+      archetypeScoreboard: snapshot?.spread_families?.archetype_scoreboard || [],
       policy: snapshot?.spread_families?.policy || '',
       caveat: snapshot?.spread_families?.caveat || '',
       primarySource: snapshot?.spread_families?.primary_source || '',
@@ -600,6 +611,7 @@ const SignalPanel = ({ data }) => {
   const zColor = Math.abs(data.z) > 2 ? THEME.red[400] : Math.abs(data.z) > 1 ? THEME.amber[400] : THEME.primary[400];
   const isNarrow = useIsMobile(560);
   const families = data.spreadFamilies?.families || [];
+  const archetypes = data.spreadFamilies?.archetypeScoreboard || [];
   const primaryFamily = data.spreadFamilies?.primaryFamily || families[0] || null;
   const sourceLabel = data.spread.source === 'eia_plus_power_proxy'
     ? 'EIA anchor + public power/fuel proxy'
@@ -607,6 +619,8 @@ const SignalPanel = ({ data }) => {
   const proxyLine = data.spread.baseElec && data.spread.proxyMovePct !== null && data.spread.proxyMovePct !== undefined
     ? `base $${Number(data.spread.baseElec).toFixed(2)} · proxy ${Number(data.spread.proxyMovePct) >= 0 ? '+' : ''}${Number(data.spread.proxyMovePct).toFixed(2)}%`
     : '';
+  const powerShare = data.spread.powerSharePct;
+  const powerShareWeak = powerShare !== null && powerShare !== undefined && Number(powerShare) < 2.5;
   return (
     <Card glow>
       <div style={{
@@ -632,7 +646,7 @@ const SignalPanel = ({ data }) => {
       </div>
       <div style={{
         display: 'grid',
-        gridTemplateColumns: isNarrow ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+        gridTemplateColumns: isNarrow ? 'repeat(2, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))',
         gap: isNarrow ? '10px' : '16px',
         marginBottom: '20px',
         minWidth: 0,
@@ -655,12 +669,28 @@ const SignalPanel = ({ data }) => {
           <MonoText style={{ fontSize: '18px', fontWeight: 700 }}>${data.spread.st}</MonoText>
         </div>
         <div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Power Share</div>
+          <MonoText style={{ fontSize: '18px', fontWeight: 700, color: powerShareWeak ? THEME.amber[400] : THEME.primary[400] }}>
+            {powerShare === null || powerShare === undefined ? '-' : `${Number(powerShare).toFixed(2)}%`}
+          </MonoText>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.3, marginTop: '2px' }}>
+            ${data.spread.powerCost}/GPU-hr modeled power
+          </div>
+        </div>
+        <div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted }}>Z-Score</div>
           <MonoText style={{ fontSize: '18px', fontWeight: 700, color: zColor }}>
             {data.z.toFixed(3)}
           </MonoText>
         </div>
       </div>
+      {powerShareWeak && (
+        <div style={{ padding: '9px 10px', borderRadius: '6px', background: `${THEME.amber[400]}10`, border: `1px solid ${THEME.amber[400]}25`, marginBottom: '12px' }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.4 }}>
+            Energy materiality is weak in this live cloud mark. Treat the signal as compute-led unless the direction-matched proxy basket and direct event legs confirm the power thesis.
+          </div>
+        </div>
+      )}
       <div style={{ height: '80px', position: 'relative', width: '100%', maxWidth: '100%', overflow: 'hidden', minWidth: 0 }}>
         <Sparkline data={data.history} width={600} height={80} color={THEME.primary[400]} style={{ width: '100%', height: '80px' }} />
         {/* threshold lines */}
@@ -671,6 +701,55 @@ const SignalPanel = ({ data }) => {
           <span style={{ position: 'absolute', right: 0, top: '-14px', fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.red[400] }}>-σ</span>
         </div>
       </div>
+      {archetypes.length > 0 && (
+        <div style={{ marginTop: '14px' }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.muted, marginBottom: '7px' }}>
+            Oil-style spread archetypes
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+            {archetypes.slice(0, 6).map(item => {
+              const color = item.is_promotable ? THEME.primary[400] : (item.evidence_level === 'planned' ? THEME.text.faint : THEME.amber[400]);
+              return (
+                <div key={item.archetype_id} style={{ padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                        {item.label}
+                      </div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.3, marginTop: '2px' }}>
+                        {item.oil_analogy}
+                      </div>
+                    </div>
+                    <MonoText style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                      {String(item.replay_status || '').replaceAll('_', ' ')}
+                    </MonoText>
+                  </div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '6px', overflowWrap: 'anywhere' }}>
+                    {item.formula}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '5px', marginTop: '7px' }}>
+                    {[
+                      ['z', Number(item.latest_z || 0).toFixed(2)],
+                      ['trades', item.tested_trades || 0],
+                      ['WR', `${Number(item.win_rate || 0).toFixed(0)}%`],
+                    ].map(([label, value]) => (
+                      <div key={label} style={{ padding: '5px', borderRadius: '5px', background: THEME.bg.surface }}>
+                        <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                        <MonoText style={{ fontSize: '10px', color: THEME.text.secondary }}>{value}</MonoText>
+                      </div>
+                    ))}
+                  </div>
+                  {item.evidence_level === 'planned' && (
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.3, marginTop: '6px' }}>
+                      needs: {(item.required_indexes || []).join(', ')}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {families.length > 0 && (
         <div style={{ marginTop: '14px' }}>
           <div style={{

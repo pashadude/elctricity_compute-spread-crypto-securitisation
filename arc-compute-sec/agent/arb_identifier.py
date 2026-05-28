@@ -51,6 +51,8 @@ class SpreadPoint:
     S_t: float
     k: float
     kwh_per_gpu_hr: float
+    power_cost_per_gpu_hr: float
+    power_cost_share: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,15 +91,20 @@ def compute_spread(
     Sanity check: ERCOT ind ~$72/MWh, p4d ~$1.54/GPU-hr, k=0.5, kWh=0.7
       S_t = 1.54 − 0.5 × (72 / 1000) × 0.7 = 1.54 − 0.0252 = $1.5148/GPU-hr
     """
-    s_t = float(compute_per_gpu_hr) - float(k) * (float(electricity_per_mwh) / 1000.0) * float(kwh_per_gpu_hr)
+    compute = float(compute_per_gpu_hr)
+    power_cost = float(k) * (float(electricity_per_mwh) / 1000.0) * float(kwh_per_gpu_hr)
+    power_share = power_cost / compute if compute > 0 else 0.0
+    s_t = compute - power_cost
     return SpreadPoint(
         ts=time.time(),
         region=region,
         electricity_per_mwh=float(electricity_per_mwh),
-        compute_per_gpu_hr=float(compute_per_gpu_hr),
+        compute_per_gpu_hr=compute,
         S_t=s_t,
         k=float(k),
         kwh_per_gpu_hr=float(kwh_per_gpu_hr),
+        power_cost_per_gpu_hr=power_cost,
+        power_cost_share=power_share,
     )
 
 
@@ -128,7 +135,8 @@ def append_history(point: SpreadPoint) -> None:
         writer = csv.writer(fh, delimiter="\t")
         if new:
             writer.writerow(["ts", "region", "electricity_per_mwh",
-                             "compute_per_gpu_hr", "S_t", "k", "kwh_per_gpu_hr"])
+                             "compute_per_gpu_hr", "S_t", "k", "kwh_per_gpu_hr",
+                             "power_cost_per_gpu_hr", "power_cost_share"])
         writer.writerow([
             f"{point.ts:.0f}",
             point.region,
@@ -137,6 +145,8 @@ def append_history(point: SpreadPoint) -> None:
             f"{point.S_t:.6f}",
             f"{point.k:.4f}",
             f"{point.kwh_per_gpu_hr:.4f}",
+            f"{point.power_cost_per_gpu_hr:.6f}",
+            f"{point.power_cost_share:.6f}",
         ])
 
 

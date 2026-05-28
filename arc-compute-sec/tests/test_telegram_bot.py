@@ -256,6 +256,22 @@ def test_status_uses_active_direction_matched_proxy_basket():
     assert "Miner-margin power pair" not in text
 
 
+def test_status_formats_spread_archetype_scoreboard():
+    text = telegram_bot.format_status({
+        "runtime": {"state": "idle"},
+        "mode": {"live_chain_enabled": False},
+        "spread_families": {
+            "archetype_scoreboard": [
+                {"label": "Compute spark spread", "replay_status": "PROMOTABLE", "evidence_level": "replayed"},
+                {"label": "Compute calendar spread", "replay_status": "NEEDS_INDEX_HISTORY", "evidence_level": "planned"},
+            ],
+        },
+    })
+
+    assert "spread archetypes: Compute spark spread:PROMOTABLE/replayed" in text
+    assert "Compute calendar spread:NEEDS_INDEX_HISTORY/planned" in text
+
+
 def test_latest_marks_active_syndicated_structure():
     text = telegram_bot.format_latest({
         "signal": {"latest": {"direction": "compute_expensive", "z": 2.4}},
