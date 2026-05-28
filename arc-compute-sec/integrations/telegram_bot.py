@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -91,7 +93,7 @@ def bot_description() -> str:
     return "\n".join([
         "Power by Botozen: live-priced compute/energy mock contract.",
         "/latest + Mini App show notional, Circle test USDC ask, live weights, and buy/monitor recommendation.",
-        "IBKR/Polymarket are scouting inputs, not the funnel. IBKR paper-terminal proxy marks are labelled separately.",
+        "Polymarket/Kalshi/IBKR are scouting inputs, not the funnel. IBKR paper-terminal proxy marks are labelled separately.",
         "Channel posts mock-contract updates, operator notes, and runtime errors. Raw REJECT/DEFER/premium_gate/watchlist noise is muted.",
         "No Arc action unless judge.classify() returns EXECUTE.",
     ])
@@ -146,7 +148,11 @@ def _quote_source_label(source: Any) -> str:
         "ibkr_tws_front_future": "IBKR paper TWS front future",
         "ibkr_tws_stock": "IBKR paper TWS stock",
         "ibkr_tws": "IBKR paper TWS",
+        "ibkr_forecast_inventory": "IBKR ForecastTrader inventory",
+        "polymarket_direct_watchlist": "Polymarket Gamma",
+        "kalshi_direct_ai_watchlist": "Kalshi public API",
         "yahoo_finance_chart": "Yahoo fallback",
+        "yahoo_close_history": "Yahoo close-history replay",
         "alpaca_market_data": "Alpaca fallback",
     }
     return labels.get(low, str(source or "public quotes"))
@@ -173,7 +179,34 @@ def _spread_replay_line(snap: dict[str, Any]) -> str:
     raw = int(float(primary.get("raw_observations") or primary.get("observations") or 0))
     obs = int(float(primary.get("observations") or 0))
     collapsed = int(float(primary.get("collapsed_repeated_marks") or 0))
-    return f"spread replay: {status} | {label} | {obs}/{raw} mark changes, {collapsed} repeated polls collapsed"
+    oos_status = primary.get("oos_status") or ""
+    oos_pnl = _fmt_operator_float(primary.get("oos_test_pnl_per_unit"), places=4)
+    oos = f" | OOS {oos_status}" + (f" {oos_pnl}" if oos_pnl else "") if oos_status else ""
+    return f"spread replay: {status} | {label} | {obs}/{raw} mark changes, {collapsed} repeated polls collapsed{oos}"
+
+
+def _index_coverage_line(snap: dict[str, Any]) -> str:
+    replay = snap.get("spread_families") if isinstance(snap.get("spread_families"), dict) else {}
+    coverage = replay.get("index_coverage") if isinstance(replay.get("index_coverage"), dict) else {}
+    if not coverage:
+        return ""
+    electricity = coverage.get("electricity") if isinstance(coverage.get("electricity"), dict) else {}
+    compute = coverage.get("compute") if isinstance(coverage.get("compute"), dict) else {}
+    archetypes = coverage.get("spread_archetypes") if isinstance(coverage.get("spread_archetypes"), dict) else {}
+    summary = coverage.get("summary") or (
+        f"{electricity.get('usable', 0)}/{electricity.get('total', 0)} electricity indexes usable, "
+        f"{compute.get('usable', 0)}/{compute.get('total', 0)} compute indexes usable, "
+        f"{archetypes.get('replayed', 0)}/{archetypes.get('total', 0)} spread forms replayed."
+    )
+    needs_history = archetypes.get("needs_history") if isinstance(archetypes.get("needs_history"), list) else []
+    suffix = ""
+    if needs_history:
+        suffix = " | needs history: " + ", ".join(
+            str(row.get("label") or row.get("archetype_id"))
+            for row in needs_history[:3]
+            if isinstance(row, dict)
+        )
+    return f"index coverage: {summary}{suffix}"
 
 
 def _spread_archetype_line(snap: dict[str, Any]) -> str:
@@ -186,7 +219,9 @@ def _spread_archetype_line(snap: dict[str, Any]) -> str:
         label = row.get("label") or row.get("archetype_id") or "spread"
         status = row.get("replay_status") or "UNKNOWN"
         evidence = row.get("evidence_level") or "planned"
-        parts.append(f"{label}:{status}/{evidence}")
+        oos = row.get("oos_status") or ""
+        oos_text = f"/OOS {oos}" if oos else ""
+        parts.append(f"{label}:{status}/{evidence}{oos_text}")
     return "spread archetypes: " + "; ".join(parts)
 
 
@@ -230,6 +265,15 @@ def _fmt_operator_pct(value: Any) -> str:
         return ""
     try:
         return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_operator_float(value: Any, *, places: int = 4) -> str:
+    if value in ("", None):
+        return ""
+    try:
+        return f"{float(value):+,.{places}f}"
     except (TypeError, ValueError):
         return ""
 
@@ -368,10 +412,33 @@ def _profitability_ledger_line(snap: dict[str, Any], *, limit: int = 3) -> str:
             if ticket_hit:
                 ticket_text += f" hit {ticket_hit}"
             metrics.append(ticket_text)
+        oos_status = str(row.get("oos_status") or "")
+        oos_return = _fmt_operator_pct(row.get("oos_test_return_pct"))
+        if oos_status and oos_status != "NO_OOS_REPLAY":
+            oos_text = f"OOS {oos_status}"
+            if oos_return:
+                oos_text += f" {oos_return}"
+            metrics.append(oos_text)
+        signal_reason = str(row.get("signal_reason") or row.get("current_action_reason") or "").strip()
+        if signal_reason:
+            metrics.append(f"why {signal_reason[:120]}")
         metric_text = ", ".join(metrics) if metrics else "paper replay"
         parts.append(f"{label}:{status}/{signal} ({metric_text})")
     note = "not realized PnL" if ledger.get("realized") is False else "ledger"
     return "profitability ledger: " + "; ".join(parts) + f" | {note}"
+
+
+def _portfolio_signal_line(snap: dict[str, Any]) -> str:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    summary = outputs.get("portfolio_signal_summary") if isinstance(outputs.get("portfolio_signal_summary"), dict) else {}
+    if not summary:
+        return ""
+    ticket_pnl = _fmt_operator_usd(summary.get("paper_ticket_total_pnl_usdc")) or "n/a"
+    mark_pnl = _fmt_operator_usd(summary.get("latest_mark_total_pnl_usdc")) or "n/a"
+    action = summary.get("action") or "MONITOR"
+    counts = f"{summary.get('buy_count', 0)} buy/{summary.get('close_or_avoid_count', 0)} close/{summary.get('wait_count', 0)} wait"
+    return f"portfolio signal: {action} | tickets {ticket_pnl}, marks {mark_pnl} | {counts}"
 
 
 def _pnl_line(snap: dict[str, Any]) -> str:
@@ -398,7 +465,11 @@ def _venue_evidence_line(snap: dict[str, Any]) -> str:
         suffix = f"{priced} priced"
         if proxy:
             suffix += f", {proxy} proxy"
-        compact.append(f"{surface}:{status} ({suffix})")
+        auth = str(row.get("auth_status") or "").strip()
+        auth_text = f", auth {auth.replace('_', ' ')}" if auth else ""
+        sources = _quote_source_list(row.get("quote_sources") or [], limit=2)
+        source_text = f", source {'/'.join(sources)}" if sources else ""
+        compact.append(f"{surface}:{status} ({suffix}){auth_text}{source_text}")
     return "venue evidence: " + "; ".join(compact) + "; Arc-ready 0 before judge EXECUTE"
 
 
@@ -420,6 +491,43 @@ def _venue_copy_matrix_line(snap: dict[str, Any], *, limit: int = 4) -> str:
             link_text = " -> " + ",".join(str(link.get("archetype_id") or "spread") for link in links[:2])
         parts.append(f"{surface}:{role}/{status}{link_text}")
     return "venue copy matrix: " + "; ".join(parts) + "; judge before Arc"
+
+
+def _campaign_venue_health_line(snap: dict[str, Any]) -> str:
+    if not _campaign_snapshot_ready(snap) and _campaign_snapshot_quality_score(snap) < 45.0:
+        return (
+            "Current venue evidence: draft snapshot is replay/local-fallback quality; "
+            "open the Mini App for live Polymarket, Kalshi, IBKR auth, public quote, and crypto pricing state."
+        )
+    line = _venue_evidence_line(snap)
+    if not line:
+        return "Current venue health: open the Mini App for live auth/pricing state."
+    return "Current " + line
+
+
+def _direct_event_pair_line(snap: dict[str, Any], *, limit: int = 3) -> str:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    outputs = proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+    pairs = outputs.get("direct_event_pair_candidates") if isinstance(outputs.get("direct_event_pair_candidates"), dict) else {}
+    rows = [row for row in (pairs.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    parts = []
+    for row in rows[:limit]:
+        energy = row.get("energy_leg") if isinstance(row.get("energy_leg"), dict) else {}
+        compute = row.get("compute_leg") if isinstance(row.get("compute_leg"), dict) else {}
+        energy_ref = energy.get("slug") or energy.get("title") or "energy leg"
+        compute_ref = compute.get("slug") or compute.get("title") or "compute leg"
+        energy_side = energy.get("pair_side") or "watch"
+        compute_side = compute.get("pair_side") or "watch"
+        readiness = str(row.get("readiness") or "WATCH").replace("_", " ")
+        oracle = row.get("oracle_evidence") if isinstance(row.get("oracle_evidence"), dict) else {}
+        oracle_gate = str(oracle.get("gate") or "NO_ORACLE_RECEIPTS").replace("_", " ")
+        receipts = int(float(oracle.get("receipts") or 0))
+        parts.append(f"{readiness} {energy_side} {energy_ref} vs {compute_side} {compute_ref} (oracle {oracle_gate}, {receipts} receipts)")
+    ready = int(float(pairs.get("ready_for_judge_count") or 0))
+    total = int(float(pairs.get("pair_count") or len(rows)))
+    return f"direct event pairs: {ready}/{total} ready | " + "; ".join(parts) + "; premium/judge before Arc"
 
 
 def _oracle_line(snap: dict[str, Any]) -> str:
@@ -464,6 +572,9 @@ def format_status(snap: dict[str, Any]) -> str:
     spread_line = _spread_replay_line(snap)
     if spread_line:
         parts.append(spread_line)
+    index_line = _index_coverage_line(snap)
+    if index_line:
+        parts.append(index_line)
     archetype_line = _spread_archetype_line(snap)
     if archetype_line:
         parts.append(archetype_line)
@@ -482,6 +593,9 @@ def format_status(snap: dict[str, Any]) -> str:
     venue_copy_line = _venue_copy_matrix_line(snap)
     if venue_copy_line:
         parts.append(venue_copy_line)
+    direct_pair_line = _direct_event_pair_line(snap)
+    if direct_pair_line:
+        parts.append(direct_pair_line)
     venue_line = _venue_evidence_line(snap)
     if venue_line:
         parts.append(venue_line)
@@ -542,12 +656,18 @@ def format_latest(snap: dict[str, Any]) -> str:
         spread_line = _spread_replay_line(snap)
         if spread_line:
             lines.append(spread_line)
+        index_line = _index_coverage_line(snap)
+        if index_line:
+            lines.append(index_line)
         archetype_line = _spread_archetype_line(snap)
         if archetype_line:
             lines.append(archetype_line)
         proxy_line = _proxy_replay_line(snap)
         if proxy_line:
             lines.append(proxy_line)
+        portfolio_line = _portfolio_signal_line(snap)
+        if portfolio_line:
+            lines.append(portfolio_line)
         profitability_line = _profitability_ledger_line(snap, limit=4)
         if profitability_line:
             lines.append(profitability_line)
@@ -560,6 +680,9 @@ def format_latest(snap: dict[str, Any]) -> str:
         venue_copy_line = _venue_copy_matrix_line(snap)
         if venue_copy_line:
             lines.append(venue_copy_line)
+        direct_pair_line = _direct_event_pair_line(snap)
+        if direct_pair_line:
+            lines.append(direct_pair_line)
         venue_line = _venue_evidence_line(snap)
         if venue_line:
             lines.append(venue_line)
@@ -940,7 +1063,7 @@ def channel_profitability_update_message() -> str:
         "- realized PnL remains separate and stays empty until reconciled fills or settlements exist",
         "- Kalshi, Polymarket, IBKR ForecastTrader, Yahoo/public quotes, and crypto are labelled by venue role",
         "",
-        "Current interpretation: a spread can be PROMOTABLE as an index replay and still be SELL_OR_AVOID if the mapped proxy basket is losing. That is intentional.",
+        "Current interpretation: a spread can be PROMOTABLE as an index replay and still be SELL_OR_AVOID if the mapped proxy basket's current signal says sell. That is intentional.",
         "",
         "No Arc action can happen unless judge.classify() returns EXECUTE.",
         "",
@@ -952,10 +1075,17 @@ def channel_profitability_update_message() -> str:
 def _index_catalog_counts(snap: dict[str, Any]) -> dict[str, int]:
     spread_families = snap.get("spread_families") if isinstance(snap.get("spread_families"), dict) else {}
     catalog = spread_families.get("index_catalog") if isinstance(spread_families.get("index_catalog"), dict) else {}
+    coverage = spread_families.get("index_coverage") if isinstance(spread_families.get("index_coverage"), dict) else {}
+    electricity = coverage.get("electricity") if isinstance(coverage.get("electricity"), dict) else {}
+    compute = coverage.get("compute") if isinstance(coverage.get("compute"), dict) else {}
+    spread_archetypes = coverage.get("spread_archetypes") if isinstance(coverage.get("spread_archetypes"), dict) else {}
     return {
         "electricity": len(catalog.get("electricity") or []),
         "compute": len(catalog.get("compute") or []),
         "spreads": len(catalog.get("spread_archetypes") or []),
+        "electricity_usable": int(float(electricity.get("usable") or 0)),
+        "compute_usable": int(float(compute.get("usable") or 0)),
+        "spreads_replayed": int(float(spread_archetypes.get("replayed") or 0)),
     }
 
 
@@ -973,6 +1103,128 @@ def _venue_copy_rows(snap: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
 
 
+def _campaign_outputs(snap: dict[str, Any]) -> dict[str, Any]:
+    proposal = snap.get("synthetic_instrument") if isinstance(snap.get("synthetic_instrument"), dict) else {}
+    return proposal.get("outputs") if isinstance(proposal.get("outputs"), dict) else {}
+
+
+def _campaign_portfolio_line(snap: dict[str, Any], ledger_rows: list[dict[str, Any]]) -> str:
+    outputs = _campaign_outputs(snap)
+    summary = outputs.get("portfolio_signal_summary") if isinstance(outputs.get("portfolio_signal_summary"), dict) else {}
+    action = summary.get("action") or "MONITOR"
+    top_buy = summary.get("top_buy") if isinstance(summary.get("top_buy"), dict) else {}
+    if top_buy:
+        reason = str(top_buy.get("signal_reason") or top_buy.get("current_action_reason") or top_buy.get("reason") or "").strip()
+        return (
+            f"Current buy signal: {top_buy.get('label') or top_buy.get('archetype_id')} "
+            f"({top_buy.get('profitability_status') or 'PAPER_BUY'} / {top_buy.get('latest_signal') or 'BUY'})."
+            + (f" Why: {reason}" if reason else "")
+        )
+    close_row = summary.get("top_close_or_avoid") if isinstance(summary.get("top_close_or_avoid"), dict) else {}
+    if summary and (str(action).startswith("CLOSE") or str(action).startswith("AVOID") or close_row):
+        if close_row:
+            reason = str(close_row.get("signal_reason") or close_row.get("current_action_reason") or close_row.get("reason") or "").strip()
+            return (
+                f"Current buy signal: none. Portfolio action is {action}; "
+                f"avoid/close {close_row.get('label') or close_row.get('archetype_id')}."
+                + (f" Why: {reason}" if reason else "")
+            )
+        return f"Current buy signal: none. Portfolio action is {action}."
+    buy_row = next((row for row in ledger_rows if row.get("profitability_status") == "PAPER_BUY"), {})
+    if buy_row:
+        reason = str(buy_row.get("signal_reason") or buy_row.get("current_action_reason") or buy_row.get("reason") or "").strip()
+        return (
+            f"Current buy signal: {buy_row.get('label') or buy_row.get('archetype_id')} "
+            f"({buy_row.get('profitability_status')} / {buy_row.get('latest_signal') or 'BUY'})."
+            + (f" Why: {reason}" if reason else "")
+        )
+    return f"Current buy signal: none. Portfolio action is {action}."
+
+
+def _campaign_direct_pair_line(snap: dict[str, Any]) -> str:
+    if not _campaign_snapshot_ready(snap) and _campaign_snapshot_quality_score(snap) < 45.0:
+        return (
+            "Direct event pairs: draft snapshot is replay/local-fallback quality; "
+            "open the Mini App for live thesis-matched pair readiness."
+        )
+    outputs = _campaign_outputs(snap)
+    pairs = outputs.get("direct_event_pair_candidates") if isinstance(outputs.get("direct_event_pair_candidates"), dict) else {}
+    rows = [row for row in (pairs.get("rows") or []) if isinstance(row, dict)]
+    if rows:
+        first = rows[0]
+        oracle = first.get("oracle_evidence") if isinstance(first.get("oracle_evidence"), dict) else {}
+        energy = first.get("energy_leg") if isinstance(first.get("energy_leg"), dict) else {}
+        compute = first.get("compute_leg") if isinstance(first.get("compute_leg"), dict) else {}
+        return (
+            f"Direct event pairs: {pairs.get('ready_for_judge_count', 0)}/{pairs.get('pair_count', len(rows))} ready; "
+            f"top pair {energy.get('surface') or 'energy'}:{energy.get('slug') or 'energy-leg'} vs "
+            f"{compute.get('surface') or 'compute'}:{compute.get('slug') or 'compute-leg'}; "
+            f"gate {first.get('readiness') or 'WATCH'}; "
+            f"oracle {oracle.get('gate') or 'NO_ORACLE_RECEIPTS'} with {int(float(oracle.get('receipts') or 0))} receipts."
+        )
+    inventory = [row for row in (snap.get("direct_inventory") or []) if isinstance(row, dict)]
+    if not inventory:
+        return "Direct event pairs: loading."
+    def bucket(row: dict[str, Any]) -> str:
+        role = str(row.get("direct_pair_role") or row.get("role") or row.get("leg_role") or "").lower()
+        title = str(row.get("leg_title") or row.get("title") or row.get("instrument") or "").lower()
+        if any(term in role for term in ("compute", "ai", "gpu", "nvidia", "openai", "anthropic", "data center", "datacenter")):
+            return "compute"
+        if any(term in role for term in ("energy", "electricity", "power", "grid", "gas", "oil", "brent", "crude", "generation")):
+            return "energy"
+        text = f"{role} {title}"
+        if any(term in text for term in ("energy", "electricity", "power", "grid", "gas", "oil", "brent", "crude", "generation")):
+            return "energy"
+        if any(term in text for term in ("compute", "ai", "gpu", "nvidia", "openai", "anthropic", "data center", "datacenter")):
+            return "compute"
+        return ""
+    energy_rows = [row for row in inventory if bucket(row) == "energy"]
+    compute_rows = [row for row in inventory if bucket(row) == "compute"]
+    if not energy_rows or not compute_rows:
+        return "Direct event pairs: loading."
+
+    def is_priced(row: dict[str, Any]) -> bool:
+        status = str(row.get("pricing_status") or row.get("reason_code") or "").lower()
+        label = str(row.get("pricing_status_label") or row.get("status_label") or "").lower()
+        prices = row.get("yes_prices") if isinstance(row.get("yes_prices"), list) else []
+        return (
+            status in {"priced_watchlist", "priced_public_market", "live_priced"}
+            or label in {"live price available", "public price available"}
+            or bool(prices)
+        )
+
+    def readiness(energy: dict[str, Any], compute: dict[str, Any]) -> str:
+        both_priced = is_priced(energy) and is_priced(compute)
+        surfaces = {str(energy.get("surface") or ""), str(compute.get("surface") or "")}
+        if both_priced and "polymarket" in surfaces:
+            return "NEEDS_PREMIUM_AND_JUDGE"
+        if both_priced:
+            return "NEEDS_JUDGE"
+        return "NEEDS_PRICE"
+
+    reconstructed = []
+    for energy_row in energy_rows:
+        for compute_row in compute_rows:
+            reconstructed.append((readiness(energy_row, compute_row), energy_row, compute_row))
+    reconstructed.sort(key=lambda item: (
+        0 if item[0] in {"NEEDS_PREMIUM_AND_JUDGE", "NEEDS_JUDGE"} else 1,
+        0 if len({str(item[1].get("surface") or ""), str(item[2].get("surface") or "")}) > 1 else 1,
+        str(item[1].get("surface") or ""),
+        str(item[2].get("surface") or ""),
+    ))
+    readiness_label, energy, compute = reconstructed[0]
+    oracle = snap.get("oracle") if isinstance(snap.get("oracle"), dict) else {}
+    pair_count = len(energy_rows) * len(compute_rows)
+    ready = sum(1 for label, _energy, _compute in reconstructed if label in {"NEEDS_PREMIUM_AND_JUDGE", "NEEDS_JUDGE"})
+    return (
+        f"Direct event pairs: {ready}/{pair_count} ready; "
+        f"top pair {energy.get('surface') or 'energy'}:{energy.get('leg_slug') or energy.get('slug') or 'energy-leg'} vs "
+        f"{compute.get('surface') or 'compute'}:{compute.get('leg_slug') or compute.get('slug') or 'compute-leg'}; "
+        f"gate {readiness_label}; "
+        f"oracle {oracle.get('latest_pricing_status') or oracle.get('status') or 'NO_ORACLE_RECEIPTS'} with {int(float(oracle.get('row_count') or 0))} receipts."
+    )
+
+
 def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
     """Return the operator-reviewed campaign posts without sending them."""
     counts = _index_catalog_counts(snap)
@@ -986,6 +1238,10 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
     ) or "venue roles loading"
     best_ticket = _fmt_operator_usd(best.get("paper_trade_total_pnl_usdc")) or "ticket replay loading"
     best_mark = _fmt_operator_usd(best.get("latest_paper_pnl_usdc")) or "mark loading"
+    best_reason = str(best.get("signal_reason") or best.get("current_action_reason") or best.get("reason") or "").strip()
+    portfolio_line = _campaign_portfolio_line(snap, ledger_rows)
+    direct_pair_line = _campaign_direct_pair_line(snap)
+    venue_health_line = _campaign_venue_health_line(snap)
     avoid_text = ""
     if avoid:
         avoid_text = (
@@ -1001,10 +1257,12 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "We are not pretending BTC, NVDA, or one prediction market is the product.",
                 "",
                 f"The desk tracks {counts['electricity']} electricity indexes, {counts['compute']} compute indexes, and {counts['spreads']} oil-style spread forms.",
+                f"Currently usable/replayed: {counts['electricity_usable']} electricity indexes, {counts['compute_usable']} compute indexes, {counts['spreads_replayed']} spread forms.",
                 "",
                 "Core idea: all is compute, compute is energy, and the tradable object is the judged compute/energy spread package.",
                 "",
                 "Examples: compute spark spread, power-cost share, regional compute-power basis, compute calendar, electricity calendar, fuel-stack/miner-margin spread.",
+                "New syndicated copies include compute calendar forward hedge, electricity calendar power hedge, and compute-power calendar basis note.",
                 "",
                 "Mini App: https://power.botozen.com/tg",
             ]),
@@ -1018,10 +1276,12 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "1. no-lookahead spread-family replay",
                 "2. public proxy basket replay with simulated paper tickets",
                 "",
-                f"Current top paper candidate: {best.get('label') or best.get('archetype_id') or 'loading'}",
-                f"status: {best.get('profitability_status') or 'loading'} / {best.get('latest_signal') or 'MONITOR'}",
+                portfolio_line,
+                f"Reference row: {best.get('label') or best.get('archetype_id') or 'loading'}",
+                f"row status: {best.get('profitability_status') or 'loading'} / {best.get('latest_signal') or 'MONITOR'}",
                 f"paper ticket PnL: {best_ticket}; latest mark PnL: {best_mark}",
                 f"ticket action: {best.get('paper_trade_action') or 'WAIT'}",
+                f"why: {best_reason or 'waiting for replay reason'}",
                 avoid_text,
                 "",
                 "An entry-day $0.00 mark is not a broken spread. It is just the entry mark; ticket replay shows what the proposed arb would have made after entry.",
@@ -1037,11 +1297,15 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "The same spread package can be copied across several real surfaces, but the roles are different:",
                 venue_line,
                 "",
+                direct_pair_line,
+                "",
+                venue_health_line,
+                "",
                 "Polymarket, Kalshi, and IBKR ForecastTrader are direct event/forecast-leg candidates when they are priced, thesis-matched, and judged.",
                 "Yahoo/IBKR public quotes and equities are liquid proxy hedges for sizing and mark-to-market.",
                 "BTC/ETH are only miner-margin proxies when power cost matters.",
-                "Opoint/Nebius is evidence only: news and LLM receipts can support a thesis but cannot execute it.",
-                "Live gate labels stay in the Mini App so this campaign does not publish stale per-venue pricing states.",
+                "Opoint/Nebius is evidence only: news and LLM receipts can support, defer, or criticize a pair but cannot execute it.",
+                "Live gate labels and IBKR auth hints stay in the Mini App so operators can see exactly why a venue leg is or is not usable.",
                 "",
                 "No raw REJECT/DEFER/watchlist spam belongs in this channel.",
             ]),
@@ -1070,21 +1334,81 @@ def channel_campaign_draft_text(snap: dict[str, Any]) -> str:
     return "\n\n---\n\n".join(text for _key, text in channel_campaign_messages(snap))
 
 
+def _campaign_snapshot_ready(data: dict[str, Any]) -> bool:
+    """Avoid accepting a cold API snapshot with empty liquid-proxy evidence."""
+    matrix = data.get("venue_evidence") if isinstance(data.get("venue_evidence"), dict) else {}
+    rows = [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return True
+    by_surface = {str(row.get("surface") or ""): row for row in rows}
+    for surface in ("public_market", "crypto"):
+        row = by_surface.get(surface)
+        if not row:
+            continue
+        if str(row.get("status") or "").upper() in {"NEEDS_PRICE", "NEEDS_QUOTES"} and int(float(row.get("priced_count") or 0)) == 0:
+            return False
+    polymarket = by_surface.get("polymarket")
+    if polymarket:
+        sources = {str(src) for src in (polymarket.get("quote_sources") or [])}
+        if (
+            str(polymarket.get("status") or "").upper() == "NEEDS_PRICE"
+            and int(float(polymarket.get("priced_count") or 0)) == 0
+            and "polymarket_direct_watchlist" in sources
+        ):
+            return False
+    ibkr = by_surface.get("ibkr_prediction")
+    if ibkr:
+        sources = {str(src) for src in (ibkr.get("quote_sources") or [])}
+        if (
+            str(ibkr.get("status") or "").upper() == "NEEDS_PRICE"
+            and int(float(ibkr.get("priced_count") or 0)) == 0
+            and int(float(ibkr.get("external_proxy_count") or 0)) == 0
+            and "ibkr_forecast_inventory" in sources
+            and ("yahoo_finance_chart" in sources or "ibkr_energy_history_csv" in sources)
+        ):
+            return False
+    return True
+
+
+def _campaign_snapshot_from_url(url: str, *, timeout: float) -> dict[str, Any]:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme in {"http", "https"} and not host.endswith(".test"):
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict):
+            return data
+        raise ValueError("campaign snapshot API did not return a JSON object")
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    if isinstance(data, dict):
+        return data
+    raise ValueError("campaign snapshot API did not return a JSON object")
+
+
 def campaign_snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
-    """Build a campaign snapshot without forcing fresh adapter probes."""
+    """Build a campaign snapshot without forcing heavy proxy refreshes."""
     url = os.environ.get("TELEGRAM_CAMPAIGN_SNAPSHOT_URL", "http://127.0.0.1:8080/api/snapshot").strip()
+    if os.environ.get("TELEGRAM_CAMPAIGN_DEBUG", "").strip():
+        print(f"[campaign-snapshot] url={url or '<empty>'}", file=sys.stderr)
     if url and url not in {"0", "false", "False"}:
-        try:
-            with urllib.request.urlopen(url, timeout=8) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, dict) and data.get("ok") is not False:
-                return data
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
-            pass
+        timeout = float(os.environ.get("TELEGRAM_CAMPAIGN_SNAPSHOT_TIMEOUT", "15") or 15)
+        attempts = max(1, int(float(os.environ.get("TELEGRAM_CAMPAIGN_SNAPSHOT_ATTEMPTS", "4") or 4)))
+        delay = max(0.0, float(os.environ.get("TELEGRAM_CAMPAIGN_SNAPSHOT_RETRY_DELAY", "1.0") or 1.0))
+        for attempt in range(attempts):
+            try:
+                data = _campaign_snapshot_from_url(url, timeout=timeout)
+                if isinstance(data, dict) and data.get("ok") is not False:
+                    if _campaign_snapshot_ready(data):
+                        return data
+                    if attempt + 1 < attempts and delay:
+                        time.sleep(delay)
+            except (requests.RequestException, urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+                if attempt + 1 < attempts and delay:
+                    time.sleep(delay)
 
     disabled = {
-        "KALSHI_DIRECT_EVENT_FETCH": "0",
-        "POLYMARKET_DIRECT_EVENT_FETCH": "0",
         "PUBLIC_HEDGE_FETCH": "0",
         "IBKR_FORECAST_PROXY_QUOTE_FETCH": "0",
         "PROXY_BASKET_BACKTEST_FETCH": "0",
@@ -1099,6 +1423,85 @@ def campaign_snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+def _campaign_snapshot_quality_score(data: dict[str, Any]) -> float:
+    matrix = data.get("venue_evidence") if isinstance(data.get("venue_evidence"), dict) else {}
+    rows = [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
+    score = 0.0
+    for row in rows:
+        surface = str(row.get("surface") or "")
+        status = str(row.get("status") or "").upper()
+        priced = int(float(row.get("priced_count") or 0))
+        proxy = int(float(row.get("external_proxy_count") or 0))
+        if status == "LIVE_PRICED":
+            score += 10.0 + priced
+        elif status == "PROXY_PRICED":
+            score += 6.0 + proxy
+        elif status == "REPLAY_PRICED":
+            score += 3.0 + priced * 0.5
+        elif status == "EVIDENCE_LOGGED":
+            score += 1.0
+        if surface == "polymarket" and status == "LIVE_PRICED":
+            score += 8.0
+        if surface == "kalshi" and status == "LIVE_PRICED":
+            score += 5.0
+        if surface == "public_market" and status == "LIVE_PRICED":
+            score += 4.0
+        if surface == "crypto" and status == "LIVE_PRICED":
+            score += 2.0
+    return score
+
+
+def campaign_snapshot_for_messaging(*, logs: Path | str | None = None) -> dict[str, Any]:
+    """Prefer the warmest snapshot for public campaign text.
+
+    The API and local fallback can both be valid, but channel copy should not
+    understate live venue pricing when the running API is reachable.
+    """
+    attempts = max(1, int(float(os.environ.get("TELEGRAM_CAMPAIGN_MESSAGE_ATTEMPTS", "2") or 2)))
+    delay = max(0.0, float(os.environ.get("TELEGRAM_CAMPAIGN_MESSAGE_RETRY_DELAY", "0.25") or 0.25))
+    best: dict[str, Any] = {}
+    best_score = -1.0
+    for attempt in range(attempts):
+        data = campaign_snapshot(logs=logs)
+        score = _campaign_snapshot_quality_score(data)
+        if os.environ.get("TELEGRAM_CAMPAIGN_DEBUG", "").strip():
+            rows = [
+                (row.get("surface"), row.get("status"), row.get("priced_count"), row.get("external_proxy_count"))
+                for row in (((data.get("venue_evidence") or {}).get("rows") or []))
+                if isinstance(row, dict)
+            ]
+            print(f"[campaign-snapshot] attempt={attempt + 1} score={score:.1f} rows={rows}", file=sys.stderr)
+        if score > best_score:
+            best = data
+            best_score = score
+        if score >= 45.0:
+            return data
+        if attempt + 1 < attempts and delay:
+            time.sleep(delay)
+    if os.environ.get("TELEGRAM_CAMPAIGN_MESSAGE_DIRECT_REFRESH", "1").strip() not in {"0", "false", "False"}:
+        urls: list[str] = []
+        configured = os.environ.get("TELEGRAM_CAMPAIGN_SNAPSHOT_URL", "").strip()
+        if configured and configured not in {"0", "false", "False"}:
+            urls.append(configured)
+        else:
+            urls.append("http://127.0.0.1:8080/api/snapshot")
+        public_base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        if public_base:
+            urls.append(f"{public_base}/api/snapshot")
+        for url in dict.fromkeys(urls):
+            try:
+                data = _campaign_snapshot_from_url(url, timeout=8.0)
+            except (requests.RequestException, urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+                continue
+            score = _campaign_snapshot_quality_score(data)
+            if score > best_score:
+                best = data
+                best_score = score
+            if score >= 45.0:
+                return data
+    return best
 
 
 def _mock_contract_message(snap: dict[str, Any]) -> tuple[str, str] | None:
@@ -1250,7 +1653,8 @@ def notify_channel_campaign_once(*, logs: Path | str | None = None) -> int:
         return 0
     sent = _sent_keys(logs=logs)
     count = 0
-    for key, text in channel_campaign_messages(campaign_snapshot(logs=logs)):
+    snap = campaign_snapshot_for_messaging(logs=logs)
+    for key, text in channel_campaign_messages(snap):
         if key in sent:
             continue
         send_message(channel_id, text)
@@ -1342,7 +1746,9 @@ def main(argv: list[str] | None = None) -> int:
         print(notify_channel_profitability_update_once())
         return 0
     if args.draft_campaign:
-        print(channel_campaign_draft_text(campaign_snapshot()))
+        snap = campaign_snapshot_for_messaging()
+        text = channel_campaign_draft_text(snap)
+        print(text)
         return 0
     if args.post_campaign:
         print(notify_channel_campaign_once())

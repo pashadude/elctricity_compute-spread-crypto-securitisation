@@ -38,10 +38,13 @@ def test_proxy_basket_replay_promotes_profitable_template():
     assert replay["status"] == "PROMOTABLE"
     assert replay["recommendation"] == "BUY_OR_HOLD"
     assert replay["latest_signal"] == "BUY"
+    assert replay["current_action"] == "BUY_CANDIDATE"
     assert replay["total_return_pct"] > 0
     assert replay["win_rate"] >= 45
     assert replay["trailing_returns"]["5d"]["return_pct"] > 0
     assert len(replay["recent_index_marks"]) == 7
+    assert replay["recent_index_marks"][0]["mark_type"] == "entry"
+    assert replay["recent_index_marks"][-1]["mark_type"] == "mark"
     assert replay["recent_index_marks"][0]["paper_return_since_entry_pct"] == 0.0
     assert replay["recent_index_marks"][-1]["paper_return_since_entry_pct"] > 0
     assert replay["recent_entry_date"] == replay["recent_index_marks"][0]["date"]
@@ -50,6 +53,9 @@ def test_proxy_basket_replay_promotes_profitable_template():
     assert replay["paper_trade_replay"]["latest_trade_action"] == "HOLD_OPEN"
     assert replay["paper_trade_replay"]["open_trade"]["return_pct"] > 0
     assert replay["paper_trade_replay"]["total_return_pct"] > 0
+    assert replay["out_of_sample_replay"]["version"] == "proxy_oos_replay_v1"
+    assert replay["out_of_sample_replay"]["status"] == "PASSED"
+    assert replay["out_of_sample_replay"]["test_return_pct"] > 0
 
 
 def test_proxy_basket_replay_fails_loss_making_template():
@@ -69,9 +75,12 @@ def test_proxy_basket_replay_fails_loss_making_template():
     assert replay["status"] == "FAILED_REPLAY"
     assert replay["recommendation"] == "SELL_OR_AVOID"
     assert replay["latest_signal"] == "SELL"
+    assert replay["current_action"] == "SELL_OR_AVOID"
     assert replay["total_return_pct"] < 0
     assert replay["paper_trade_replay"]["latest_trade_action"] in {"CLOSE_OR_SELL", "WAIT"}
     assert replay["paper_trade_replay"]["open_trade_count"] == 0
+    assert replay["out_of_sample_replay"]["status"] == "FAILED"
+    assert replay["out_of_sample_replay"]["passed"] is False
 
 
 def test_proxy_basket_summary_keeps_missing_data_as_monitor_only():
@@ -81,6 +90,7 @@ def test_proxy_basket_summary_keeps_missing_data_as_monitor_only():
     assert summary["primary_basket"]["status"] == "INSUFFICIENT_DATA"
     assert summary["primary_basket"]["recommendation"] == "MONITOR_ONLY"
     assert summary["primary_basket"]["latest_signal"] == "MONITOR"
+    assert summary["primary_basket"]["current_action"] == "MONITOR_ONLY"
 
 
 def test_proxy_basket_replay_carries_non_trading_calendar_marks():
@@ -133,4 +143,5 @@ def test_proxy_basket_signal_can_sell_on_recent_negative_pnl_even_if_longer_repl
     assert replay["status"] == "PROMOTABLE"
     assert replay["recommendation"] == "BUY_OR_HOLD"
     assert replay["latest_signal"] == "SELL"
+    assert replay["current_action"] == "SELL_OR_AVOID"
     assert replay["trailing_returns"]["5d"]["return_pct"] < -2

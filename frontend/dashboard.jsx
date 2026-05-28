@@ -43,6 +43,7 @@ const pricingStatusLabel = (status) => {
   if (low === 'metadata_watchlist') return 'Metadata only';
   if (low === 'priced_watchlist') return 'Live price available';
   if (low === 'priced_public_market') return 'Public price available';
+  if (low === 'priced_close_history') return 'Close-history replay available';
   if (low === 'price_unavailable') return 'Price unavailable';
   if (low === 'ibkr_quote_unavailable') return 'IBKR quote unavailable';
   if (low === 'closed_watchlist') return 'Closed';
@@ -55,7 +56,11 @@ const proxySourceLabel = (source, stale = false) => {
   if (low === 'ibkr_energy_history_csv') return `IBKR paper CSV${stale ? ' · stale' : ''}`;
   if (low === 'ibkr_tws_front_future') return 'IBKR paper TWS front future';
   if (low === 'ibkr_tws_stock') return 'IBKR paper TWS stock';
+  if (low === 'ibkr_forecast_inventory') return 'IBKR ForecastTrader inventory';
+  if (low === 'polymarket_direct_watchlist') return 'Polymarket Gamma';
+  if (low === 'kalshi_direct_ai_watchlist') return 'Kalshi public API';
   if (low === 'yahoo_finance_chart') return 'Yahoo fallback';
+  if (low === 'yahoo_close_history') return 'Yahoo close-history replay';
   if (low === 'alpaca_market_data') return 'Alpaca fallback';
   if (low === 'ibkr_tws') return 'IBKR paper TWS';
   return source || 'external proxy';
@@ -67,6 +72,39 @@ const quoteSourceLabels = (sources = []) => {
 };
 
 const quoteSourceSummary = (sources = []) => quoteSourceLabels(sources).join(', ');
+
+const recommendationTone = (construction = {}) => {
+  const action = String(construction.recommended_action || '').toUpperCase();
+  const label = String(construction.recommendation_label || '').toUpperCase();
+  const summary = String(construction.recommendation_summary || '').toUpperCase();
+  const text = `${action} ${label} ${summary}`;
+  if (action === 'BUY_CONTRACT') return 'buy';
+  if (text.includes('SELL') || text.includes('AVOID') || text.includes('CLOSE')) return 'sell';
+  if (text.includes('HOLD')) return 'hold';
+  return 'monitor';
+};
+
+const recommendationColor = (construction = {}, canOpen = false) => {
+  if (canOpen) return THEME.primary[400];
+  const tone = recommendationTone(construction);
+  if (tone === 'sell') return THEME.red[400];
+  if (tone === 'hold') return THEME.blue[400];
+  return THEME.amber[400];
+};
+
+const recommendationHelperText = (construction = {}, canOpen = false) => {
+  if (canOpen) {
+    return 'Open paper hedge freezes a local entry ticket only; Arc stays gated by judge.classify().';
+  }
+  const tone = recommendationTone(construction);
+  if (tone === 'sell') {
+    return 'Do not open a fresh ticket. Close or avoid local mock exposure until the proxy PnL signal recovers.';
+  }
+  if (tone === 'hold') {
+    return 'Existing mock exposure can be monitored, but the current marks do not justify a fresh buy.';
+  }
+  return 'No user-facing buy at this score; monitor until the entry threshold and judge gate both clear.';
+};
 
 const proxyMarkMeta = (leg = {}) => {
   const parts = [proxySourceLabel(leg.externalProxySource, leg.externalProxyStale)];
@@ -182,7 +220,7 @@ const emptyDashboardData = (status = 'loading', error = '') => ({
     k: 0.5, kwh: 0.7, powerCost: '0.0000', powerSharePct: null,
     source: '', sourceStatus: '',
   },
-  spreadFamilies: { families: [], archetypeScoreboard: [], primaryFamily: null, entryGatePass: false },
+  spreadFamilies: { families: [], archetypeScoreboard: [], primaryFamily: null, entryGatePass: false, indexCoverage: null },
   proxyBaskets: { baskets: [], primaryBasket: null, entryGatePass: false },
   venueEvidence: { rows: [], summary: {}, guardrail: '' },
   telegramCampaign: { posts: [], total_posts: 0, posted_count: 0, pending_count: 0, status: 'READY_TO_POST' },
@@ -203,6 +241,9 @@ const emptyDashboardData = (status = 'loading', error = '') => ({
     total: 0, totalDisplay: 'Pending', winRate: 0, trades: 0,
     tradesDisplay: 'Pending', wrappedJobs: 0, executes: 0, hasReconciled: false,
     status: 'UNKNOWN', statusLabel: 'Pending', note: '',
+    paperPortfolioAction: '', paperPortfolioHeadline: '',
+    paperTicketTotalPnl: null, paperTicketRealizedPnl: null, paperTicketOpenPnl: null,
+    paperLatestMarkPnl: null, paperBuyCount: 0, paperCloseOrAvoidCount: 0, paperWaitCount: 0,
   },
   oracleResults: { status: 'NO_RECEIPTS', row_count: 0 },
   connection: { status, error, updatedAt: Date.now() },
@@ -413,6 +454,11 @@ const mapSnapshotToDashboardData = (snapshot) => {
   const selectedProxyBasket = selectProxyBasketForDirection(snapshot?.proxy_baskets, signal.direction || 'no_signal');
   const selectedProxy = selectedProxyBasket.selected || {};
   const selectedProxyTrailing = selectedProxy.trailing_returns || {};
+  const proposal = snapshot?.synthetic_instrument || null;
+  const portfolioSignal = snapshot?.portfolio_signal || proposal?.outputs?.portfolio_signal_summary || {};
+  const paperNumber = (value) => (
+    value === '' || value === undefined || value === null ? null : numberOr(value, null)
+  );
   return {
     spread: {
       elec: numberOr(spreadLatest.electricity_per_mwh).toFixed(2),
@@ -450,6 +496,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
       primarySource: snapshot?.spread_families?.primary_source || '',
       sourceStatus: snapshot?.spread_families?.source_status || '',
       indexCatalog: snapshot?.spread_families?.index_catalog || { electricity: [], compute: [] },
+      indexCoverage: snapshot?.spread_families?.index_coverage || null,
     },
     proxyBaskets: {
       entryGatePass: selectedProxyBasket.entryGatePass,
@@ -478,7 +525,7 @@ const mapSnapshotToDashboardData = (snapshot) => {
     directInventory,
     packages,
     currentPackage,
-    syntheticInstrument: snapshot?.synthetic_instrument || null,
+    syntheticInstrument: proposal,
     pnl: {
       total: numberOr(pnl.total),
       totalDisplay: pnl.display_total || (hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'No settled PnL'),
@@ -495,6 +542,13 @@ const mapSnapshotToDashboardData = (snapshot) => {
       spreadMarkChanges: numberOr(pnl.spread_mark_changes, 0),
       spreadRawObservations: numberOr(pnl.spread_raw_observations, 0),
       spreadCollapsedPolls: numberOr(pnl.spread_collapsed_polls, 0),
+      spreadOosStatus: pnl.spread_oos_status || '',
+      spreadOosTestPnl: pnl.spread_oos_test_pnl_per_unit === '' || pnl.spread_oos_test_pnl_per_unit === undefined || pnl.spread_oos_test_pnl_per_unit === null
+        ? null
+        : numberOr(pnl.spread_oos_test_pnl_per_unit, null),
+      spreadOosTestWinRate: pnl.spread_oos_test_win_rate === '' || pnl.spread_oos_test_win_rate === undefined || pnl.spread_oos_test_win_rate === null
+        ? null
+        : numberOr(pnl.spread_oos_test_win_rate, null),
       proxyLatestSignal: selectedProxy.latest_signal || pnl.proxy_latest_signal || '',
       proxyReplayStatus: selectedProxy.status || pnl.proxy_replay_status || '',
       proxy5dReturnPct: selectedProxyTrailing['5d']?.return_pct === undefined
@@ -503,6 +557,15 @@ const mapSnapshotToDashboardData = (snapshot) => {
       proxy1mReturnPct: selectedProxyTrailing['1m']?.return_pct === undefined
         ? ((pnl.proxy_1m_return_pct === '' || pnl.proxy_1m_return_pct === undefined || pnl.proxy_1m_return_pct === null) ? null : numberOr(pnl.proxy_1m_return_pct))
         : numberOr(selectedProxyTrailing['1m']?.return_pct),
+      paperPortfolioAction: pnl.paper_portfolio_action || portfolioSignal.action || '',
+      paperPortfolioHeadline: pnl.paper_portfolio_headline || portfolioSignal.headline || '',
+      paperTicketTotalPnl: paperNumber(pnl.paper_ticket_total_pnl_usdc ?? portfolioSignal.paper_ticket_total_pnl_usdc),
+      paperTicketRealizedPnl: paperNumber(pnl.paper_ticket_realized_pnl_usdc ?? portfolioSignal.paper_ticket_realized_pnl_usdc),
+      paperTicketOpenPnl: paperNumber(pnl.paper_ticket_open_pnl_usdc ?? portfolioSignal.paper_ticket_open_pnl_usdc),
+      paperLatestMarkPnl: paperNumber(pnl.paper_latest_mark_pnl_usdc ?? portfolioSignal.latest_mark_total_pnl_usdc),
+      paperBuyCount: numberOr(pnl.paper_buy_count ?? portfolioSignal.buy_count, 0),
+      paperCloseOrAvoidCount: numberOr(pnl.paper_close_or_avoid_count ?? portfolioSignal.close_or_avoid_count, 0),
+      paperWaitCount: numberOr(pnl.paper_wait_count ?? portfolioSignal.wait_count, 0),
     },
     oracleResults: snapshot?.oracle || { status: 'NO_RECEIPTS', row_count: 0 },
     connection: {
@@ -623,6 +686,12 @@ const SignalPanel = ({ data }) => {
     : '';
   const powerShare = data.spread.powerSharePct;
   const powerShareWeak = powerShare !== null && powerShare !== undefined && Number(powerShare) < 2.5;
+  const fmtSpreadOos = (row) => {
+    const status = String(row?.oos_status || '').toUpperCase();
+    if (!status) return `${Number(row?.win_rate || 0).toFixed(0)}%`;
+    const label = status === 'PASSED' ? 'PASS' : (status === 'FAILED' ? 'FAIL' : 'WAIT');
+    return `${label} ${Number(row?.oos_test_pnl_per_unit || 0).toFixed(2)}`;
+  };
   return (
     <Card glow>
       <div style={{
@@ -733,7 +802,7 @@ const SignalPanel = ({ data }) => {
                     {[
                       ['z', Number(item.latest_z || 0).toFixed(2)],
                       ['trades', item.tested_trades || 0],
-                      ['WR', `${Number(item.win_rate || 0).toFixed(0)}%`],
+                      ['OOS', fmtSpreadOos(item)],
                     ].map(([label, value]) => (
                       <div key={label} style={{ padding: '5px', borderRadius: '5px', background: THEME.bg.surface }}>
                         <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
@@ -798,7 +867,7 @@ const SignalPanel = ({ data }) => {
                   {[
                     ['z', Number(family.latest_z || 0).toFixed(2)],
                     ['trades', family.tested_trades || 0],
-                    ['WR', `${Number(family.win_rate || 0).toFixed(0)}%`],
+                    ['OOS', fmtSpreadOos(family)],
                   ].map(([label, value]) => (
                     <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
                       <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
@@ -1024,6 +1093,7 @@ const SpreadTradeMapPanel = ({ proposal }) => {
 
 const IndexCatalogPanel = ({ data }) => {
   const catalog = data.spreadFamilies?.indexCatalog || {};
+  const coverage = data.spreadFamilies?.indexCoverage || {};
   const electricity = catalog.electricity || [];
   const compute = catalog.compute || [];
   const archetypes = catalog.spread_archetypes || [];
@@ -1074,10 +1144,100 @@ const IndexCatalogPanel = ({ data }) => {
         </div>
         <Badge color="blue">{electricity.length + compute.length} INDEXES</Badge>
       </div>
+      {coverage.summary && (
+        <div style={{ padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, marginBottom: '10px' }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.35 }}>
+            {coverage.summary}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '6px', marginTop: '8px' }}>
+            {[
+              ['Usable power', `${coverage.electricity?.usable || 0}/${coverage.electricity?.total || electricity.length}`, THEME.amber[400]],
+              ['Usable compute', `${coverage.compute?.usable || 0}/${coverage.compute?.total || compute.length}`, THEME.blue[400]],
+              ['Replayed spreads', `${coverage.spread_archetypes?.replayed || 0}/${coverage.spread_archetypes?.total || archetypes.length}`, THEME.primary[400]],
+              ['OOS passed', `${coverage.spread_archetypes?.oos_passed || 0}`, THEME.primary[400]],
+            ].map(([label, value, color]) => (
+              <div key={label} style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>{label}</div>
+                <MonoText style={{ fontSize: '12px', color, fontWeight: 800 }}>{value}</MonoText>
+              </div>
+            ))}
+          </div>
+          {(coverage.spread_archetypes?.needs_history || []).length > 0 && (
+            <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '7px' }}>
+              Needs history: {coverage.spread_archetypes.needs_history.slice(0, 3).map(row => row.label || row.archetype_id).join(', ')}.
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' }}>
         <Column title={`Electricity (${electricity.length})`} rows={electricity} />
         <Column title={`Compute (${compute.length})`} rows={compute} />
         <Column title={`Spread Forms (${archetypes.length})`} rows={archetypes} />
+      </div>
+    </Card>
+  );
+};
+
+const PortfolioSignalSummaryPanel = ({ proposal }) => {
+  const summary = proposal?.outputs?.portfolio_signal_summary || null;
+  const rows = summary?.rows || [];
+  if (!summary || !rows.length) return null;
+  const action = String(summary.action || 'MONITOR');
+  const actionColor = action.includes('OPEN') || action === 'ROTATE'
+    ? THEME.primary[400]
+    : (action.includes('CLOSE') || action.includes('AVOID') ? THEME.red[400] : THEME.amber[400]);
+  const fmtMoney = (value) => (
+    value === '' || value === undefined || value === null
+      ? '-'
+      : Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+  );
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Portfolio Signal</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            {summary.headline || 'Monitor spread portfolio'}
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
+            Aggregates the spread menu into one paper/replay operator posture. {summary.guardrail}
+          </div>
+        </div>
+        <Badge color={action.includes('CLOSE') ? 'red' : (action.includes('WAIT') || action === 'MONITOR' ? 'amber' : 'primary')}>
+          {action.replaceAll('_', ' ')}
+        </Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', marginBottom: '8px' }}>
+        {[
+          ['Ticket PnL', fmtMoney(summary.paper_ticket_total_pnl_usdc), Number(summary.paper_ticket_total_pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400]],
+          ['Open PnL', fmtMoney(summary.paper_ticket_open_pnl_usdc), Number(summary.paper_ticket_open_pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400]],
+          ['Mark PnL', fmtMoney(summary.latest_mark_total_pnl_usdc), Number(summary.latest_mark_total_pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400]],
+          ['Counts', `${summary.buy_count || 0} buy · ${summary.close_or_avoid_count || 0} avoid/sell · ${summary.wait_count || 0} wait`, THEME.text.secondary],
+        ].map(([label, value, color]) => (
+          <div key={label} style={{ padding: '8px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+            <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>{label}</div>
+            <MonoText style={{ fontSize: '12px', color, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</MonoText>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '8px' }}>
+        {rows.slice(0, 4).map(row => {
+          const rowAction = String(row.action || 'MONITOR');
+          const rowColor = rowAction.includes('BUY')
+            ? THEME.primary[400]
+            : (rowAction.includes('CLOSE') || rowAction.includes('AVOID') ? THEME.red[400] : THEME.amber[400]);
+          return (
+            <div key={row.archetype_id} style={{ padding: '8px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>{row.label}</div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '3px' }}>{row.profitability_status}</div>
+                </div>
+                <MonoText style={{ fontSize: '9px', color: rowColor, fontWeight: 800, textAlign: 'right' }}>{rowAction.replaceAll('_', ' ')}</MonoText>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </Card>
   );
@@ -1115,6 +1275,7 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
             {ledger.realized_note || 'Replay and local tickets are separate from realized PnL.'}
             {ledger.paper_notional_usdc ? ` Paper notional: ${fmtMaybeMoney(ledger.paper_notional_usdc)}.` : ''}
+            {' First row in each recent mark strip is the entry baseline, so $0.00 there is expected.'}
           </div>
         </div>
         <Badge color="amber">PAPER</Badge>
@@ -1124,6 +1285,12 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
           const color = statusColor(row.profitability_status);
           const recentMarks = row.recent_paper_marks || [];
           const tradeReplay = row.paper_trade_replay || {};
+          const oosLabel = row.oos_status && row.oos_status !== 'NO_OOS_REPLAY'
+            ? `${String(row.oos_status).replaceAll('_', ' ')} ${row.oos_test_return_pct === '' || row.oos_test_return_pct === undefined ? '' : `${Number(row.oos_test_return_pct).toFixed(1)}%`}`
+            : '-';
+          const oosColor = row.oos_status === 'FAILED'
+            ? THEME.red[400]
+            : (row.oos_status === 'PASSED' ? THEME.primary[400] : THEME.text.secondary);
           const recentTrades = tradeReplay.closed_trades || [];
           const openTrade = tradeReplay.open_trade || null;
           const latestPnl = Number(row.latest_paper_pnl_usdc || 0);
@@ -1151,10 +1318,10 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
                 {[
-                  ['Mark PnL', fmtMaybeMoney(row.latest_paper_pnl_usdc), pnlColor],
+                  ['PnL vs entry', fmtMaybeMoney(row.latest_paper_pnl_usdc), pnlColor],
                   ['Ticket PnL', fmtMaybeMoney(row.paper_trade_total_pnl_usdc), tradePnlColor],
                   ['Mark %', fmtMaybePct(row.latest_paper_return_pct), pnlColor],
-                  ['Ticket hit', row.paper_trade_hit_rate === '' || row.paper_trade_hit_rate === undefined ? '-' : `${Number(row.paper_trade_hit_rate).toFixed(0)}%`, THEME.text.secondary],
+                  ['OOS test', oosLabel, oosColor],
                 ].map(([label, value, itemColor]) => (
                   <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
                     <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
@@ -1162,14 +1329,22 @@ const SpreadProfitabilityLedgerPanel = ({ proposal }) => {
                   </div>
                 ))}
               </div>
+              {(row.signal_reason || row.current_action_reason) && (
+                <div style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface, border: `1px solid ${THEME.border.subtle}`, marginBottom: '6px' }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800, marginBottom: '3px' }}>Signal reason</div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35 }}>
+                    {row.signal_reason || row.current_action_reason}
+                  </div>
+                </div>
+              )}
               {recentMarks.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '6px' }}>
                   {recentMarks.slice(-3).map(mark => (
                     <div key={`${row.archetype_id}-${mark.date}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr 72px', gap: '6px', fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint }}>
                       <span>{mark.date || '-'}</span>
-                      <span>close {Number(mark.index_close || 0).toFixed(2)}</span>
-                      <span style={{ textAlign: 'right', color: Number(mark.paper_pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400] }}>
-                        {fmtMaybeMoney(mark.paper_pnl_usdc)}
+                      <span>{mark.mark_type === 'entry' ? 'entry baseline' : 'index mark'} {Number(mark.index_close || 0).toFixed(2)}</span>
+                      <span style={{ textAlign: 'right', color: mark.mark_type === 'entry' ? THEME.text.muted : (Number(mark.paper_pnl_usdc || 0) < 0 ? THEME.red[400] : THEME.primary[400]) }}>
+                        {mark.mark_type === 'entry' ? 'baseline' : fmtMaybeMoney(mark.paper_pnl_usdc)}
                       </span>
                     </div>
                   ))}
@@ -1219,10 +1394,19 @@ const statusBadgeColor = (status) => {
 
 const PnlStatusPanel = ({ pnl }) => {
   if (!pnl) return null;
+  const fmtMoney = (value) => (
+    value === '' || value === undefined || value === null
+      ? '-'
+      : Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+  );
   const proxyBits = [];
   if (pnl.proxyLatestSignal) proxyBits.push(`${pnl.proxyLatestSignal}/${pnl.proxyReplayStatus || 'replay'}`);
   if (pnl.proxy5dReturnPct !== null && pnl.proxy5dReturnPct !== undefined) proxyBits.push(`5d ${Number(pnl.proxy5dReturnPct).toFixed(2)}%`);
   if (pnl.proxy1mReturnPct !== null && pnl.proxy1mReturnPct !== undefined) proxyBits.push(`1m ${Number(pnl.proxy1mReturnPct).toFixed(2)}%`);
+  const hasPaperSignal = Boolean(pnl.paperPortfolioAction || pnl.paperPortfolioHeadline);
+  const actionColor = String(pnl.paperPortfolioAction || '').includes('CLOSE') || String(pnl.paperPortfolioAction || '').includes('AVOID')
+    ? THEME.red[400]
+    : (String(pnl.paperPortfolioAction || '').includes('OPEN') ? THEME.primary[400] : THEME.amber[400]);
   return (
     <Card style={{ marginBottom: '16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
@@ -1253,8 +1437,37 @@ const PnlStatusPanel = ({ pnl }) => {
       <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.4, marginTop: '9px' }}>
         {pnl.note || 'No reconciled PnL note available.'}
       </div>
+      {hasPaperSignal && (
+        <div style={{ marginTop: '10px', padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '7px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>Paper replay signal</div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '12px', color: THEME.text.secondary, lineHeight: 1.35, marginTop: '2px' }}>
+                {pnl.paperPortfolioHeadline || 'Paper/replay portfolio guidance is available.'}
+              </div>
+            </div>
+            <MonoText style={{ fontSize: '10px', color: actionColor, fontWeight: 800, textAlign: 'right' }}>
+              {String(pnl.paperPortfolioAction || 'MONITOR').replaceAll('_', ' ')}
+            </MonoText>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '7px' }}>
+            {[
+              ['Ticket replay PnL', fmtMoney(pnl.paperTicketTotalPnl), pnl.paperTicketTotalPnl < 0 ? THEME.red[400] : THEME.primary[400]],
+              ['Open paper PnL', fmtMoney(pnl.paperTicketOpenPnl), pnl.paperTicketOpenPnl < 0 ? THEME.red[400] : THEME.primary[400]],
+              ['Latest mark PnL', fmtMoney(pnl.paperLatestMarkPnl), pnl.paperLatestMarkPnl < 0 ? THEME.red[400] : THEME.primary[400]],
+              ['Signal counts', `${pnl.paperBuyCount || 0} buy · ${pnl.paperCloseOrAvoidCount || 0} avoid/sell · ${pnl.paperWaitCount || 0} wait`, THEME.text.secondary],
+            ].map(([label, value, color]) => (
+              <div key={label} style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                <MonoText style={{ fontSize: '12px', color, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</MonoText>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '5px' }}>
         spread replay: {pnl.spreadReplayStatus || 'unknown'} · {pnl.spreadMarkChanges || 0}/{pnl.spreadRawObservations || 0} mark changes · {pnl.spreadCollapsedPolls || 0} repeated polls collapsed
+        {pnl.spreadOosStatus ? ` · spread OOS: ${String(pnl.spreadOosStatus).replaceAll('_', ' ')}${pnl.spreadOosTestPnl !== null && pnl.spreadOosTestPnl !== undefined ? ` ${Number(pnl.spreadOosTestPnl).toFixed(4)}` : ''}` : ''}
         {proxyBits.length ? ` · proxy replay: ${proxyBits.join(' · ')}` : ''}
       </div>
     </Card>
@@ -1279,46 +1492,58 @@ const VenueEvidencePanel = ({ evidence }) => {
         <Badge color="amber">EVIDENCE ONLY</Badge>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '8px' }}>
-        {rows.map(row => (
-          <div key={row.surface} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
-                  {row.label}
+        {rows.map(row => {
+          const authStatus = String(row.auth_status || '');
+          const hasAuth = Boolean(authStatus);
+          const authOk = authStatus === 'AUTHENTICATED';
+          const quoteSources = row.quote_sources || [];
+          return (
+            <div key={row.surface} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                    {row.label}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '2px' }}>
+                    {row.role}
+                  </div>
                 </div>
-                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '2px' }}>
-                  {row.role}
-                </div>
+                <Badge color={statusBadgeColor(row.status)}>{String(row.status || '').replaceAll('_', ' ')}</Badge>
               </div>
-              <Badge color={statusBadgeColor(row.status)}>{String(row.status || '').replaceAll('_', ' ')}</Badge>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '7px' }}>
-              {[
-                ['Rows', row.row_count || 0],
-                ['Priced', row.priced_count || 0],
-                ['Proxy', row.external_proxy_count || 0],
-              ].map(([label, value]) => (
-                <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface }}>
-                  <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
-                  <MonoText style={{ fontSize: '11px', color: THEME.text.secondary }}>{value}</MonoText>
+              <div style={{ display: 'grid', gridTemplateColumns: hasAuth ? 'repeat(4, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '7px' }}>
+                {[
+                  ['Rows', row.row_count || 0, THEME.text.secondary],
+                  ['Priced', row.priced_count || 0, THEME.text.secondary],
+                  ['Proxy', row.external_proxy_count || 0, THEME.text.secondary],
+                  ...(hasAuth ? [['Auth', authStatus.replaceAll('_', ' '), authOk ? THEME.primary[400] : THEME.amber[400]]] : []),
+                ].map(([label, value, valueColor]) => (
+                  <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+                    <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
+                    <MonoText style={{ fontSize: '11px', color: valueColor, overflowWrap: 'anywhere' }}>{value}</MonoText>
+                  </div>
+                ))}
+              </div>
+              {quoteSources.length > 0 && (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginBottom: '5px', overflowWrap: 'anywhere' }}>
+                  Quote source: {quoteSources.map(src => proxySourceLabel(src)).join(', ')}
+                </div>
+              )}
+              {(row.latest_title || row.latest_pricing_status) && (
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
+                  {row.latest_title || row.latest_slug}{row.latest_pricing_status ? ` · ${row.latest_pricing_status}` : ''}
+                </div>
+              )}
+              {(row.gaps || []).slice(0, 1).map(gap => (
+                <div key={gap} style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
+                  {gap}
                 </div>
               ))}
-            </div>
-            {(row.latest_title || row.latest_pricing_status) && (
-              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
-                {row.latest_title || row.latest_slug}{row.latest_pricing_status ? ` · ${row.latest_pricing_status}` : ''}
+              <div style={{ fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.text.faint, marginTop: '5px' }}>
+                judge required · Arc ready: {row.can_drive_arc ? 'yes' : 'no'}
               </div>
-            )}
-            {(row.gaps || []).slice(0, 1).map(gap => (
-              <div key={gap} style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
-                {gap}
-              </div>
-            ))}
-            <div style={{ fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.text.faint, marginTop: '5px' }}>
-              judge required · Arc ready: {row.can_drive_arc ? 'yes' : 'no'}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {evidence.guardrail && (
         <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '9px' }}>
@@ -1406,6 +1631,118 @@ const RealVenueCopyMatrixPanel = ({ proposal }) => {
       {matrix.guardrail && (
         <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '9px' }}>
           {matrix.guardrail}
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const DirectEventPairCandidatesPanel = ({ proposal }) => {
+  const pairs = proposal?.outputs?.direct_event_pair_candidates || {};
+  const rows = pairs.rows || [];
+  if (!rows.length) return null;
+  const readinessColor = (status) => {
+    const text = String(status || '').toUpperCase();
+    if (text.includes('PREMIUM') || text.includes('JUDGE')) return THEME.blue[400];
+    if (text.includes('PRICE')) return THEME.amber[400];
+    return THEME.text.secondary;
+  };
+  const legTitle = (leg = {}) => leg.title || leg.slug || 'direct leg';
+  const legMeta = (leg = {}) => [
+    leg.surface,
+    leg.slug,
+    leg.status_label || leg.pricing_status,
+  ].filter(Boolean).join(' · ');
+  const oracleColor = (gate) => {
+    const text = String(gate || '').toUpperCase();
+    if (text.includes('SUPPORT')) return THEME.primary[400];
+    if (text.includes('CRITIQUE') || text.includes('VETO')) return THEME.red[400];
+    if (text.includes('DEFER') || text.includes('NO_ORACLE')) return THEME.amber[400];
+    return THEME.text.secondary;
+  };
+  return (
+    <Card glow style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Direct Event Pair Candidates</SectionLabel>
+          <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
+            Energy leg + compute leg in one judged package
+          </div>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
+            {pairs.target_pair || 'One energy/grid-stress outcome is paired against one AI compute-demand outcome before premium scoring and judge.classify().'}
+          </div>
+        </div>
+        <Badge color="blue">{pairs.ready_for_judge_count || 0}/{pairs.pair_count || rows.length} READY</Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
+        {rows.slice(0, 6).map(row => {
+          const energy = row.energy_leg || {};
+          const compute = row.compute_leg || {};
+          const oracle = row.oracle_evidence || {};
+          const color = readinessColor(row.readiness);
+          return (
+            <div key={row.pair_id} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '8px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '13px', color: THEME.text.primary, fontWeight: 800, overflowWrap: 'anywhere' }}>
+                    {row.target_pair || pairs.target_pair || 'direct event pair'}
+                  </div>
+                  <div style={{ fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.text.faint, marginTop: '2px' }}>
+                    {row.pair_id} · {(row.surfaces || []).join(' + ')}
+                  </div>
+                </div>
+                <MonoText style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                  {String(row.readiness || 'WATCH').replaceAll('_', ' ')}
+                </MonoText>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 20px minmax(0, 1fr)', gap: '6px', alignItems: 'stretch', marginBottom: '7px' }}>
+                {[
+                  ['Energy', energy, energy.pair_side || 'watch', THEME.amber[400]],
+                  ['Compute', compute, compute.pair_side || 'watch', THEME.blue[400]],
+                ].map(([label, leg, side, itemColor], idx) => (
+                  <React.Fragment key={label}>
+                    {idx === 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: THEME.text.faint, fontFamily: THEME.font.mono, fontSize: '13px' }}>↔</div>
+                    )}
+                    <div style={{ padding: '8px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
+                        <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>{label}</div>
+                        <MonoText style={{ fontSize: '9px', color: itemColor, fontWeight: 800 }}>{String(side).toUpperCase()}</MonoText>
+                      </div>
+                      <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.primary, fontWeight: 700, lineHeight: 1.25, overflowWrap: 'anywhere' }}>
+                        {legTitle(leg)}
+                      </div>
+                      <div style={{ fontFamily: THEME.font.mono, fontSize: '9px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px', overflowWrap: 'anywhere' }}>
+                        {legMeta(leg)}
+                      </div>
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35, marginBottom: '5px' }}>
+                {row.why_connected}
+              </div>
+              <div style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface, border: `1px solid ${THEME.border.subtle}`, marginBottom: '5px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800 }}>Opoint/Nebius evidence</div>
+                  <MonoText style={{ fontSize: '9px', color: oracleColor(oracle.gate), fontWeight: 800, textAlign: 'right' }}>
+                    {String(oracle.gate || 'NO_ORACLE_RECEIPTS').replaceAll('_', ' ')}
+                  </MonoText>
+                </div>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '4px' }}>
+                  {Number(oracle.receipts || 0)} receipts{oracle.latest_verdict ? ` · ${oracle.latest_verdict}` : ''}{oracle.oracle_evidence_hash ? ` · ${oracle.oracle_evidence_hash}` : ''}. {oracle.note || 'Evidence only; judge still required.'}
+                </div>
+              </div>
+              <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35 }}>
+                {row.action}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {pairs.guardrail && (
+        <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '9px' }}>
+          {pairs.guardrail}
         </div>
       )}
     </Card>
@@ -1778,7 +2115,7 @@ const MockContractSummaryPanel = ({ proposal }) => {
     ? (construction.recommendation_label || 'Open paper hedge')
     : (construction.recommendation_label || 'Monitor');
   const reason = construction.recommendation_reason || 'Recommendation refreshes from the latest spread, quote, and leg state.';
-  const color = canOpen ? THEME.primary[400] : THEME.amber[400];
+  const color = recommendationColor(construction, canOpen);
   return (
     <Card glow>
       <SectionLabel>Mock Contract Control</SectionLabel>
@@ -1822,9 +2159,7 @@ const MockContractSummaryPanel = ({ proposal }) => {
               </div>
             )}
             <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.muted, lineHeight: 1.35, marginTop: '5px' }}>
-              {canOpen
-                ? 'Open paper hedge freezes a local entry ticket only; Arc stays gated by judge.classify().'
-                : 'No user-facing buy at this score; monitor until the entry threshold and judge gate both clear.'}
+              {recommendationHelperText(construction, canOpen)}
             </div>
           </div>
         </div>
@@ -2340,6 +2675,7 @@ const DashboardPage = ({ refreshRate }) => {
     && topEntryScore >= topEntryThreshold
     && construction.judge_verdict?.label === 'EXECUTE';
   const recommendation = topCanBuy ? (construction.recommendation_label || 'Open paper hedge') : (construction.recommendation_label || 'Monitor');
+  const topRecommendationColor = recommendationColor(construction, topCanBuy);
 
   return (
     <div style={{ padding: isMobile ? '18px 14px 32px' : '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -2370,11 +2706,12 @@ const DashboardPage = ({ refreshRate }) => {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? (isNarrow ? '1fr' : 'repeat(2, minmax(0, 1fr))') : 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
         <StatCard label="Mock Notional" value={construction.hedge_notional_usdc ? `$${Number(construction.hedge_notional_usdc).toLocaleString()}` : 'Pending'} />
         <StatCard label="Circle Ask" value={construction.circle_testnet_usdc_request ? `${Number(construction.circle_testnet_usdc_request).toLocaleString()} USDC` : 'Pending'} color={THEME.amber[400]} />
-        <StatCard label="Agent Recommendation" value={recommendation} color={topCanBuy ? THEME.primary[400] : THEME.amber[400]} />
+        <StatCard label="Agent Recommendation" value={recommendation} color={topRecommendationColor} />
         <StatCard label="Quote Source" value={quoteSourceText || 'Pending'} valueSize={16} />
       </div>
 
       <PnlStatusPanel pnl={data.pnl} />
+      <PortfolioSignalSummaryPanel proposal={data.syntheticInstrument} />
       <SpreadProfitabilityLedgerPanel proposal={data.syntheticInstrument} />
       <OperatorSignalSheetPanel proposal={data.syntheticInstrument} />
       <TelegramCampaignPanel campaign={data.telegramCampaign} />
@@ -2393,6 +2730,7 @@ const DashboardPage = ({ refreshRate }) => {
       <SpreadTradeMapPanel proposal={data.syntheticInstrument} />
 
       <RealVenueCopyMatrixPanel proposal={data.syntheticInstrument} />
+      <DirectEventPairCandidatesPanel proposal={data.syntheticInstrument} />
       <VenueEvidencePanel evidence={data.venueEvidence} />
 
       <SyntheticInstrumentPanel proposal={data.syntheticInstrument} />

@@ -62,6 +62,9 @@ story:
 | Raw compute minus power | `compute - (electricity/1000) * kWh` | same spread before PUE/utilization haircut |
 | Compute prompt calendar proxy | `spot GPU rental - prior 21-mark GPU rental average` | front compute tightness versus a term proxy |
 | Electricity prompt calendar proxy | `front electricity - prior 21-mark electricity average` | front power tightness versus a term proxy |
+| Compute calendar forward hedge | liquid AI-capex basket mapped to compute calendar replay | paper copy of prompt GPU rental tightness |
+| Electricity calendar power hedge | power/fuel basket mapped to electricity calendar replay | paper copy of prompt electricity tightness |
+| Compute-power calendar basis note | compute basket versus power/fuel basket mapped to calendar-basis replay | paper copy of compute calendar premium vs power calendar premium |
 | Compute-power prompt basis | `compute prompt premium % - electricity prompt premium %` | curve-shape basis between compute and power |
 
 The catalog also names the next spread archetypes the agent is expected to
@@ -76,14 +79,24 @@ cloud GPU provider marks, IBKR/Kalshi/Polymarket AI compute events,
 NVDA/VRT/ETN infrastructure proxies, BTC/ETH miner-margin proxies, derived
 prompt/term compute proxies, and planned hashprice inputs.
 
+`spread_families.index_coverage` turns that catalog into an operator coverage
+map. It counts usable electricity and compute indexes (`active`,
+`derived_active`, `proxy`, or `proxy_only`), watchlist/direct-event indexes,
+planned physical gaps, replayed spread forms, promotable forms, and OOS pass
+counts. The dashboard, Mini App, and bot status show the coverage summary so
+users can see which oil-style spread families are tradeable today and which
+still need regional LMP, GPU-region basis, or other index history.
+
 Each family is replayed walk-forward: collapse repeated worker polls, use only
 prior mark changes for the z-score, enter mean-reversion when the z gate
 clears, and mark PnL at the configured horizon. A family is not promotable
 unless it has enough mark-change history, enough distinct marks, enough
-z-gated trades, positive replay PnL, and acceptable win rate. Flat marks
-therefore show `INSUFFICIENT_VARIANCE` or `INSUFFICIENT_MARK_CHANGES` instead
-of a fake profitable signal. The frontend and Telegram Mini App show this
-replay gate beside the live spread.
+z-gated trades, positive replay PnL, acceptable win rate, and a passing fixed
+train/test out-of-sample trade split. A full-window winner with a losing test
+slice is labelled `FAILED_OOS_REPLAY`, not `PROMOTABLE`. Flat marks therefore
+show `INSUFFICIENT_VARIANCE` or `INSUFFICIENT_MARK_CHANGES` instead of a fake
+profitable signal. The frontend and Telegram Mini App show this replay gate
+beside the live spread.
 
 The public hedge expression is replayed separately in
 `agent/proxy_basket_backtest.py`. That replay uses Yahoo/IBKR-style public
@@ -104,6 +117,12 @@ paper PnL, hit rate, and the current ticket action (`OPEN_BUY`, `HOLD_OPEN`,
 `CLOSE_OR_SELL`, `WAIT`, or `WAIT_FOR_HISTORY`). This is the operator answer
 to "what would the recent proposed synthetic arb tickets have made?" It remains
 paper replay, not a broker fill ledger.
+
+The same replay now emits `out_of_sample_replay`, a fixed train/test split of
+the proxy index. A full-sample winner with a failing test slice is not promoted
+as a fresh paper buy; it is shown as `WAIT_FOR_OOS_CONFIRMATION` until the live
+or test window improves. This keeps the ledger from turning one lucky historical
+window into a user-facing trade signal.
 
 Run it with:
 
@@ -126,15 +145,41 @@ proxy `BUY` is not enough by itself: fresh buys require a promotable spread
 replay plus a constructive mapped proxy. Otherwise the trade map returns
 `WAIT_FOR_SPREAD_REPLAY` or `NEEDS_INDEX_HISTORY`.
 
+`synthetic_instrument.outputs.direct_event_pair_candidates` groups real
+forecast/event slugs into a single spread expression instead of showing
+disconnected watchlist rows. For an `electricity_expensive` signal the target
+pair is long energy/grid-stress and short AI compute-demand; for a
+`compute_expensive` signal the sides reverse. Polymarket, Kalshi, and IBKR
+ForecastTrader/ForecastEx legs can appear here only as candidate direct legs.
+Rows say whether the pair needs a live price, Polymarket premium scoring, or
+`judge.classify()` before any Arc action. The dashboard, Telegram Mini App, and
+bot `/latest` show these paired slugs together so the hedge thesis is readable.
+Each pair also carries `oracle_evidence`: the latest Opoint/Nebius receipt
+hash, verdict, article counts, and evidence-only gate (`SUPPORT`, `CRITIQUE`,
+`DEFER`, or missing). This LLM/news receipt can support or criticize the pair
+but cannot replace premium scoring, the judge, or the no-chain-unless-EXECUTE
+invariant.
+
 `synthetic_instrument.outputs.spread_profitability_ledger` ranks those mapped
 spreads for the operator. It reports paper 5d and 1m proxy PnL, spread replay
-PnL, win rate, priced symbols, recent dated paper marks, and statuses such as
+PnL, out-of-sample test status, win rate, priced symbols, recent dated paper
+marks, and statuses such as
 `PAPER_BUY`, `SELL_OR_AVOID`, `WAIT_FOR_PROXY_CONFIRMATION`,
-`WAIT_FOR_SPREAD_REPLAY`, `NEEDS_INDEX_HISTORY`, and `NEEDS_EXPRESSION`. The
-dashboard, Telegram Mini App, and bot `/latest` show this ledger near the top
-of the flow. Each row includes both mark-to-market PnL and ticket-level replay
-PnL so an entry-day `$0.00` mark is not confused with a broken spread
-calculation. It is paper/replay evidence only, not settled PnL.
+`WAIT_FOR_OOS_CONFIRMATION`, `WAIT_FOR_SPREAD_REPLAY`,
+`NEEDS_INDEX_HISTORY`, and `NEEDS_EXPRESSION`. The dashboard, Telegram Mini App,
+and bot `/latest` show this ledger near the top of the flow. Each row includes
+both mark-to-market PnL and ticket-level replay PnL, and the first recent mark
+is labelled as the entry baseline so an entry-day `$0.00` mark is not confused
+with a broken spread calculation. It is paper/replay evidence only, not settled
+PnL.
+
+`synthetic_instrument.outputs.portfolio_signal_summary` rolls the whole spread
+menu into one operator posture: `OPEN_TOP_PAPER_BUY`, `CLOSE_OR_AVOID`,
+`ROTATE`, `WAIT_FOR_DATA`, or `MONITOR`. It totals paper-ticket PnL, open PnL,
+realized paper-ticket PnL, and latest mark PnL across the mapped spread rows,
+then points to the top buy and top close/avoid expression. This is still
+advisory paper replay; Circle and Arc stay locked unless `judge.classify()`
+returns `EXECUTE`.
 
 The snapshot also separates realized accounting from replay evidence. `pnl`
 returns `NO_SETTLED_PNL` and `display_total = "No settled PnL"` until

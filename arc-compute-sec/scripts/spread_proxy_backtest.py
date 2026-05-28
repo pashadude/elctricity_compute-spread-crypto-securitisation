@@ -110,16 +110,18 @@ def main(argv: list[str] | None = None) -> int:
             f"Rows: {len(built['rows'])}",
             f"Electricity symbols: {', '.join(built['electricity_index']['symbols_available'])}",
             f"Compute symbols: {', '.join(built['compute_index']['symbols_available'])}",
+            f"Coverage: {(replay.get('index_coverage') or {}).get('summary', 'index coverage loading')}",
             "",
             "## Families",
             "",
-            "| Family | Status | Trades | WR | PnL/unit |",
-            "|---|---:|---:|---:|---:|",
+            "| Family | Status | Trades | WR | PnL/unit | OOS |",
+            "|---|---:|---:|---:|---:|---|",
         ]
         for family in replay.get("families", []):
             lines.append(
                 f"| {family['label']} | {family['status']} | {family['tested_trades']} | "
-                f"{family['win_rate']:.2f}% | {family['total_pnl_per_unit']:.6f} |"
+                f"{family['win_rate']:.2f}% | {family['total_pnl_per_unit']:.6f} | "
+                f"{family.get('oos_status', 'NO_REPLAY')} {float(family.get('oos_test_pnl_per_unit') or 0):.6f} |"
             )
         args.report_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({
@@ -129,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
         "entry_gate_pass": replay.get("entry_gate_pass"),
         "primary_status": (replay.get("primary_family") or {}).get("status"),
         "primary_label": (replay.get("primary_family") or {}).get("label"),
+        "primary_oos_status": (replay.get("primary_family") or {}).get("oos_status"),
+        "primary_oos_test_pnl_per_unit": (replay.get("primary_family") or {}).get("oos_test_pnl_per_unit"),
+        "index_coverage": replay.get("index_coverage"),
         "history_points": history_points,
         "history_errors": history_errors,
     }, indent=2))

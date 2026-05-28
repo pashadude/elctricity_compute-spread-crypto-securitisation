@@ -49,12 +49,19 @@ def render(summary: dict) -> str:
     ]
     if primary:
         lines.extend([
-        f"Primary: {primary.get('label')} ({primary.get('status')})",
-        f"Recommendation: {primary.get('recommendation')}",
-        f"Signal: {primary.get('latest_signal', 'MONITOR')} - {primary.get('signal_reason', '')}",
-        f"Return: {float(primary.get('total_return_pct') or 0):.2f}%",
-        f"WR: {float(primary.get('win_rate') or 0):.2f}%",
+            f"Primary: {primary.get('label')} ({primary.get('status')})",
+            f"Historical replay: {primary.get('recommendation')}",
+            f"Current action: {primary.get('current_action', primary.get('latest_signal', 'MONITOR'))}",
+            f"Signal: {primary.get('latest_signal', 'MONITOR')} - {primary.get('signal_reason', '')}",
+            f"Return: {float(primary.get('total_return_pct') or 0):.2f}%",
+            f"WR: {float(primary.get('win_rate') or 0):.2f}%",
             f"Max DD: {float(primary.get('max_drawdown_pct') or 0):.2f}%",
+            (
+                "OOS: "
+                f"{(primary.get('out_of_sample_replay') or {}).get('status', 'NO_REPLAY')} "
+                f"{float((primary.get('out_of_sample_replay') or {}).get('test_return_pct') or 0):.2f}% "
+                f"WR {float((primary.get('out_of_sample_replay') or {}).get('test_win_rate') or 0):.2f}%"
+            ),
             f"Reason: {primary.get('status_reason')}",
         "",
     ])
@@ -74,20 +81,24 @@ def render(summary: dict) -> str:
             )
         lines.append("")
     lines.extend([
-        "| Basket | Signal | Status | Recommendation | Return | 5d | 1m | WR | Max DD | Days |",
-        "|---|---|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Basket | Signal | Status | Current action | Replay | Return | 5d | 1m | WR | OOS | Max DD | Days |",
+        "|---|---|---|---|---|---:|---:|---:|---:|---|---:|---:|",
     ])
     for basket in summary.get("baskets") or []:
         btrail = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else {}
         ret_5d = (btrail.get("5d") or {}).get("return_pct")
         ret_1m = (btrail.get("1m") or {}).get("return_pct")
+        oos = basket.get("out_of_sample_replay") if isinstance(basket.get("out_of_sample_replay"), dict) else {}
+        oos_text = f"{oos.get('status', 'NO_REPLAY')} {float(oos.get('test_return_pct') or 0):.2f}%"
         lines.append(
             f"| {basket.get('label')} | {basket.get('latest_signal', 'MONITOR')} | "
-            f"{basket.get('status')} | {basket.get('recommendation')} | "
+            f"{basket.get('status')} | {basket.get('current_action', '')} | "
+            f"{basket.get('recommendation')} | "
             f"{float(basket.get('total_return_pct') or 0):.2f}% | "
             f"{float(ret_5d or 0):.2f}% | "
             f"{float(ret_1m or 0):.2f}% | "
             f"{float(basket.get('win_rate') or 0):.2f}% | "
+            f"{oos_text} | "
             f"{float(basket.get('max_drawdown_pct') or 0):.2f}% | "
             f"{int(basket.get('observations') or 0)} |"
         )

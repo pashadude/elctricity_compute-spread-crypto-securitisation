@@ -173,6 +173,14 @@ def test_real_venue_copy_matrix_connects_surfaces_to_spread_forms(monkeypatch):
                 "pricing_status": "ibkr_quote_unavailable",
                 "label": "WATCHLIST",
             },
+            {
+                "surface": "kalshi",
+                "leg_title": "Nuclear power plant before 2030",
+                "leg_slug": "kxdatacenter-30",
+                "direct_pair_role": "AI compute-demand leg",
+                "pricing_status": "priced_watchlist",
+                "label": "WATCHLIST",
+            },
         ],
         packages=[],
         verdicts=[{
@@ -232,6 +240,7 @@ def test_real_venue_copy_matrix_connects_surfaces_to_spread_forms(monkeypatch):
         venue_evidence={
             "rows": [
                 {"surface": "polymarket", "label": "Polymarket Gamma", "status": "LIVE_PRICED", "direct_event_surface": True, "priced_count": 1, "watchlist_count": 1, "premium_gate_required": True, "real_feed": True},
+                {"surface": "kalshi", "label": "Kalshi public events", "status": "LIVE_PRICED", "direct_event_surface": True, "priced_count": 1, "watchlist_count": 1, "real_feed": True},
                 {"surface": "ibkr_prediction", "label": "IBKR ForecastTrader", "status": "PROXY_PRICED", "direct_event_surface": True, "priced_count": 0, "external_proxy_count": 1, "watchlist_count": 1, "real_feed": True},
                 {"surface": "public_market", "label": "Yahoo public quotes", "status": "LIVE_PRICED", "priced_count": 2, "watchlist_count": 2, "real_feed": True},
                 {"surface": "crypto", "label": "BTC/ETH miner-margin proxy", "status": "LIVE_PRICED", "priced_count": 1, "watchlist_count": 1, "real_feed": True},
@@ -246,6 +255,7 @@ def test_real_venue_copy_matrix_connects_surfaces_to_spread_forms(monkeypatch):
     assert matrix["version"] == "real_venue_copy_matrix_v1"
     assert by_surface["polymarket"]["copy_role"] == "direct_event_leg"
     assert by_surface["polymarket"]["copy_status"] == "NEEDS_PREMIUM_AND_JUDGE"
+    assert by_surface["kalshi"]["copy_status"] == "NEEDS_JUDGE_PAIR"
     assert by_surface["ibkr_prediction"]["copy_status"] == "DIRECT_METADATA_PROXY_PRICED"
     assert by_surface["public_market"]["copy_role"] == "liquid_proxy_hedge"
     assert by_surface["crypto"]["copy_role"] == "miner_margin_proxy"
@@ -254,6 +264,23 @@ def test_real_venue_copy_matrix_connects_surfaces_to_spread_forms(monkeypatch):
     assert any(link["archetype_id"] == "fuel_stack_compute_spread" for link in by_surface["crypto"]["spread_links"])
     assert matrix["summary"]["arc_ready_surfaces"] == 0
     assert "judge.classify()" in matrix["guardrail"]
+    pairs = proposal["outputs"]["direct_event_pair_candidates"]
+    assert pairs["version"] == "direct_event_pair_candidates_v1"
+    assert pairs["pair_count"] >= 1
+    assert pairs["ready_for_judge_count"] >= 1
+    first_pair = pairs["rows"][0]
+    assert first_pair["readiness"] == "NEEDS_PREMIUM_AND_JUDGE"
+    assert first_pair["energy_leg"]["bucket"] == "energy"
+    assert first_pair["energy_leg"]["pair_side"] == "long"
+    assert first_pair["compute_leg"]["bucket"] == "compute"
+    assert first_pair["compute_leg"]["pair_side"] == "short"
+    assert first_pair["premium_gate_required"] is True
+    assert first_pair["oracle_required"] is False
+    assert first_pair["oracle_evidence"]["status"] == "EVIDENCE_LOGGED"
+    assert first_pair["oracle_evidence"]["receipts"] == 1
+    assert first_pair["oracle_evidence"]["can_drive_arc"] is False
+    assert "oracle_evidence_hash" in first_pair["judge_package_inputs"]
+    assert "energy/grid-stress side" in first_pair["why_connected"]
 
 
 def test_mock_recommendation_blocks_buy_when_energy_materiality_is_too_weak(monkeypatch):
@@ -536,7 +563,8 @@ def test_mock_recommendation_uses_proxy_basket_matching_signal_direction(monkeyp
     assert menu[0]["basket_direction"] == "compute_expensive"
     assert menu[0]["direction_aligned"] is True
     assert menu[0]["latest_signal"] == "SELL"
-    assert menu[1]["direction_aligned"] is False
+    power_note = next(row for row in menu if row["instrument_type"] == "power_stress_receivable_hedge")
+    assert power_note["direction_aligned"] is False
     trade_map = proposal["outputs"]["spread_archetype_trade_map"]
     active_spread = next(row for row in trade_map if row["archetype_id"] == "compute_spark_spread")
     assert active_spread["selected_expression"]["basket_id"] == "compute_scarcity_ai_infra"
@@ -607,6 +635,12 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
                     ],
                     "open_trade": {"entry_date": "2026-05-26", "mark_date": "2026-05-28", "return_pct": 0.8},
                 },
+                "out_of_sample_replay": {
+                    "status": "PASSED",
+                    "passed": True,
+                    "test_return_pct": 1.1,
+                    "test_win_rate": 60.0,
+                },
             },
             "baskets": [{
                 "basket_id": "miner_margin_power_pair",
@@ -638,6 +672,12 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
                         {"entry_date": "2026-05-18", "exit_date": "2026-05-20", "return_pct": 0.2},
                     ],
                     "open_trade": {"entry_date": "2026-05-26", "mark_date": "2026-05-28", "return_pct": 0.8},
+                },
+                "out_of_sample_replay": {
+                    "status": "PASSED",
+                    "passed": True,
+                    "test_return_pct": 1.1,
+                    "test_win_rate": 60.0,
                 },
             }],
         },
@@ -673,7 +713,11 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
 
     menu = proposal["outputs"]["syndicated_instrument_menu"]
 
-    assert len(menu) >= 5
+    assert len(menu) >= 8
+    instrument_types = {row["instrument_type"] for row in menu}
+    assert "compute_calendar_forward_hedge" in instrument_types
+    assert "electricity_calendar_power_hedge" in instrument_types
+    assert "compute_power_calendar_basis_note" in instrument_types
     assert menu[0]["instrument_type"] == "miner_margin_power_pair"
     assert menu[0]["latest_signal"] == "BUY"
     assert menu[0]["status"] == "PAPER_BUY_ONLY"
@@ -693,6 +737,7 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
     assert ledger["best_buy_candidate"]["supports_fresh_buy"] is True
     assert ledger["paper_notional_usdc"] == 2625.0
     assert ledger["best_buy_candidate"]["latest_paper_pnl_usdc"] == 52.5
+    assert ledger["best_buy_candidate"]["recent_paper_marks"][0]["mark_type"] == "entry"
     assert ledger["best_buy_candidate"]["recent_paper_marks"][-1]["date"] == "2026-05-28"
     assert ledger["best_buy_candidate"]["recent_paper_marks"][-1]["paper_pnl_usdc"] == 52.5
     assert ledger["best_buy_candidate"]["paper_trade_action"] == "HOLD_OPEN"
@@ -701,7 +746,19 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
     assert ledger["best_buy_candidate"]["paper_trade_open_pnl_usdc"] == 21.0
     assert ledger["best_buy_candidate"]["paper_trade_replay"]["open_trade"]["pnl_usdc"] == 21.0
     assert ledger["best_buy_candidate"]["paper_trade_replay"]["closed_trades"][0]["pnl_usdc"] == 26.25
+    assert ledger["best_buy_candidate"]["oos_status"] == "PASSED"
+    assert ledger["best_buy_candidate"]["oos_test_return_pct"] == 1.1
     assert ledger["counts"]["paper_buy"] >= 1
+    portfolio = proposal["outputs"]["portfolio_signal_summary"]
+    assert portfolio["version"] == "portfolio_signal_summary_v1"
+    assert portfolio["action"] == "OPEN_TOP_PAPER_BUY"
+    assert portfolio["top_buy"]["archetype_id"] == "fuel_stack_compute_spread"
+    assert portfolio["paper_ticket_total_pnl_usdc"] == 52.5
+    assert portfolio["paper_ticket_realized_pnl_usdc"] == 31.5
+    assert portfolio["paper_ticket_open_pnl_usdc"] == 21.0
+    assert portfolio["buy_count"] >= 1
+    assert portfolio["oos_pass_count"] >= 1
+    assert "judge.classify()" in portfolio["guardrail"]
     oracle = proposal["outputs"]["oracle_judge_evidence"]
     assert oracle["status"] == "EVIDENCE_LOGGED"
     assert oracle["latest_verdict"] == "DEFER"
@@ -709,6 +766,112 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
     assert oracle["can_drive_arc"] is False
     assert oracle["oracle_evidence_hash"]
     assert proposal["inputs"]["oracle_evidence_hash"] == oracle["oracle_evidence_hash"]
+
+
+def test_calendar_spread_maps_to_syndicated_expression(monkeypatch):
+    def fake_classify(candidate, state, scorer_result=None):
+        return synthetic_instrument.judge.Verdict(synthetic_instrument.judge.LABEL_EXECUTE, "all_gates_passed", 0.95)
+
+    monkeypatch.setattr(synthetic_instrument.judge, "classify", fake_classify)
+    proposal = propose_synthetic_instrument(
+        spread={"latest": {"region": "ERCOT", "electricity_per_mwh": "62.6", "compute_per_gpu_hr": "1.5", "S_t": "1.47"}},
+        signal={"latest": {"signal_id": "sig-calendar", "direction": "compute_expensive", "region": "ERCOT", "z": "2.4"}},
+        direct_inventory=[],
+        packages=[],
+        verdicts=[],
+        public_hedges=[
+            {"surface": "public_market", "instrument": "NVDA", "leg_slug": "NVDA", "last_price": 200, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "VRT", "leg_slug": "VRT", "last_price": 300, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "ETN", "leg_slug": "ETN", "last_price": 400, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "CEG", "leg_slug": "CEG", "last_price": 250, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "NRG", "leg_slug": "NRG", "last_price": 120, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "BTC-USD", "leg_slug": "BTC-USD", "last_price": 100000, "pricing_status": "priced_public_market", "label": "PRICED"},
+            {"surface": "public_market", "instrument": "ETH-USD", "leg_slug": "ETH-USD", "last_price": 4000, "pricing_status": "priced_public_market", "label": "PRICED"},
+        ],
+        proxy_basket_validation={
+            "entry_gate_pass": True,
+            "primary_basket": {
+                "basket_id": "compute_calendar_ai_capex",
+                "direction": "compute_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
+                "current_action": "BUY_CANDIDATE",
+                "current_action_reason": "Historical replay is promotable and recent marks confirm the direction.",
+                "weights": {"NVDA": 0.36, "VRT": 0.22, "ETN": 0.16, "CEG": -0.12, "NRG": -0.08, "BTC-USD": 0.04, "ETH-USD": 0.02},
+                "trailing_returns": {"5d": {"return_pct": 2.4}, "1m": {"return_pct": 4.1}},
+                "recent_index_marks": [
+                    {"date": "2026-05-26", "index_close": 100.0, "daily_return_pct": 0.0, "paper_return_since_entry_pct": 0.0},
+                    {"date": "2026-05-27", "index_close": 101.0, "daily_return_pct": 1.0, "paper_return_since_entry_pct": 1.0},
+                    {"date": "2026-05-28", "index_close": 103.0, "daily_return_pct": 1.9802, "paper_return_since_entry_pct": 3.0},
+                ],
+                "total_return_pct": 9.5,
+                "win_rate": 56.0,
+                "out_of_sample_replay": {"status": "PASSED", "passed": True, "test_return_pct": 2.2, "test_win_rate": 61.0},
+            },
+            "baskets": [{
+                "basket_id": "compute_calendar_ai_capex",
+                "direction": "compute_expensive",
+                "status": "PROMOTABLE",
+                "recommendation": "BUY_OR_HOLD",
+                "latest_signal": "BUY",
+                "signal_reason": "Promotable replay and recent proxy PnL is non-negative.",
+                "current_action": "BUY_CANDIDATE",
+                "current_action_reason": "Historical replay is promotable and recent marks confirm the direction.",
+                "weights": {"NVDA": 0.36, "VRT": 0.22, "ETN": 0.16, "CEG": -0.12, "NRG": -0.08, "BTC-USD": 0.04, "ETH-USD": 0.02},
+                "trailing_returns": {"5d": {"return_pct": 2.4}, "1m": {"return_pct": 4.1}},
+                "recent_index_marks": [
+                    {"date": "2026-05-26", "index_close": 100.0, "daily_return_pct": 0.0, "paper_return_since_entry_pct": 0.0},
+                    {"date": "2026-05-27", "index_close": 101.0, "daily_return_pct": 1.0, "paper_return_since_entry_pct": 1.0},
+                    {"date": "2026-05-28", "index_close": 103.0, "daily_return_pct": 1.9802, "paper_return_since_entry_pct": 3.0},
+                ],
+                "total_return_pct": 9.5,
+                "win_rate": 56.0,
+                "out_of_sample_replay": {"status": "PASSED", "passed": True, "test_return_pct": 2.2, "test_win_rate": 61.0},
+            }],
+        },
+        spread_family_validation={
+            "entry_gate_pass": True,
+            "archetype_scoreboard": [{
+                "archetype_id": "compute_calendar_spread",
+                "label": "Compute calendar spread",
+                "status": "PROMOTABLE",
+                "replay_status": "PROMOTABLE",
+                "evidence_level": "replayed",
+                "is_promotable": True,
+                "tested_trades": 24,
+                "win_rate": 66.0,
+                "total_pnl_per_unit": 0.22,
+                "oos_status": "PASSED",
+                "oos_test_pnl_per_unit": 0.05,
+                "oos_test_win_rate": 60.0,
+            }],
+        },
+    )
+
+    menu = proposal["outputs"]["syndicated_instrument_menu"]
+    calendar_note = next(row for row in menu if row["instrument_type"] == "compute_calendar_forward_hedge")
+    assert calendar_note["basket_id"] == "compute_calendar_ai_capex"
+    assert calendar_note["spread_archetype"] == "compute_calendar_spread"
+    assert calendar_note["latest_signal"] == "BUY"
+    trade_map = proposal["outputs"]["spread_archetype_trade_map"]
+    calendar_row = next(row for row in trade_map if row["archetype_id"] == "compute_calendar_spread")
+    assert calendar_row["selected_expression"]["basket_id"] == "compute_calendar_ai_capex"
+    assert calendar_row["selected_expression"]["signal_reason"] == "Promotable replay and recent proxy PnL is non-negative."
+    assert calendar_row["selected_expression"]["current_action"] == "BUY_CANDIDATE"
+    assert calendar_row["tradability_action"] == "PAPER_BUY_ONLY"
+    ledger_row = next(row for row in proposal["outputs"]["spread_profitability_ledger"]["rows"] if row["archetype_id"] == "compute_calendar_spread")
+    assert ledger_row["profitability_status"] == "PAPER_BUY"
+    assert ledger_row["supports_fresh_buy"] is True
+    assert ledger_row["latest_paper_pnl_usdc"] > 0
+    assert ledger_row["signal_reason"] == "Promotable replay and recent proxy PnL is non-negative."
+    assert ledger_row["current_action"] == "BUY_CANDIDATE"
+    assert ledger_row["current_action_reason"] == "Historical replay is promotable and recent marks confirm the direction."
+    assert ledger_row["signal_inputs"]["paper_5d_return_pct"] == 2.4
+    assert ledger_row["signal_inputs"]["current_action"] == "BUY_CANDIDATE"
+    portfolio_row = next(row for row in proposal["outputs"]["portfolio_signal_summary"]["rows"] if row["archetype_id"] == "compute_calendar_spread")
+    assert portfolio_row["signal_reason"] == "Promotable replay and recent proxy PnL is non-negative."
 
 
 def test_profitability_ledger_does_not_promote_proxy_buy_without_spread_replay(monkeypatch):
@@ -770,6 +933,158 @@ def test_profitability_ledger_does_not_promote_proxy_buy_without_spread_replay(m
     assert ledger_row["profitability_status"] == "WAIT_FOR_SPREAD_REPLAY"
     assert ledger_row["supports_fresh_buy"] is False
     assert ledger_row["latest_paper_pnl_usdc"] > 0
+    portfolio = proposal["outputs"]["portfolio_signal_summary"]
+    assert portfolio["action"] == "WAIT_FOR_DATA"
+    assert portfolio["buy_count"] == 0
+    assert portfolio["wait_count"] >= 1
+
+
+def test_profitability_ledger_blocks_fresh_buy_when_oos_fails():
+    ledger = synthetic_instrument._spread_profitability_ledger([{
+        "archetype_id": "fuel_stack_compute_spread",
+        "label": "Fuel-stack compute spread",
+        "oil_analogy": "fuel crack",
+        "replay_status": "PROMOTABLE",
+        "replay_promotable": True,
+        "win_rate": 61.0,
+        "total_pnl_per_unit": 0.4,
+        "tradability_action": "PAPER_BUY_ONLY",
+        "tradability_reason": "Mapped proxy basket says buy.",
+        "selected_expression": {
+            "title": "Miner-margin power pair",
+            "basket_id": "miner_margin_power_pair",
+            "latest_signal": "BUY",
+            "return_5d_pct": 2.2,
+            "return_1m_pct": 6.1,
+            "total_return_pct": 7.0,
+            "win_rate": 49.0,
+            "recent_index_marks": [
+                {"date": "2026-05-27", "index_close": 100.0, "paper_return_since_entry_pct": 0.0},
+                {"date": "2026-05-28", "index_close": 101.0, "paper_return_since_entry_pct": 1.0},
+            ],
+            "out_of_sample_replay": {
+                "status": "FAILED",
+                "passed": False,
+                "test_return_pct": -1.5,
+                "test_win_rate": 40.0,
+            },
+        },
+    }], paper_notional_usdc=1000)
+
+    row = ledger["rows"][0]
+    assert row["profitability_status"] == "WAIT_FOR_OOS_CONFIRMATION"
+    assert row["supports_fresh_buy"] is False
+    assert row["oos_status"] == "FAILED"
+    assert ledger["best_buy_candidate"] is None
+    portfolio = synthetic_instrument._portfolio_signal_summary(ledger)
+    assert portfolio["action"] == "WAIT_FOR_DATA"
+    assert portfolio["oos_fail_count"] == 1
+
+
+def test_profitability_ledger_treats_hold_as_existing_only_not_fresh_buy():
+    ledger = synthetic_instrument._spread_profitability_ledger([{
+        "archetype_id": "compute_power_calendar_basis",
+        "label": "Compute-power calendar basis",
+        "oil_analogy": "calendar crack",
+        "replay_status": "PROMOTABLE",
+        "replay_promotable": True,
+        "win_rate": 61.0,
+        "total_pnl_per_unit": 0.4,
+        "tradability_action": "PAPER_BUY_ONLY",
+        "tradability_reason": "Mapped proxy basket says buy.",
+        "selected_expression": {
+            "title": "Compute-power calendar basis note",
+            "basket_id": "compute_power_calendar_pair",
+            "latest_signal": "HOLD",
+            "return_5d_pct": -0.8,
+            "return_1m_pct": 0.3,
+            "recent_index_marks": [
+                {"date": "2026-05-27", "index_close": 100.0, "paper_return_since_entry_pct": 0.0},
+                {"date": "2026-05-28", "index_close": 99.0, "paper_return_since_entry_pct": -1.0},
+            ],
+            "out_of_sample_replay": {
+                "status": "PASSED",
+                "passed": True,
+                "test_return_pct": 2.0,
+                "test_win_rate": 55.0,
+            },
+        },
+    }], paper_notional_usdc=1000)
+
+    row = ledger["rows"][0]
+    assert row["profitability_status"] == "HOLD_EXISTING_ONLY"
+    assert row["supports_fresh_buy"] is False
+    assert row["holds_existing_only"] is True
+    assert ledger["best_buy_candidate"] is None
+    assert ledger["counts"]["hold_existing"] == 1
+
+
+def test_portfolio_signal_summary_rotates_between_buy_and_close_rows():
+    summary = synthetic_instrument._portfolio_signal_summary({
+        "paper_notional_usdc": 1000,
+        "rows": [
+            {
+                "rank": 1,
+                "archetype_id": "fuel_stack_compute_spread",
+                "label": "Fuel-stack compute spread",
+                "profitability_status": "PAPER_BUY",
+                "latest_signal": "BUY",
+                "paper_trade_total_pnl_usdc": 25,
+                "paper_trade_realized_pnl_usdc": 10,
+                "paper_trade_open_pnl_usdc": 15,
+                "latest_paper_pnl_usdc": 12,
+                "supports_fresh_buy": True,
+                "requires_close_or_avoid": False,
+            },
+            {
+                "rank": 2,
+                "archetype_id": "compute_spark_spread",
+                "label": "Compute spark spread",
+                "profitability_status": "SELL_OR_AVOID",
+                "latest_signal": "SELL",
+                "paper_trade_total_pnl_usdc": -7,
+                "paper_trade_realized_pnl_usdc": -8,
+                "paper_trade_open_pnl_usdc": 1,
+                "latest_paper_pnl_usdc": -3,
+                "supports_fresh_buy": False,
+                "requires_close_or_avoid": True,
+            },
+        ],
+    })
+
+    assert summary["action"] == "ROTATE"
+    assert summary["paper_ticket_total_pnl_usdc"] == 18
+    assert summary["paper_ticket_realized_pnl_usdc"] == 2
+    assert summary["paper_ticket_open_pnl_usdc"] == 16
+    assert summary["latest_mark_total_pnl_usdc"] == 9
+    assert summary["top_buy"]["archetype_id"] == "fuel_stack_compute_spread"
+    assert summary["top_close_or_avoid"]["archetype_id"] == "compute_spark_spread"
+    assert [row["action"] for row in summary["rows"]] == ["BUY_PAPER", "CLOSE_OR_AVOID"]
+
+
+def test_portfolio_close_signal_does_not_claim_positive_mark_is_losing():
+    summary = synthetic_instrument._portfolio_signal_summary({
+        "paper_notional_usdc": 1000,
+        "rows": [
+            {
+                "rank": 1,
+                "archetype_id": "electricity_calendar_spread",
+                "label": "Electricity calendar spread",
+                "profitability_status": "SELL_OR_AVOID",
+                "latest_signal": "SELL",
+                "paper_trade_total_pnl_usdc": 52,
+                "paper_trade_realized_pnl_usdc": 52,
+                "paper_trade_open_pnl_usdc": 0,
+                "latest_paper_pnl_usdc": 47,
+                "supports_fresh_buy": False,
+                "requires_close_or_avoid": True,
+            },
+        ],
+    })
+
+    assert summary["action"] == "CLOSE_OR_AVOID"
+    assert summary["headline"] == "Close or avoid current sell signal: Electricity calendar spread."
+    assert "losing" not in summary["headline"].lower()
 
 
 def test_proposal_prefers_execute_package_legs_over_watchlist():

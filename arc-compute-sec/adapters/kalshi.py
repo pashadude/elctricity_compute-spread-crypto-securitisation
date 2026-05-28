@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import sys
 import time
 from typing import Any, Iterable
 
@@ -176,7 +178,8 @@ def fetch_events(
             resp.raise_for_status()
             data = resp.json()
         except requests.RequestException as exc:
-            print(f"[kalshi] event fetch failed: {exc}")
+            if os.environ.get("KALSHI_DEBUG", "").strip():
+                print(f"[kalshi] event fetch failed: {exc}", file=sys.stderr)
             break
         page_events = data.get("events") if isinstance(data, dict) else []
         if isinstance(page_events, list):

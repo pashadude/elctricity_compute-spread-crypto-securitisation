@@ -75,6 +75,9 @@ def test_walk_forward_replay_promotes_mean_reverting_spread_family():
     assert primary["status"] == "PROMOTABLE"
     assert primary["win_rate"] >= 55
     assert primary["total_pnl_per_unit"] > 0
+    assert primary["out_of_sample_replay"]["version"] == "spread_family_oos_replay_v1"
+    assert primary["oos_status"] == "PASSED"
+    assert primary["oos_test_pnl_per_unit"] > 0
 
 
 def test_walk_forward_replay_can_promote_trend_following_spread_family():
@@ -96,16 +99,42 @@ def test_walk_forward_replay_can_promote_trend_following_spread_family():
     assert primary["strategy_label"] == "Trend-following"
     assert primary["win_rate"] >= 55
     assert primary["total_pnl_per_unit"] > 0
+    assert primary["oos_status"] == "PASSED"
+
+
+def test_promotable_full_sample_is_blocked_when_oos_slice_fails():
+    pattern = [0.82, 0.84, 0.86, 0.84]
+    rows = []
+    for i in range(200):
+        rows.append(_row(pattern[i % len(pattern)], ts=i))
+    for j in range(80):
+        rows.append(_row(0.84 + 0.001 * j, ts=200 + j))
+
+    summary = sfb.summarize(rows, window=8, horizon_steps=2, threshold_z=0.8, min_obs=20, min_distinct=3, min_trades=5)
+    primary = next(f for f in summary["families"] if f["family_id"] == "compute_net_power_margin")
+
+    assert primary["status"] == "FAILED_OOS_REPLAY"
+    assert primary["is_promotable"] is False
+    assert primary["total_pnl_per_unit"] > 0
+    assert primary["win_rate"] >= 55
+    assert primary["oos_status"] == "FAILED"
+    assert primary["oos_test_pnl_per_unit"] < 0
 
 
 def test_derived_calendar_families_use_prior_marks_without_forward_curves():
     rows = []
     for i in range(180):
+        elec = 60.0 + 0.04 * i + 1.2 * math.sin(i * 2 * math.pi / 28)
+        compute = 1.0 + 0.002 * i + 0.025 * math.sin(i * 2 * math.pi / 28)
         rows.append({
             "ts": i,
             "region": "ERCOT|us-east-1",
-            "electricity_per_mwh": 60.0 + 0.04 * i + 1.2 * math.sin(i * 2 * math.pi / 28),
-            "compute_per_gpu_hr": 1.0 + 0.002 * i + 0.025 * math.sin(i * 2 * math.pi / 28),
+            "electricity_per_mwh": elec,
+            "compute_per_gpu_hr": compute,
+            "region_a_electricity_per_mwh": elec,
+            "region_a_compute_per_gpu_hr": compute,
+            "region_b_electricity_per_mwh": 58.0 + 0.02 * i + 0.7 * math.sin(i * 2 * math.pi / 31),
+            "region_b_compute_per_gpu_hr": 0.96 + 0.0015 * i + 0.015 * math.sin(i * 2 * math.pi / 31),
             "k": 0.5,
             "kwh_per_gpu_hr": 0.7,
         })
@@ -124,21 +153,25 @@ def test_derived_calendar_families_use_prior_marks_without_forward_curves():
     compute_calendar = next(f for f in summary["families"] if f["family_id"] == "compute_prompt_calendar_21d")
     power_calendar = next(f for f in summary["families"] if f["family_id"] == "electricity_prompt_calendar_21d")
     curve_basis = next(f for f in summary["families"] if f["family_id"] == "compute_power_prompt_basis_21d")
+    regional_basis = next(f for f in summary["families"] if f["family_id"] == "regional_compute_power_basis_proxy")
     scoreboard = summary["archetype_scoreboard"]
 
     assert compute_calendar["observations"] > 100
     assert compute_calendar["raw_observations"] == len(rows) - 21
     assert power_calendar["observations"] > 100
     assert curve_basis["observations"] > 100
+    assert regional_basis["observations"] > 100
     assert "prior 21-mark" in compute_calendar["formula"]
     assert next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")["evidence_level"] == "replayed"
     assert next(item for item in scoreboard if item["archetype_id"] == "electricity_calendar_spread")["evidence_level"] == "replayed"
     assert next(item for item in scoreboard if item["archetype_id"] == "compute_power_calendar_basis")["evidence_level"] == "replayed"
+    assert next(item for item in scoreboard if item["archetype_id"] == "regional_compute_power_basis")["evidence_level"] == "replayed"
 
 
 def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     summary = sfb.summarize([], min_obs=1, min_distinct=1)
     catalog = summary["index_catalog"]
+    coverage = summary["index_coverage"]
     scoreboard = summary["archetype_scoreboard"]
 
     assert any(item["id"] == "eia_ercot_tx_proxy" for item in catalog["electricity"])
@@ -146,7 +179,9 @@ def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     assert any(item["id"] == "power_curve_prompt_term_proxy" for item in catalog["electricity"])
     assert any(item["id"] == "silicondata_h100_rental" for item in catalog["compute"])
     assert any(item["id"] == "aws_gpu_region_basis" for item in catalog["compute"])
+    assert any(item["id"] == "public_compute_region_basis_proxy" for item in catalog["compute"])
     assert any(item["id"] == "compute_curve_prompt_term_proxy" for item in catalog["compute"])
+    assert any(item["id"] == "public_power_region_basis_proxy" for item in catalog["electricity"])
     assert any(item["id"] == "compute_calendar_spread" for item in catalog["spread_archetypes"])
     assert any(item["id"] == "electricity_calendar_spread" for item in catalog["spread_archetypes"])
     assert any(item["id"] == "compute_power_calendar_basis" for item in catalog["spread_archetypes"])
@@ -154,6 +189,17 @@ def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     calendar = next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")
     assert calendar["evidence_level"] == "replayed"
     assert "prior-mark term proxy" in calendar["required_indexes"]
+    regional = next(item for item in scoreboard if item["archetype_id"] == "regional_compute_power_basis")
+    assert regional["evidence_level"] == "replayed"
+    assert regional["replay_status"] == "INSUFFICIENT_HISTORY"
+    assert coverage["version"] == "index_coverage_v1"
+    assert coverage["electricity"]["usable"] >= 5
+    assert coverage["compute"]["usable"] >= 4
+    assert coverage["spread_archetypes"]["total"] >= 8
+    assert coverage["spread_archetypes"]["replayed"] >= 8
+    assert coverage["spread_archetypes"]["planned"] == 0
+    assert coverage["spread_archetypes"]["needs_history"] == []
+    assert "electricity indexes usable" in coverage["summary"]
 
 
 def test_archetype_scoreboard_surfaces_promotable_oil_style_spreads():
@@ -173,3 +219,5 @@ def test_archetype_scoreboard_surfaces_promotable_oil_style_spreads():
     assert spark["is_promotable"] is True
     assert spark["strategy_label"] == "Trend-following"
     assert spark["oil_analogy"] == "refining crack spread"
+    assert spark["oos_status"] == "PASSED"
+    assert spark["oos_test_trades"] > 0

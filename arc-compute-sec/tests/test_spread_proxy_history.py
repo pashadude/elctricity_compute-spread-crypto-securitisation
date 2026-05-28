@@ -56,6 +56,11 @@ def test_build_spread_rows_uses_anchored_electricity_and_compute_indexes():
     assert latest["compute_per_gpu_hr"] == pytest.approx(0.86635)
     assert latest["S_t"] == pytest.approx(0.86635 - 0.5 * (62.6 / 1000.0) * 0.7)
     assert latest["mark_source"] == "public_proxy_history"
+    assert latest["region_a_electricity_per_mwh"] == pytest.approx(62.6)
+    assert latest["region_a_compute_per_gpu_hr"] == pytest.approx(0.86635)
+    assert latest["region_b_electricity_per_mwh"] > 0
+    assert latest["region_b_compute_per_gpu_hr"] > 0
+    assert built["regional_basis_indexes"]["note"].startswith("Public-proxy regional basis replay")
 
 
 def test_build_spread_rows_requires_enough_symbols_per_index():

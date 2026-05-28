@@ -52,6 +52,7 @@ DEFAULT_KALSHI_DIRECT_EVENT_TERMS = (
 )
 DEFAULT_PUBLIC_HEDGE_SYMBOLS = ("NVDA", "VRT", "ETN", "CEG", "NRG", "BTC-USD", "ETH-USD")
 DEFAULT_PUBLIC_HEDGE_PRICE_SOURCES = ("yahoo",)
+PRICED_STATUS_VALUES = {"priced_watchlist", "priced_public_market", "priced_close_history"}
 DEFAULT_IBKR_FORECAST_PROXY_PRICE_SOURCES = ("ibkr", "yahoo")
 DEFAULT_PROXY_BASKET_HISTORY_RANGE = "6mo"
 DEFAULT_PROXY_BASKET_HISTORY_INTERVAL = "1d"
@@ -780,6 +781,8 @@ def _pricing_status_label(status: Any) -> str:
         return "Live price available"
     if low == "priced_public_market":
         return "Public price available"
+    if low == "priced_close_history":
+        return "Close-history replay available"
     if low == "price_unavailable":
         return "Price unavailable"
     if low == "closed_watchlist":
@@ -1204,6 +1207,87 @@ def _row_has_external_proxy_price(row: dict[str, Any]) -> bool:
     return _as_float(row.get("external_proxy_last_price")) is not None
 
 
+def _row_quote_sources(rows: list[dict[str, Any]]) -> list[str]:
+    sources: set[str] = set()
+    for row in rows:
+        for key in ("source", "external_proxy_source"):
+            value = str(row.get(key) or "").strip()
+            if not value:
+                continue
+            for part in value.split(","):
+                clean = part.strip()
+                if clean:
+                    sources.add(clean)
+    return sorted(sources)
+
+
+def _proxy_basket_history_rows(proxy_baskets: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Represent saved Yahoo close-history replay as venue evidence.
+
+    This is not a live quote. It lets campaign/status surfaces accurately show
+    that public/crypto proxy baskets are replay-priced even when live quote
+    refresh is disabled during fallback snapshots.
+    """
+    if not isinstance(proxy_baskets, dict):
+        return []
+    baskets = [basket for basket in (proxy_baskets.get("baskets") or []) if isinstance(basket, dict)]
+    primary = proxy_baskets.get("primary_basket")
+    if isinstance(primary, dict):
+        baskets.append(primary)
+    by_symbol: dict[str, dict[str, Any]] = {}
+    now = time.time()
+    for basket in baskets:
+        for symbol in basket.get("symbols_available") or []:
+            clean = str(symbol or "").strip().upper()
+            if not clean or clean in by_symbol:
+                continue
+            meta = PUBLIC_HEDGE_META.get(clean, {})
+            by_symbol[clean] = sanitize_row({
+                "ts": now,
+                "surface": "crypto" if clean in {"BTC-USD", "ETH-USD", "BTC/USD", "ETH/USD"} else "public_market",
+                "instrument": clean,
+                "leg_slug": clean,
+                "leg_title": meta.get("title") or clean,
+                "display_label": meta.get("title") or clean,
+                "leg_role": "close_history_proxy_replay",
+                "direct_pair_role": meta.get("role") or "public hedge proxy",
+                "direction": meta.get("direction") or "watch",
+                "label": "REPLAY",
+                "pricing_status": "priced_close_history",
+                "pricing_status_label": _pricing_status_label("priced_close_history"),
+                "source": "yahoo_close_history",
+                "leg_description": "Yahoo close-history replay used for proxy basket PnL and signal validation.",
+                "inventory": True,
+            })
+    return list(by_symbol.values())
+
+
+def _ibkr_client_portal_health() -> dict[str, Any]:
+    if not bool_env("IBKR_CP_HEALTH_FETCH", True):
+        return {
+            "status": "DISABLED",
+            "reachable": False,
+            "authenticated": False,
+            "connected": False,
+            "competing": False,
+            "action": "IBKR_CP_HEALTH_FETCH=0 disables Client Portal health checks.",
+        }
+    try:
+        from adapters.ibkr import client_portal_health
+
+        return client_portal_health(timeout=_num_env("IBKR_CP_HEALTH_TIMEOUT", 1.5))
+    except Exception as exc:
+        return {
+            "status": "UNREACHABLE",
+            "reachable": False,
+            "authenticated": False,
+            "connected": False,
+            "competing": False,
+            "error_code": exc.__class__.__name__,
+            "action": "Start Client Portal Gateway, login, then run npm run ibkr:cp-watchdog-once.",
+        }
+
+
 def _status_from_counts(
     *,
     rows: int,
@@ -1220,6 +1304,21 @@ def _status_from_counts(
     return "NEEDS_PRICE"
 
 
+def _public_proxy_surface_status(rows: list[dict[str, Any]], *, empty_status: str = "NEEDS_QUOTES") -> str:
+    if not rows:
+        return empty_status
+    live_priced = sum(
+        1 for row in rows
+        if _row_has_public_price(row) or str(row.get("pricing_status") or "") == "priced_public_market"
+    )
+    if live_priced > 0:
+        return "LIVE_PRICED"
+    replay_priced = sum(1 for row in rows if str(row.get("pricing_status") or "") == "priced_close_history")
+    if replay_priced > 0:
+        return "REPLAY_PRICED"
+    return "NEEDS_PRICE"
+
+
 def _venue_row(
     *,
     surface: str,
@@ -1228,6 +1327,7 @@ def _venue_row(
     rows: list[dict[str, Any]],
     status: str,
     gaps: list[str],
+    health: dict[str, Any] | None = None,
     evidence_only: bool = False,
     direct_event_surface: bool = False,
     premium_gate_required: bool = False,
@@ -1235,20 +1335,27 @@ def _venue_row(
     priced = [
         row for row in rows
         if _row_has_yes_price(row) or _row_has_public_price(row)
-        or str(row.get("pricing_status") or "") in {"priced_watchlist", "priced_public_market"}
+        or str(row.get("pricing_status") or "") in PRICED_STATUS_VALUES
     ]
     external = [row for row in rows if _row_has_external_proxy_price(row)]
     watchlist = [row for row in rows if str(row.get("label") or "") == "WATCHLIST" or row.get("inventory")]
     latest = max(rows, key=_row_ts) if rows else {}
+    health = health or {}
     return {
         "surface": surface,
         "label": label,
         "role": role,
         "status": status,
+        "auth_status": health.get("status", ""),
+        "auth_reachable": health.get("reachable", ""),
+        "auth_authenticated": health.get("authenticated", ""),
+        "auth_connected": health.get("connected", ""),
+        "auth_action": health.get("action", ""),
         "row_count": len(rows),
         "priced_count": len(priced),
         "watchlist_count": len(watchlist),
         "external_proxy_count": len(external),
+        "quote_sources": _row_quote_sources(rows),
         "direct_event_surface": direct_event_surface,
         "evidence_only": evidence_only,
         "real_feed": len(rows) > 0,
@@ -1313,6 +1420,7 @@ def venue_evidence_state(
     direct_inventory: list[dict[str, Any]],
     public_hedges: list[dict[str, Any]],
     verdicts: list[dict[str, Any]],
+    proxy_baskets: dict[str, Any] | None = None,
     logs: Path | str | None = None,
 ) -> dict[str, Any]:
     """Explain which real surfaces are feeding the desk and what still blocks use.
@@ -1337,9 +1445,37 @@ def venue_evidence_state(
         if str(row.get("surface") or "") == "crypto"
         or str(row.get("leg_slug") or row.get("instrument") or "").upper() in {"BTC-USD", "ETH-USD", "BTC/USD", "ETH/USD"}
     ]
+    history_rows = _proxy_basket_history_rows(proxy_baskets)
+    live_priced_symbols = {
+        str(row.get("leg_slug") or row.get("instrument") or "").strip().upper()
+        for row in public_hedges
+        if _row_has_public_price(row) or str(row.get("pricing_status") or "") == "priced_public_market"
+    }
+    public_market.extend(
+        row for row in history_rows
+        if str(row.get("surface") or "") == "public_market"
+        and str(row.get("leg_slug") or row.get("instrument") or "").strip().upper() not in live_priced_symbols
+    )
+    crypto.extend(
+        row for row in history_rows
+        if str(row.get("surface") or "") == "crypto"
+        and str(row.get("leg_slug") or row.get("instrument") or "").strip().upper() not in live_priced_symbols
+    )
 
+    ibkr_cp_health = _ibkr_client_portal_health()
     ibkr_priced = sum(1 for row in ibkr_prediction if _row_has_yes_price(row) or str(row.get("pricing_status") or "") == "priced_watchlist")
     ibkr_proxy = sum(1 for row in ibkr_prediction if _row_has_external_proxy_price(row))
+    ibkr_gaps = (
+        ["IBKR EC metadata is present, but venue bid/ask/last is still missing; external proxy marks are labelled separately."]
+        if ibkr_prediction and ibkr_priced == 0 and ibkr_proxy > 0
+        else ["Needs live EC bid/ask/last from Client Portal or TWS."]
+    )
+    if ibkr_cp_health.get("status") not in {"AUTHENTICATED", "DISABLED"}:
+        ibkr_gaps.insert(
+            0,
+            f"IBKR Client Portal {str(ibkr_cp_health.get('status') or 'UNKNOWN').replace('_', ' ').lower()}: "
+            f"{ibkr_cp_health.get('action') or 'reauthenticate the local gateway.'}",
+        )
     rows = [
         _venue_row(
             surface="polymarket",
@@ -1373,11 +1509,8 @@ def venue_evidence_state(
             role="direct electricity and AI compute forecast contracts",
             rows=ibkr_prediction,
             status=_status_from_counts(rows=len(ibkr_prediction), priced=ibkr_priced, external_proxy=ibkr_proxy),
-            gaps=(
-                ["IBKR EC metadata is present, but venue bid/ask/last is still missing; external proxy marks are labelled separately."]
-                if ibkr_prediction and ibkr_priced == 0 and ibkr_proxy > 0
-                else ["Needs live EC bid/ask/last from Client Portal or TWS."]
-            ),
+            gaps=ibkr_gaps,
+            health=ibkr_cp_health,
             direct_event_surface=True,
         ),
         _venue_row(
@@ -1385,11 +1518,7 @@ def venue_evidence_state(
             label="Yahoo / IBKR / Alpaca public quote proxies",
             role="liquid public hedge expression",
             rows=public_market,
-            status=_status_from_counts(
-                rows=len(public_market),
-                priced=sum(1 for row in public_market if _row_has_public_price(row) or str(row.get("pricing_status") or "") == "priced_public_market"),
-                empty_status="NEEDS_QUOTES",
-            ),
+            status=_public_proxy_surface_status(public_market),
             gaps=["These are liquid proxies, not direct compute or electricity claims."],
         ),
         _venue_row(
@@ -1397,11 +1526,7 @@ def venue_evidence_state(
             label="BTC/ETH miner-margin proxy",
             role="power-sensitive miner-margin proxy",
             rows=crypto,
-            status=_status_from_counts(
-                rows=len(crypto),
-                priced=sum(1 for row in crypto if _row_has_public_price(row) or str(row.get("pricing_status") or "") == "priced_public_market"),
-                empty_status="NEEDS_QUOTES",
-            ),
+            status=_public_proxy_surface_status(crypto),
             gaps=["Crypto is proxy-only unless explicit miner-margin evidence is attached."],
         ),
         _oracle_evidence_state(logs=logs),
@@ -1483,6 +1608,9 @@ def enrich_pnl_state(
         "spread_mark_changes": (primary_family or {}).get("observations", 0),
         "spread_raw_observations": (primary_family or {}).get("raw_observations", 0),
         "spread_collapsed_polls": (primary_family or {}).get("collapsed_repeated_marks", 0),
+        "spread_oos_status": (primary_family or {}).get("oos_status", ""),
+        "spread_oos_test_pnl_per_unit": (primary_family or {}).get("oos_test_pnl_per_unit", ""),
+        "spread_oos_test_win_rate": (primary_family or {}).get("oos_test_win_rate", ""),
         "proxy_basket_id": (primary_proxy or {}).get("basket_id", ""),
         "proxy_basket_direction": (primary_proxy or {}).get("direction", ""),
         "proxy_latest_signal": (primary_proxy or {}).get("latest_signal", ""),
@@ -1759,6 +1887,7 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         direct_inventory=direct_inventory,
         public_hedges=public_hedges,
         verdicts=verdict_rollups,
+        proxy_baskets=proxy_baskets,
         logs=logs,
     )
     oracle_evidence = _oracle_evidence_state(logs=logs)
@@ -1775,6 +1904,11 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         oracle_evidence=oracle_evidence,
         venue_evidence=venue_evidence,
     )
+    synthetic_outputs = synthetic_instrument.get("outputs") if isinstance(synthetic_instrument, dict) else {}
+    if not isinstance(synthetic_outputs, dict):
+        synthetic_outputs = {}
+    profitability_ledger = synthetic_outputs.get("spread_profitability_ledger") or {}
+    portfolio_signal = synthetic_outputs.get("portfolio_signal_summary") or {}
     pnl = pnl_state(logs=logs)
     real_positions = _visible_leg_rows(positions)
     real_verdicts = _visible_leg_rows(verdicts)
@@ -1797,6 +1931,19 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         signal_direction=signal_direction,
         visible_positions=len(real_positions),
     )
+    if isinstance(portfolio_signal, dict):
+        pnl.update({
+            "paper_portfolio_action": portfolio_signal.get("action", ""),
+            "paper_portfolio_headline": portfolio_signal.get("headline", ""),
+            "paper_ticket_total_pnl_usdc": portfolio_signal.get("paper_ticket_total_pnl_usdc", ""),
+            "paper_ticket_realized_pnl_usdc": portfolio_signal.get("paper_ticket_realized_pnl_usdc", ""),
+            "paper_ticket_open_pnl_usdc": portfolio_signal.get("paper_ticket_open_pnl_usdc", ""),
+            "paper_latest_mark_pnl_usdc": portfolio_signal.get("latest_mark_total_pnl_usdc", ""),
+            "paper_buy_count": portfolio_signal.get("buy_count", 0),
+            "paper_close_or_avoid_count": portfolio_signal.get("close_or_avoid_count", 0),
+            "paper_wait_count": portfolio_signal.get("wait_count", 0),
+            "paper_replay_realized": bool(portfolio_signal.get("realized")),
+        })
     return {
         "ok": True,
         "generated_at": now,
@@ -1813,6 +1960,8 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         "verdict_rollups": verdict_rollups,
         "packages": packages,
         "synthetic_instrument": synthetic_instrument,
+        "profitability_ledger": profitability_ledger,
+        "portfolio_signal": portfolio_signal,
         "direct_inventory": direct_inventory,
         "public_hedges": public_hedges,
         "venue_evidence": venue_evidence,

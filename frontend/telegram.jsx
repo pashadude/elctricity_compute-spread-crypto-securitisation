@@ -23,9 +23,44 @@ const tgProxySourceLabel = (leg = {}) => {
   if (low === 'ibkr_energy_history_csv') return `IBKR paper CSV${leg.externalProxyStale ? ' · stale' : ''}`;
   if (low === 'ibkr_tws_front_future') return 'IBKR paper TWS';
   if (low === 'ibkr_tws_stock') return 'IBKR paper TWS';
+  if (low === 'ibkr_forecast_inventory') return 'IBKR ForecastTrader inventory';
+  if (low === 'polymarket_direct_watchlist') return 'Polymarket Gamma';
+  if (low === 'kalshi_direct_ai_watchlist') return 'Kalshi public API';
   if (low === 'yahoo_finance_chart') return 'Yahoo fallback';
+  if (low === 'yahoo_close_history') return 'Yahoo close-history replay';
   if (low === 'alpaca_market_data') return 'Alpaca fallback';
   return leg.externalProxySource || '';
+};
+
+const tgQuoteSourceLabel = tgProxySourceLabel;
+
+const tgRecommendationTone = (construction = {}) => {
+  const action = String(construction.recommended_action || '').toUpperCase();
+  const label = String(construction.recommendation_label || '').toUpperCase();
+  const summary = String(construction.recommendation_summary || '').toUpperCase();
+  const text = `${action} ${label} ${summary}`;
+  if (action === 'BUY_CONTRACT') return 'buy';
+  if (text.includes('SELL') || text.includes('AVOID') || text.includes('CLOSE')) return 'sell';
+  if (text.includes('HOLD')) return 'hold';
+  return 'monitor';
+};
+
+const tgRecommendationColor = (construction = {}) => {
+  const tone = tgRecommendationTone(construction);
+  if (tone === 'buy') return TG_THEME.green;
+  if (tone === 'sell') return TG_THEME.red;
+  if (tone === 'hold') return TG_THEME.blue;
+  return TG_THEME.orange;
+};
+
+const tgRecommendationFallback = (construction = {}) => {
+  if (construction.recommended_action === 'BUY_CONTRACT') {
+    return 'Agent says hedge now; close if a leg drags package PnL red.';
+  }
+  const tone = tgRecommendationTone(construction);
+  if (tone === 'sell') return 'Do not open fresh exposure; close or avoid local mock tickets until proxy PnL recovers.';
+  if (tone === 'hold') return 'Hold or monitor existing exposure; current marks do not justify a fresh buy.';
+  return 'Agent says monitor until edge improves.';
 };
 
 const tgInventorySubtitle = (leg = {}) => {
@@ -195,11 +230,14 @@ const tgSearchPlan = (data) => data.syntheticInstrument?.outputs?.agent_search_p
 const tgWeightedLegs = (data) => tgMockConstruction(data).weighted_legs || [];
 const tgSpreadFamilies = (data) => data.spreadFamilies?.families || [];
 const tgSpreadArchetypes = (data) => data.spreadFamilies?.archetypeScoreboard || [];
+const tgIndexCoverage = (data) => data.spreadFamilies?.indexCoverage || null;
 const tgProxyBaskets = (data) => data.proxyBaskets?.baskets || [];
 const tgInstrumentMenu = (data) => data.syntheticInstrument?.outputs?.syndicated_instrument_menu || [];
 const tgSpreadTradeMap = (data) => data.syntheticInstrument?.outputs?.spread_archetype_trade_map || [];
 const tgProfitabilityLedger = (data) => data.syntheticInstrument?.outputs?.spread_profitability_ledger || null;
+const tgPortfolioSignal = (data) => data.syntheticInstrument?.outputs?.portfolio_signal_summary || null;
 const tgVenueCopyMatrix = (data) => data.syntheticInstrument?.outputs?.real_venue_copy_matrix || {};
+const tgDirectEventPairs = (data) => data.syntheticInstrument?.outputs?.direct_event_pair_candidates || {};
 const tgVenueEvidence = (data) => data.venueEvidence?.rows || [];
 const tgOracleEvidence = (data) => data.oracleResults || {};
 const tgCampaign = (data) => data.telegramCampaign || { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 };
@@ -226,6 +264,9 @@ const TgHome = ({ setScreen, data, requestScan }) => {
   const searchCount = tgSearchPlan(data).length + (data.directInventory?.length || 0);
   const recommendation = tgRecommendation(construction);
   const recommendationColor = tgCanOpen(construction) ? TG_THEME.green : TG_THEME.orange;
+  const recommendationParts = String(recommendation || 'Monitor').split(':');
+  const recommendationHeadline = recommendationParts[0] || 'Monitor';
+  const recommendationHint = recommendationParts.slice(1).join(':').trim();
   return (
   <TgScreen title="Botozen Power" subtitle="Compute/Energy Spread Desk">
     <div style={{ padding: '16px' }}>
@@ -259,10 +300,11 @@ const TgHome = ({ setScreen, data, requestScan }) => {
           {[
             { label: 'Notional', value: tgUsdc(construction.hedge_notional_usdc), color: TG_THEME.text },
             { label: 'Circle Ask', value: tgUsdc(construction.circle_testnet_usdc_request), color: TG_THEME.orange },
-            { label: 'Action', value: recommendation, color: recommendationColor },
+            { label: 'Action', value: recommendationHeadline, hint: recommendationHint, color: recommendationColor },
           ].map((s, i) => (
             <div key={i} style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '18px', fontWeight: 700, color: s.color, fontFamily: 'SF Mono, monospace', overflowWrap: 'anywhere' }}>{s.value}</div>
+              <div style={{ fontSize: String(s.value).length > 9 ? '15px' : '18px', fontWeight: 700, color: s.color, fontFamily: 'SF Mono, monospace', overflowWrap: 'anywhere', lineHeight: 1.15 }}>{s.value}</div>
+              {s.hint && <div style={{ fontSize: '9px', color: TG_THEME.tertiary, lineHeight: 1.2, marginTop: '2px', overflowWrap: 'anywhere' }}>{s.hint}</div>}
               <div style={{ fontSize: '11px', color: TG_THEME.secondary, marginTop: '2px' }}>{s.label}</div>
             </div>
           ))}
@@ -383,6 +425,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                   </div>
                   <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
                     z {Number(item.latest_z || 0).toFixed(2)} · {item.tested_trades || 0} trades · WR {Number(item.win_rate || 0).toFixed(0)}%
+                    {item.oos_status ? ` · OOS ${String(item.oos_status).replaceAll('_', ' ')} ${Number(item.oos_test_pnl_per_unit || 0).toFixed(2)}` : ''}
                   </div>
                 </div>
               ))}
@@ -392,6 +435,25 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
         {data.spreadFamilies?.indexCatalog && (
           <div style={{ marginTop: '12px' }}>
             <div style={{ fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700, marginBottom: '6px' }}>Index catalog</div>
+            {tgIndexCoverage(data)?.summary && (
+              <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px', marginBottom: '6px' }}>
+                <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35 }}>
+                  {tgIndexCoverage(data).summary}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '5px', marginTop: '6px' }}>
+                  {[
+                    ['power', `${tgIndexCoverage(data).electricity?.usable || 0}/${tgIndexCoverage(data).electricity?.total || 0}`, TG_THEME.orange],
+                    ['compute', `${tgIndexCoverage(data).compute?.usable || 0}/${tgIndexCoverage(data).compute?.total || 0}`, TG_THEME.blue],
+                    ['spreads', `${tgIndexCoverage(data).spread_archetypes?.replayed || 0}/${tgIndexCoverage(data).spread_archetypes?.total || 0}`, TG_THEME.green],
+                  ].map(([label, value, color]) => (
+                    <div key={label} style={{ background: TG_THEME.surface, borderRadius: '6px', padding: '6px', minWidth: 0 }}>
+                      <div style={{ fontSize: '9px', color: TG_THEME.tertiary, textTransform: 'uppercase' }}>{label}</div>
+                      <div style={{ fontSize: '11px', color, fontFamily: TG_THEME.mono, fontWeight: 800 }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {[
               ['Electricity', data.spreadFamilies.indexCatalog.electricity || []],
               ['Compute', data.spreadFamilies.indexCatalog.compute || []],
@@ -440,6 +502,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                       <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{family.label}</div>
                       <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
                         {family.strategy_label || 'Replay'} · z {Number(family.latest_z || 0).toFixed(2)} · {family.tested_trades || 0} trades · WR {Number(family.win_rate || 0).toFixed(0)}%
+                        {family.oos_status ? ` · OOS ${String(family.oos_status).replaceAll('_', ' ')} ${Number(family.oos_test_pnl_per_unit || 0).toFixed(2)}` : ''}
                       </div>
                     </div>
                     <div style={{ fontSize: '10px', color: family.is_promotable ? TG_THEME.green : TG_THEME.orange, fontWeight: 800, textAlign: 'right' }}>
@@ -534,6 +597,47 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
         </div>
       )}
 
+      {tgPortfolioSignal(data)?.rows?.length > 0 && (
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          {(() => {
+            const summary = tgPortfolioSignal(data);
+            const action = String(summary.action || 'MONITOR');
+            const color = action.includes('OPEN') || action === 'ROTATE'
+              ? TG_THEME.green
+              : (action.includes('CLOSE') || action.includes('AVOID') ? TG_THEME.red : TG_THEME.orange);
+            return (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                    Portfolio signal
+                  </div>
+                  <TgBadge color={color}>{action.replaceAll('_', ' ')}</TgBadge>
+                </div>
+                <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700, lineHeight: 1.35, marginBottom: '6px' }}>
+                  {summary.headline || 'Monitor spread portfolio'}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+                  {[
+                    ['ticket', summary.paper_ticket_total_pnl_usdc],
+                    ['mark', summary.latest_mark_total_pnl_usdc],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '7px' }}>
+                      <div style={{ fontSize: '9px', color: TG_THEME.tertiary, textTransform: 'uppercase' }}>{label} PnL</div>
+                      <div style={{ fontSize: '12px', color: Number(value || 0) < 0 ? TG_THEME.red : TG_THEME.green, fontFamily: TG_THEME.mono, fontWeight: 700 }}>
+                        ${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35 }}>
+                  {Number(summary.buy_count || 0)} buy · {Number(summary.close_or_avoid_count || 0)} avoid/sell · {Number(summary.wait_count || 0)} wait. Arc stays locked until judge.classify() returns EXECUTE.
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
       {tgProfitabilityLedger(data)?.rows?.length > 0 && (
         <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
@@ -547,6 +651,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
             {tgProfitabilityLedger(data).paper_notional_usdc
               ? ` Paper notional $${Number(tgProfitabilityLedger(data).paper_notional_usdc).toLocaleString()}.`
               : ''}
+            {' First mark is the entry baseline; $0 there is expected.'}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {tgProfitabilityLedger(data).rows.slice(0, 4).map(row => {
@@ -566,6 +671,12 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
               const tradeReplay = row.paper_trade_replay || {};
               const openTrade = tradeReplay.open_trade || null;
               const closedTrades = tradeReplay.closed_trades || [];
+              const oosText = row.oos_status && row.oos_status !== 'NO_OOS_REPLAY'
+                ? `OOS ${String(row.oos_status).replaceAll('_', ' ')} ${row.oos_test_return_pct === '' || row.oos_test_return_pct === undefined ? '' : `${Number(row.oos_test_return_pct).toFixed(1)}%`}`
+                : 'OOS -';
+              const oosColor = row.oos_status === 'FAILED'
+                ? TG_THEME.red
+                : (row.oos_status === 'PASSED' ? TG_THEME.green : TG_THEME.tertiary);
               return (
                 <div key={row.archetype_id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
@@ -578,16 +689,24 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                         5d {Number(row.paper_5d_return_pct || 0).toFixed(1)}% · 1m {Number(row.paper_1m_return_pct || 0).toFixed(1)}% · WR {Number(row.paper_win_rate || row.spread_replay_win_rate || 0).toFixed(0)}%
                       </div>
                       <div style={{ fontSize: '10px', color: pnlColor, fontFamily: TG_THEME.mono, lineHeight: 1.35 }}>
-                        mark PnL {latestPnl === null ? '-' : `$${latestPnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} · {row.latest_paper_return_pct === '' || row.latest_paper_return_pct === undefined ? '-' : `${Number(row.latest_paper_return_pct).toFixed(2)}%`}
+                        PnL vs entry {latestPnl === null ? '-' : `$${latestPnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} · {row.latest_paper_return_pct === '' || row.latest_paper_return_pct === undefined ? '-' : `${Number(row.latest_paper_return_pct).toFixed(2)}%`}
                       </div>
                       <div style={{ fontSize: '10px', color: tradeColor, fontFamily: TG_THEME.mono, lineHeight: 1.35 }}>
                         ticket PnL {tradePnl === null ? '-' : `$${tradePnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} · {row.paper_trade_action || 'WAIT'} · hit {row.paper_trade_hit_rate === '' || row.paper_trade_hit_rate === undefined ? '-' : `${Number(row.paper_trade_hit_rate).toFixed(0)}%`}
                       </div>
+                      <div style={{ fontSize: '10px', color: oosColor, fontFamily: TG_THEME.mono, lineHeight: 1.35 }}>
+                        {oosText}
+                      </div>
+                      {(row.signal_reason || row.current_action_reason) && (
+                        <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '3px' }}>
+                          {row.signal_reason || row.current_action_reason}
+                        </div>
+                      )}
                       {recentMarks.length > 0 && (
                         <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '4px' }}>
                           {recentMarks.slice(-3).map(mark => (
                             <span key={`${row.archetype_id}-${mark.date}`} style={{ fontSize: '9px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono }}>
-                              {String(mark.date || '').slice(5)} {Number(mark.paper_pnl_usdc || 0) >= 0 ? '+' : ''}${Number(mark.paper_pnl_usdc || 0).toFixed(0)}
+                              {String(mark.date || '').slice(5)} {mark.mark_type === 'entry' ? 'baseline' : `${Number(mark.paper_pnl_usdc || 0) >= 0 ? '+' : ''}$${Number(mark.paper_pnl_usdc || 0).toFixed(0)}`}
                             </span>
                           ))}
                         </div>
@@ -652,6 +771,71 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                   </div>
                   <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
                     {row.tradability_reason}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {(tgDirectEventPairs(data).rows || []).length > 0 && (
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              Direct event pairs
+            </div>
+            <TgBadge color={TG_THEME.blue}>
+              {tgDirectEventPairs(data).ready_for_judge_count || 0}/{tgDirectEventPairs(data).pair_count || 0}
+            </TgBadge>
+          </div>
+          <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginBottom: '8px' }}>
+            {tgDirectEventPairs(data).target_pair || 'Energy/grid-stress leg paired against AI compute-demand leg.'}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {(tgDirectEventPairs(data).rows || []).slice(0, 3).map(row => {
+              const energy = row.energy_leg || {};
+              const compute = row.compute_leg || {};
+              const oracle = row.oracle_evidence || {};
+              const color = String(row.readiness || '').includes('PRICE')
+                ? TG_THEME.orange
+                : TG_THEME.blue;
+              const oracleColor = String(oracle.gate || '').includes('CRITIQUE') || String(oracle.latest_verdict || '').includes('VETO')
+                ? TG_THEME.red
+                : (String(oracle.gate || '').includes('SUPPORT') ? TG_THEME.green : TG_THEME.orange);
+              return (
+                <div key={row.pair_id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '5px' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>
+                        {(energy.title || energy.slug || 'energy leg')} → {(compute.title || compute.slug || 'compute leg')}
+                      </div>
+                      <div style={{ fontSize: '9px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, lineHeight: 1.35 }}>
+                        {row.pair_id} · {(row.surfaces || []).join(' + ')}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '10px', color, fontWeight: 800, textAlign: 'right' }}>
+                      {String(row.readiness || 'WATCH').replaceAll('_', ' ')}
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '5px' }}>
+                    {[
+                      ['energy', energy, TG_THEME.orange],
+                      ['compute', compute, TG_THEME.blue],
+                    ].map(([label, leg, itemColor]) => (
+                      <div key={label} style={{ background: TG_THEME.surface, borderRadius: '6px', padding: '6px', minWidth: 0 }}>
+                        <div style={{ fontSize: '9px', color: itemColor, textTransform: 'uppercase', fontWeight: 800 }}>{String(leg.pair_side || 'watch')} {label}</div>
+                        <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.25, overflowWrap: 'anywhere' }}>
+                          {leg.surface || 'surface'} · {leg.slug || 'slug'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35 }}>
+                    {row.action}
+                  </div>
+                  <div style={{ fontSize: '10px', color: oracleColor, lineHeight: 1.35, marginTop: '4px', fontFamily: TG_THEME.mono }}>
+                    oracle {String(oracle.gate || 'NO_ORACLE_RECEIPTS').replaceAll('_', ' ')} · {Number(oracle.receipts || 0)} receipts{oracle.latest_verdict ? ` · ${oracle.latest_verdict}` : ''}
                   </div>
                 </div>
               );
@@ -748,12 +932,8 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
               <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '4px' }}>
                 {((data.syntheticInstrument.outputs.mock_hedge_construction.weighted_legs || []).slice(0, 3).map(leg => `${leg.side} ${leg.slug} ${Number(leg.weight || 0).toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 0 })}`).join(', '))}
               </div>
-              <div style={{ fontSize: '11px', color: tgCanOpen(data.syntheticInstrument.outputs.mock_hedge_construction) ? TG_THEME.green : TG_THEME.orange, lineHeight: 1.35, marginTop: '4px' }}>
-                {data.syntheticInstrument.outputs.mock_hedge_construction.recommendation_summary || (
-                  data.syntheticInstrument.outputs.mock_hedge_construction.recommended_action === 'BUY_CONTRACT'
-                    ? 'Agent says hedge now; close if a leg drags package PnL red.'
-                    : 'Agent says monitor until edge improves.'
-                )}
+              <div style={{ fontSize: '11px', color: tgRecommendationColor(data.syntheticInstrument.outputs.mock_hedge_construction), lineHeight: 1.35, marginTop: '4px' }}>
+                {data.syntheticInstrument.outputs.mock_hedge_construction.recommendation_summary || tgRecommendationFallback(data.syntheticInstrument.outputs.mock_hedge_construction)}
               </div>
               {data.syntheticInstrument.outputs.mock_hedge_construction.decision_basis_hash && (
                 <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, lineHeight: 1.35, marginTop: '4px' }}>
@@ -958,6 +1138,16 @@ const TgScouting = ({ setScreen, goBack, data }) => {
                 <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35 }}>
                   {row.role || 'evidence'} · priced {row.priced_count || 0} · proxy {row.external_proxy_count || 0}
                 </div>
+                {row.auth_status && (
+                  <div style={{ fontSize: '10px', color: row.auth_status === 'AUTHENTICATED' ? TG_THEME.green : TG_THEME.orange, lineHeight: 1.35, marginTop: '2px' }}>
+                    auth {String(row.auth_status).replaceAll('_', ' ').toLowerCase()}
+                  </div>
+                )}
+                {(row.quote_sources || []).length > 0 && (
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '2px', overflowWrap: 'anywhere' }}>
+                    source {(row.quote_sources || []).map(src => tgQuoteSourceLabel({ externalProxySource: src })).join(', ')}
+                  </div>
+                )}
               </div>
               <TgBadge color={row.status === 'LIVE_PRICED' || row.status === 'EVIDENCE_LOGGED' ? TG_THEME.green : TG_THEME.orange}>
                 {String(row.status || 'watch').replaceAll('_', ' ')}

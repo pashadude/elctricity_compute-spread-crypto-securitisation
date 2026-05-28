@@ -184,6 +184,36 @@ SYNDICATED_INSTRUMENT_TYPES = [
         "collateral_needed": ["regional power exposure", "fuel-index reference", "compute sale tenor"],
         "direct_leg_target": "fuel input tightness vs AI compute-demand beta",
     },
+    {
+        "instrument_type": "compute_calendar_forward_hedge",
+        "basket_id": "compute_calendar_ai_capex",
+        "signal_direction": DIRECTION_COMPUTE_EXPENSIVE,
+        "title": "Compute calendar forward hedge",
+        "spread_archetype": "compute_calendar_spread",
+        "payoff": "Long prompt compute beneficiaries when spot GPU rental tightens versus its trailing term proxy.",
+        "collateral_needed": ["forward GPU-hour sale", "spot/term compute mark policy", "delivery tenor"],
+        "direct_leg_target": "front compute scarcity vs term compute availability",
+    },
+    {
+        "instrument_type": "electricity_calendar_power_hedge",
+        "basket_id": "electricity_calendar_power_prompt",
+        "signal_direction": DIRECTION_ELEC_EXPENSIVE,
+        "title": "Electricity calendar power hedge",
+        "spread_archetype": "electricity_calendar_spread",
+        "payoff": "Long prompt power and fuel beneficiaries when front electricity tightens versus trailing term proxy.",
+        "collateral_needed": ["PPA or power hedge", "regional load meter", "front/term power mark policy"],
+        "direct_leg_target": "front power tightness vs term power availability",
+    },
+    {
+        "instrument_type": "compute_power_calendar_basis_note",
+        "basket_id": "compute_power_calendar_pair",
+        "signal_direction": DIRECTION_COMPUTE_EXPENSIVE,
+        "title": "Compute-power calendar basis note",
+        "spread_archetype": "compute_power_calendar_basis",
+        "payoff": "Long prompt compute beneficiaries and short power/fuel proxies when compute tightens faster than power.",
+        "collateral_needed": ["compute sale tenor", "regional power tenor", "calendar-basis mark policy"],
+        "direct_leg_target": "compute calendar premium vs power calendar premium",
+    },
 ]
 
 
@@ -379,6 +409,8 @@ def _status_label(status: Any) -> str:
         return "Live price available"
     if low == "priced_public_market":
         return "Public price available"
+    if low == "priced_close_history":
+        return "Close-history replay available"
     if low == "price_unavailable":
         return "Price unavailable"
     if low == "closed_watchlist":
@@ -1249,14 +1281,14 @@ def _instrument_signal_status(
         if latest_signal == "BUY":
             return "PAPER_BUY_ONLY", "Proxy replay says BUY, but the structure is not asset-backed until collateral is attached."
         if latest_signal == "SELL":
-            return "AVOID_OR_SELL", "Proxy replay says SELL; avoid new exposure and close local mock tickets if already open."
+            return "AVOID_OR_SELL", "Current proxy signal says SELL; avoid new exposure and close local mock tickets if already open."
         return "MONITOR_ONLY", "Collateral is missing, so this remains a monitored synthetic package."
     if not has_direct_legs:
         return "NEEDS_DIRECT_LEGS", "Collateral exists, but direct event legs still need priced venue references."
     if latest_signal == "BUY":
         return "READY_FOR_JUDGE", "Collateral and direct legs exist; run scorer and judge before Arc wrap."
     if latest_signal == "SELL":
-        return "AVOID_OR_SELL", "Do not wrap; proxy PnL says sell/avoid."
+        return "AVOID_OR_SELL", "Do not wrap; current proxy signal says sell/avoid."
     return "MONITOR_ONLY", "Hold in research until replay and judge both confirm."
 
 
@@ -1335,12 +1367,14 @@ def _syndicated_instrument_menu(
         )
         trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else {}
         paper_trade_replay = basket.get("paper_trade_replay") if isinstance(basket.get("paper_trade_replay"), dict) else {}
+        out_of_sample_replay = basket.get("out_of_sample_replay") if isinstance(basket.get("out_of_sample_replay"), dict) else {}
         rows.append({
             **template,
             "region": region_profile.get("region"),
             "active_signal_direction": clean_signal_direction,
             "basket_direction": basket_direction,
             "direction_aligned": direction_aligned,
+            "has_basket_replay": bool(basket),
             "asset_backed": collateral_status == "asset_backed",
             "collateral_status": collateral_status,
             "status": status,
@@ -1354,6 +1388,7 @@ def _syndicated_instrument_menu(
             "max_drawdown_pct": _round_units(basket.get("max_drawdown_pct")),
             "trailing_returns": trailing,
             "paper_trade_replay": paper_trade_replay,
+            "out_of_sample_replay": out_of_sample_replay,
             "required_symbols": required_symbols,
             "priced_symbols": priced,
             "missing_symbols": [symbol for symbol in required_symbols if symbol not in priced],
@@ -1370,6 +1405,7 @@ def _syndicated_instrument_menu(
     status_rank = {"READY_FOR_JUDGE": 0, "PAPER_BUY_ONLY": 1, "MONITOR_ONLY": 2, "NEEDS_DIRECT_LEGS": 3, "AVOID_OR_SELL": 4}
     rows.sort(key=lambda row: (
         0 if row.get("direction_aligned") or clean_signal_direction in {"", "no_signal"} else 1,
+        0 if row.get("has_basket_replay") else 1,
         signal_rank.get(row["latest_signal"], 9),
         status_rank.get(row["status"], 9),
         -_num(row.get("total_return_pct")),
@@ -1534,6 +1570,7 @@ def _spread_archetype_trade_map(
             trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else structure.get("trailing_returns", {})
             recent_marks = basket.get("recent_index_marks") if isinstance(basket.get("recent_index_marks"), list) else structure.get("recent_index_marks", [])
             paper_trade_replay = basket.get("paper_trade_replay") if isinstance(basket.get("paper_trade_replay"), dict) else structure.get("paper_trade_replay", {})
+            out_of_sample_replay = basket.get("out_of_sample_replay") if isinstance(basket.get("out_of_sample_replay"), dict) else structure.get("out_of_sample_replay", {})
             expression_rows.append({
                 "instrument_type": structure.get("instrument_type"),
                 "title": structure.get("title"),
@@ -1542,6 +1579,9 @@ def _spread_archetype_trade_map(
                 "basket_direction": _first_nonempty(basket.get("direction"), structure.get("basket_direction"), structure.get("signal_direction")),
                 "direction_aligned": bool(structure.get("direction_aligned")),
                 "latest_signal": _first_nonempty(basket.get("latest_signal"), structure.get("latest_signal"), default="MONITOR"),
+                "signal_reason": _first_nonempty(basket.get("signal_reason"), structure.get("signal_reason")),
+                "current_action": _first_nonempty(basket.get("current_action"), structure.get("current_action")),
+                "current_action_reason": _first_nonempty(basket.get("current_action_reason"), structure.get("current_action_reason")),
                 "replay_status": _first_nonempty(basket.get("status"), structure.get("replay_status"), default="NO_REPLAY"),
                 "recommendation": _first_nonempty(basket.get("recommendation"), structure.get("recommendation"), default="MONITOR_ONLY"),
                 "status": _text(structure.get("status"), "MONITOR_ONLY"),
@@ -1552,6 +1592,7 @@ def _spread_archetype_trade_map(
                 "win_rate": _round_units(_first_nonempty(basket.get("win_rate"), structure.get("win_rate"), default=0)),
                 "recent_index_marks": recent_marks,
                 "paper_trade_replay": paper_trade_replay,
+                "out_of_sample_replay": out_of_sample_replay,
                 "priced_symbols": structure.get("priced_symbols") or [],
                 "missing_symbols": structure.get("missing_symbols") or [],
                 "direct_leg_target": structure.get("direct_leg_target"),
@@ -1601,6 +1642,11 @@ def _spread_archetype_trade_map(
             "tested_trades": replay.get("tested_trades", 0),
             "win_rate": replay.get("win_rate", 0),
             "total_pnl_per_unit": replay.get("total_pnl_per_unit", 0),
+            "spread_oos_status": replay.get("oos_status", ""),
+            "spread_oos_test_trades": replay.get("oos_test_trades", 0),
+            "spread_oos_test_pnl_per_unit": replay.get("oos_test_pnl_per_unit", 0),
+            "spread_oos_test_win_rate": replay.get("oos_test_win_rate", 0),
+            "spread_out_of_sample_replay": replay.get("out_of_sample_replay", {}),
             "tradability_action": action,
             "tradability_reason": reason,
             "selected_expression": selected,
@@ -1638,6 +1684,7 @@ def _scaled_recent_paper_marks(recent_marks: list[dict[str, Any]], notional_usdc
         daily_pct = _num(mark.get("daily_return_pct"))
         rows.append({
             "date": mark.get("date") or "",
+            "mark_type": mark.get("mark_type") or ("entry" if idx == 0 else "mark"),
             "index_close": _round_units(mark.get("index_close")),
             "daily_return_pct": _round_units(daily_pct),
             "paper_return_since_entry_pct": _round_units(pnl_pct),
@@ -1695,6 +1742,17 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]], *, paper_notio
         ret_1m = selected.get("return_1m_pct", "")
         total_return = selected.get("total_return_pct", "")
         replay_pnl = item.get("total_pnl_per_unit", 0)
+        signal_reason = _first_nonempty(
+            selected.get("signal_reason"),
+            selected.get("status_reason"),
+            item.get("tradability_reason"),
+            default="No signal reason was attached to the selected expression.",
+        )
+        current_action_reason = _first_nonempty(
+            selected.get("current_action_reason"),
+            item.get("tradability_reason"),
+            default="No current-action reason was attached to the selected expression.",
+        )
         recent_marks = _scaled_recent_paper_marks(
             selected.get("recent_index_marks") if isinstance(selected.get("recent_index_marks"), list) else [],
             paper_notional_usdc,
@@ -1703,11 +1761,20 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]], *, paper_notio
             selected.get("paper_trade_replay") if isinstance(selected.get("paper_trade_replay"), dict) else {},
             paper_notional_usdc,
         )
+        oos_replay = selected.get("out_of_sample_replay") if isinstance(selected.get("out_of_sample_replay"), dict) else {}
+        oos_status = _text(oos_replay.get("status"), "NO_OOS_REPLAY")
         latest_mark = recent_marks[-1] if recent_marks else {}
-        supports_buy = action in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE", "PAPER_BUY_CANDIDATE"} and latest_signal in {"BUY", "HOLD"}
+        buy_eligible_action = action in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE", "PAPER_BUY_CANDIDATE"}
+        supports_buy = buy_eligible_action and latest_signal == "BUY"
+        holds_existing = buy_eligible_action and latest_signal == "HOLD"
         requires_close = "AVOID" in action or latest_signal == "SELL"
-        if supports_buy:
+        if supports_buy and oos_status == "FAILED":
+            status = "WAIT_FOR_OOS_CONFIRMATION"
+            supports_buy = False
+        elif supports_buy:
             status = "PAPER_BUY"
+        elif holds_existing:
+            status = "HOLD_EXISTING_ONLY"
         elif requires_close:
             status = "SELL_OR_AVOID"
         elif action == "SPREAD_REPLAY_ONLY":
@@ -1727,9 +1794,17 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]], *, paper_notio
             "spread_replay_promotable": bool(item.get("replay_promotable")),
             "spread_replay_pnl_per_unit": _round_units(replay_pnl),
             "spread_replay_win_rate": item.get("win_rate", 0),
+            "spread_oos_status": item.get("spread_oos_status", ""),
+            "spread_oos_test_trades": item.get("spread_oos_test_trades", 0),
+            "spread_oos_test_pnl_per_unit": _round_units(item.get("spread_oos_test_pnl_per_unit")),
+            "spread_oos_test_win_rate": item.get("spread_oos_test_win_rate", 0),
+            "spread_out_of_sample_replay": item.get("spread_out_of_sample_replay", {}),
             "expression_title": selected.get("title") or selected.get("basket_label") or "",
             "basket_id": selected.get("basket_id") or "",
             "latest_signal": latest_signal,
+            "signal_reason": signal_reason,
+            "current_action": selected.get("current_action") or "",
+            "current_action_reason": current_action_reason,
             "tradability_action": action,
             "profitability_status": status,
             "paper_5d_return_pct": ret_5d,
@@ -1743,26 +1818,58 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]], *, paper_notio
             "latest_paper_return_pct": latest_mark.get("paper_return_since_entry_pct", ""),
             "paper_trade_replay": trade_replay,
             "paper_trade_action": trade_replay.get("latest_trade_action", ""),
+            "paper_trade_reason": trade_replay.get("latest_trade_reason", ""),
             "paper_trade_total_pnl_usdc": trade_replay.get("total_pnl_usdc", ""),
             "paper_trade_realized_pnl_usdc": trade_replay.get("realized_pnl_usdc", ""),
             "paper_trade_open_pnl_usdc": trade_replay.get("open_pnl_usdc", ""),
             "paper_trade_hit_rate": trade_replay.get("hit_rate", ""),
             "paper_trade_closed_count": trade_replay.get("closed_trade_count", 0),
             "paper_trade_open_count": trade_replay.get("open_trade_count", 0),
+            "out_of_sample_replay": oos_replay,
+            "oos_status": oos_status,
+            "oos_passed": bool(oos_replay.get("passed")),
+            "oos_test_return_pct": oos_replay.get("test_return_pct", ""),
+            "oos_test_win_rate": oos_replay.get("test_win_rate", ""),
             "priced_symbols": selected.get("priced_symbols") or [],
             "missing_symbols": selected.get("missing_symbols") or [],
             "supports_fresh_buy": supports_buy,
+            "holds_existing_only": holds_existing,
             "requires_close_or_avoid": requires_close,
-            "reason": item.get("tradability_reason"),
+            "signal_inputs": {
+                "latest_signal": latest_signal,
+                "signal_reason": signal_reason,
+                "current_action": selected.get("current_action") or "",
+                "current_action_reason": current_action_reason,
+                "paper_5d_return_pct": ret_5d,
+                "paper_1m_return_pct": ret_1m,
+                "paper_total_return_pct": total_return,
+                "paper_trade_action": trade_replay.get("latest_trade_action", ""),
+                "paper_trade_reason": trade_replay.get("latest_trade_reason", ""),
+                "oos_status": oos_status,
+                "oos_test_return_pct": oos_replay.get("test_return_pct", ""),
+                "spread_replay_status": item.get("replay_status"),
+                "spread_oos_status": item.get("spread_oos_status", ""),
+            },
+            "reason": (
+                "Proxy expression failed the out-of-sample replay slice; wait before promoting a fresh paper buy."
+                if status == "WAIT_FOR_OOS_CONFIRMATION"
+                else (
+                    "Proxy replay is promotable, but current marks only say HOLD; do not open fresh exposure."
+                    if status == "HOLD_EXISTING_ONLY"
+                    else item.get("tradability_reason")
+                )
+            ),
         })
     status_rank = {
         "PAPER_BUY": 0,
         "SELL_OR_AVOID": 1,
-        "WAIT_FOR_PROXY_CONFIRMATION": 2,
-        "WAIT_FOR_SPREAD_REPLAY": 3,
-        "MONITOR": 4,
-        "NEEDS_INDEX_HISTORY": 5,
-        "NEEDS_EXPRESSION": 6,
+        "HOLD_EXISTING_ONLY": 2,
+        "WAIT_FOR_PROXY_CONFIRMATION": 3,
+        "WAIT_FOR_OOS_CONFIRMATION": 4,
+        "WAIT_FOR_SPREAD_REPLAY": 5,
+        "MONITOR": 6,
+        "NEEDS_INDEX_HISTORY": 7,
+        "NEEDS_EXPRESSION": 8,
     }
     rows.sort(key=lambda row: (
         status_rank.get(str(row.get("profitability_status")), 9),
@@ -1785,11 +1892,96 @@ def _spread_profitability_ledger(trade_map: list[dict[str, Any]], *, paper_notio
         "first_avoid_candidate": first_avoid,
         "counts": {
             "paper_buy": sum(1 for row in rows if row.get("supports_fresh_buy")),
+            "hold_existing": sum(1 for row in rows if row.get("holds_existing_only")),
             "sell_or_avoid": sum(1 for row in rows if row.get("requires_close_or_avoid")),
             "needs_data": sum(1 for row in rows if str(row.get("profitability_status")).startswith("NEEDS")),
             "monitor": sum(1 for row in rows if row.get("profitability_status") == "MONITOR"),
         },
         "rows": rows,
+    }
+
+
+def _portfolio_signal_summary(profitability_ledger: dict[str, Any]) -> dict[str, Any]:
+    rows = [row for row in (profitability_ledger or {}).get("rows", []) if isinstance(row, dict)]
+    buy_rows = [row for row in rows if row.get("supports_fresh_buy")]
+    close_rows = [row for row in rows if row.get("requires_close_or_avoid")]
+    wait_rows = [
+        row for row in rows
+        if str(row.get("profitability_status") or "").startswith("WAIT")
+        or str(row.get("profitability_status") or "").startswith("NEEDS")
+    ]
+    oos_pass_count = sum(1 for row in rows if row.get("oos_status") == "PASSED")
+    oos_fail_count = sum(1 for row in rows if row.get("oos_status") == "FAILED")
+    total_ticket_pnl = sum(_num(row.get("paper_trade_total_pnl_usdc")) for row in rows if row.get("paper_trade_total_pnl_usdc") not in ("", None))
+    total_mark_pnl = sum(_num(row.get("latest_paper_pnl_usdc")) for row in rows if row.get("latest_paper_pnl_usdc") not in ("", None))
+    realized_ticket_pnl = sum(_num(row.get("paper_trade_realized_pnl_usdc")) for row in rows if row.get("paper_trade_realized_pnl_usdc") not in ("", None))
+    open_ticket_pnl = sum(_num(row.get("paper_trade_open_pnl_usdc")) for row in rows if row.get("paper_trade_open_pnl_usdc") not in ("", None))
+
+    top_buy = buy_rows[0] if buy_rows else None
+    top_close = close_rows[0] if close_rows else None
+    if top_buy and top_close:
+        action = "ROTATE"
+        headline = f"Open {top_buy.get('label')} only after closing/avoiding {top_close.get('label')}."
+    elif top_buy:
+        action = "OPEN_TOP_PAPER_BUY"
+        headline = f"Open paper ticket candidate: {top_buy.get('label')}."
+    elif top_close:
+        action = "CLOSE_OR_AVOID"
+        headline = f"Close or avoid current sell signal: {top_close.get('label')}."
+    elif wait_rows:
+        action = "WAIT_FOR_DATA"
+        headline = "Wait for spread replay, proxy confirmation, or index history."
+    else:
+        action = "MONITOR"
+        headline = "Monitor spread menu; no fresh action."
+
+    def row_action(row: dict[str, Any]) -> str:
+        if row.get("supports_fresh_buy"):
+            return "BUY_PAPER"
+        if row.get("requires_close_or_avoid"):
+            return "CLOSE_OR_AVOID"
+        status = str(row.get("profitability_status") or "MONITOR")
+        if status.startswith("WAIT") or status.startswith("NEEDS"):
+            return status
+        return "MONITOR"
+
+    return {
+        "version": "portfolio_signal_summary_v1",
+        "source": "spread_profitability_ledger",
+        "realized": False,
+        "action": action,
+        "headline": headline,
+        "paper_notional_usdc": profitability_ledger.get("paper_notional_usdc", 0),
+        "paper_ticket_total_pnl_usdc": _round_money(total_ticket_pnl),
+        "paper_ticket_realized_pnl_usdc": _round_money(realized_ticket_pnl),
+        "paper_ticket_open_pnl_usdc": _round_money(open_ticket_pnl),
+        "latest_mark_total_pnl_usdc": _round_money(total_mark_pnl),
+        "buy_count": len(buy_rows),
+        "close_or_avoid_count": len(close_rows),
+        "wait_count": len(wait_rows),
+        "monitor_count": sum(1 for row in rows if row_action(row) == "MONITOR"),
+        "oos_pass_count": oos_pass_count,
+        "oos_fail_count": oos_fail_count,
+        "top_buy": top_buy,
+        "top_close_or_avoid": top_close,
+        "rows": [
+            {
+                "rank": row.get("rank"),
+                "archetype_id": row.get("archetype_id"),
+                "label": row.get("label"),
+                "action": row_action(row),
+                "profitability_status": row.get("profitability_status"),
+                "latest_signal": row.get("latest_signal"),
+                "paper_trade_action": row.get("paper_trade_action"),
+                "paper_trade_total_pnl_usdc": row.get("paper_trade_total_pnl_usdc", ""),
+                "latest_paper_pnl_usdc": row.get("latest_paper_pnl_usdc", ""),
+                "signal_reason": row.get("signal_reason", ""),
+                "current_action_reason": row.get("current_action_reason", ""),
+                "reason": row.get("reason"),
+            }
+            for row in rows[:6]
+        ],
+        "guardrail": "Portfolio signal is paper/replay guidance only. Circle/Arc remains locked unless judge.classify() returns EXECUTE.",
     }
 
 
@@ -1887,6 +2079,199 @@ def _venue_copy_status(row: dict[str, Any], copy_role: str) -> tuple[str, str]:
             return "DIRECT_METADATA_PROXY_PRICED", "Direct venue contract is identified, but only external proxy marks are priced."
         return "NEEDS_DIRECT_PRICE", "Fetch venue bid/ask/last before promotion."
     return "SCOUTING", "Keep in research until pricing and spread linkage are explicit."
+
+
+def _direct_leg_bucket(leg: dict[str, Any]) -> str:
+    role = _text(leg.get("role")).lower()
+    title = _text(leg.get("title")).lower()
+    description = _text(leg.get("description")).lower()
+    energy_terms = ("energy", "electricity", "power", "grid", "nuclear", "gas", "oil", "brent", "crude", "generation")
+    compute_terms = ("compute", "ai", "gpu", "nvidia", "openai", "anthropic", "data center", "datacenter", "semiconductor")
+    if any(term in role for term in energy_terms):
+        return "energy"
+    if any(term in role for term in compute_terms):
+        return "compute"
+    text = " ".join([title, description])
+    if any(term in text for term in energy_terms):
+        return "energy"
+    if any(term in text for term in compute_terms):
+        return "compute"
+    return ""
+
+
+def _direct_pair_side(direction: str, bucket: str) -> str:
+    if direction == DIRECTION_ELEC_EXPENSIVE:
+        return "long" if bucket == "energy" else "short"
+    if direction == DIRECTION_COMPUTE_EXPENSIVE:
+        return "long" if bucket == "compute" else "short"
+    return "watch"
+
+
+def _leg_is_live_priced(leg: dict[str, Any]) -> bool:
+    status = _text(leg.get("pricing_status")).lower()
+    return status in {"priced_watchlist", "priced_public_market", "live_priced"} or _text(leg.get("status_label")).lower() in {"live price available", "public price available"}
+
+
+def _pair_oracle_evidence(
+    oracle_judge_evidence: dict[str, Any],
+    *,
+    energy: dict[str, Any],
+    compute: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(oracle_judge_evidence, dict) or not oracle_judge_evidence:
+        return {
+            "status": "NO_RECEIPTS",
+            "gate": "NO_ORACLE_RECEIPTS",
+            "receipts": 0,
+            "latest_verdict": "",
+            "latest_reason_code": "",
+            "oracle_evidence_hash": "",
+            "matched_latest_receipt": False,
+            "note": "No Opoint/Nebius receipt is attached; pair can still be judged, but news/LLM evidence is missing.",
+            "can_drive_arc": False,
+        }
+    receipts = int(_num(oracle_judge_evidence.get("row_count")))
+    latest_verdict = _text(oracle_judge_evidence.get("latest_verdict")).upper()
+    latest_slug = _text(oracle_judge_evidence.get("latest_slug")).lower()
+    latest_title = _text(oracle_judge_evidence.get("latest_title")).lower()
+    pair_refs = {
+        _text(energy.get("slug")).lower(),
+        _text(energy.get("title")).lower(),
+        _text(compute.get("slug")).lower(),
+        _text(compute.get("title")).lower(),
+    }
+    matched = bool(latest_slug and latest_slug in pair_refs) or bool(latest_title and latest_title in pair_refs)
+    if receipts <= 0:
+        gate = "NO_ORACLE_RECEIPTS"
+        note = "No Opoint/Nebius receipt is attached; pair can still be judged, but news/LLM evidence is missing."
+    elif latest_verdict == "KEEP":
+        gate = "EVIDENCE_ONLY_SUPPORT"
+        note = "Latest Opoint/Nebius receipt supports keeping the candidate as evidence, but cannot execute it."
+    elif latest_verdict == "VETO":
+        gate = "EVIDENCE_ONLY_CRITIQUE"
+        note = "Latest Opoint/Nebius receipt criticizes the candidate; judge should treat it as adverse evidence."
+    elif latest_verdict == "DEFER":
+        gate = "EVIDENCE_ONLY_DEFER"
+        note = "Latest Opoint/Nebius receipt is inconclusive; judge should not promote solely from this evidence."
+    else:
+        gate = "EVIDENCE_ATTACHED"
+        note = "Opoint/Nebius receipt is attached as evidence only; premium scorer and judge gates are unchanged."
+    return {
+        "status": _text(oracle_judge_evidence.get("status"), "NO_RECEIPTS"),
+        "gate": gate,
+        "receipts": receipts,
+        "latest_verdict": latest_verdict,
+        "latest_reason_code": _text(oracle_judge_evidence.get("latest_reason_code")),
+        "oracle_evidence_hash": _text(oracle_judge_evidence.get("oracle_evidence_hash")),
+        "matched_latest_receipt": matched,
+        "raw_articles": int(_num(oracle_judge_evidence.get("raw_articles"))),
+        "filtered_articles": int(_num(oracle_judge_evidence.get("filtered_articles"))),
+        "note": note,
+        "can_drive_arc": False,
+    }
+
+
+def _direct_event_pair_candidates(
+    *,
+    direction: str,
+    direction_profile: dict[str, str],
+    direct_legs: list[dict[str, Any]],
+    oracle_judge_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    energy_legs = [leg for leg in direct_legs if _direct_leg_bucket(leg) == "energy"]
+    compute_legs = [leg for leg in direct_legs if _direct_leg_bucket(leg) == "compute"]
+    rows: list[dict[str, Any]] = []
+    for energy in energy_legs:
+        for compute in compute_legs:
+            if energy.get("slug") == compute.get("slug") and energy.get("surface") == compute.get("surface"):
+                continue
+            surfaces = sorted({_text(energy.get("surface")), _text(compute.get("surface"))})
+            both_priced = _leg_is_live_priced(energy) and _leg_is_live_priced(compute)
+            premium_required = "polymarket" in surfaces
+            if both_priced and premium_required:
+                readiness = "NEEDS_PREMIUM_AND_JUDGE"
+                action = "Run Polymarket premium scorer on the Polymarket leg, then judge.classify() on the paired package."
+            elif both_priced:
+                readiness = "NEEDS_JUDGE"
+                action = "Run judge.classify() on the paired package before any Arc action."
+            else:
+                readiness = "NEEDS_PRICE"
+                action = "Fetch venue bid/ask/last for both direct legs before judging the pair."
+            pair_payload = {
+                "energy": [energy.get("surface"), energy.get("slug")],
+                "compute": [compute.get("surface"), compute.get("slug")],
+                "direction": direction,
+            }
+            oracle_pair_evidence = _pair_oracle_evidence(
+                oracle_judge_evidence,
+                energy=energy,
+                compute=compute,
+            )
+            rows.append({
+                "pair_id": _hash_payload(pair_payload)[:12],
+                "direction": direction,
+                "target_pair": direction_profile.get("direct_pair", ""),
+                "readiness": readiness,
+                "action": action,
+                "surfaces": surfaces,
+                "mixed_surface": len(surfaces) > 1,
+                "premium_gate_required": premium_required,
+                "judge_required": True,
+                "oracle_required": False,
+                "can_drive_arc": False,
+                "oracle_evidence": oracle_pair_evidence,
+                "judge_package_inputs": [
+                    "energy_leg",
+                    "compute_leg",
+                    "latest_prices",
+                    "premium_score" if premium_required else "venue_price",
+                    "oracle_evidence_hash" if oracle_pair_evidence.get("oracle_evidence_hash") else "optional_oracle_evidence",
+                    "spread_replay",
+                    "proxy_replay",
+                ],
+                "energy_leg": {
+                    **energy,
+                    "bucket": "energy",
+                    "pair_side": _direct_pair_side(direction, "energy"),
+                },
+                "compute_leg": {
+                    **compute,
+                    "bucket": "compute",
+                    "pair_side": _direct_pair_side(direction, "compute"),
+                },
+                "why_connected": (
+                    f"{energy.get('title') or energy.get('slug')} is the energy/grid-stress side; "
+                    f"{compute.get('title') or compute.get('slug')} is the AI compute-demand side. "
+                    f"Together they express {direction_profile.get('direct_pair', 'the compute/energy spread')}."
+                ),
+                "arc_gate": "LOCKED_UNTIL_JUDGE_EXECUTE",
+            })
+    rows.sort(key=lambda row: (
+        0 if row.get("readiness") in {"NEEDS_PREMIUM_AND_JUDGE", "NEEDS_JUDGE"} else 1,
+        0 if row.get("mixed_surface") else 1,
+        VENUE_COPY_ORDER.get(str((row.get("energy_leg") or {}).get("surface")), 99),
+        VENUE_COPY_ORDER.get(str((row.get("compute_leg") or {}).get("surface")), 99),
+        str(row.get("pair_id") or ""),
+    ))
+    return {
+        "version": "direct_event_pair_candidates_v1",
+        "target_pair": direction_profile.get("direct_pair", ""),
+        "direction": direction,
+        "energy_leg_count": len(energy_legs),
+        "compute_leg_count": len(compute_legs),
+        "pair_count": len(rows),
+        "ready_for_judge_count": sum(1 for row in rows if row.get("readiness") in {"NEEDS_PREMIUM_AND_JUDGE", "NEEDS_JUDGE"}),
+        "oracle_evidence": {
+            "status": oracle_judge_evidence.get("status", "NO_RECEIPTS") if isinstance(oracle_judge_evidence, dict) else "NO_RECEIPTS",
+            "row_count": oracle_judge_evidence.get("row_count", 0) if isinstance(oracle_judge_evidence, dict) else 0,
+            "latest_verdict": oracle_judge_evidence.get("latest_verdict", "") if isinstance(oracle_judge_evidence, dict) else "",
+            "oracle_evidence_hash": oracle_judge_evidence.get("oracle_evidence_hash", "") if isinstance(oracle_judge_evidence, dict) else "",
+            "can_drive_arc": False,
+            "gate_note": "Opoint/Nebius evidence can support or criticize a pair, but it cannot replace premium scoring or judge.classify().",
+        },
+        "rows": rows[:8],
+        "guardrail": "Direct event pairs are candidate packages only. Premium scorer and judge.classify() must pass before Circle or Arc.",
+    }
 
 
 def _real_venue_copy_matrix(
@@ -2041,6 +2426,7 @@ def propose_synthetic_instrument(
         spread_trade_map,
         paper_notional_usdc=_num(mock_construction.get("hedge_notional_usdc")),
     )
+    portfolio_signal_summary = _portfolio_signal_summary(profitability_ledger)
     operator_signal_sheet = _operator_signal_sheet(
         direction=direction,
         mock_construction=mock_construction,
@@ -2058,6 +2444,12 @@ def propose_synthetic_instrument(
     )
     agent_search_plan = _agent_search_plan(region_profile, direction_profile, direct_legs, discovery_gaps)
     oracle_judge_evidence = _oracle_judge_evidence(oracle_evidence)
+    direct_event_pair_candidates = _direct_event_pair_candidates(
+        direction=direction,
+        direction_profile=direction_profile,
+        direct_legs=direct_legs,
+        oracle_judge_evidence=oracle_judge_evidence,
+    )
     real_venue_copy_matrix = _real_venue_copy_matrix(
         venue_evidence=venue_evidence,
         direct_inventory=direct_inventory,
@@ -2145,7 +2537,9 @@ def propose_synthetic_instrument(
             "syndicated_instrument_menu": syndicated_menu,
             "spread_archetype_trade_map": spread_trade_map,
             "spread_profitability_ledger": profitability_ledger,
+            "portfolio_signal_summary": portfolio_signal_summary,
             "operator_signal_sheet": operator_signal_sheet,
+            "direct_event_pair_candidates": direct_event_pair_candidates,
             "real_venue_copy_matrix": real_venue_copy_matrix,
             "spread_family_validation": spread_family_validation or {},
             "proxy_basket_validation": proxy_basket_validation or {},

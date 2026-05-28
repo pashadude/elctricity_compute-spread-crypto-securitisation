@@ -19,6 +19,7 @@ DEFAULT_THRESHOLD_Z = 1.0
 DEFAULT_MIN_OBS = 48
 DEFAULT_MIN_DISTINCT = 6
 DEFAULT_MIN_TRADES = 8
+DEFAULT_OOS_TRAIN_SHARE = 0.70
 MARK_EPSILON = 1e-10
 STRATEGY_MEAN_REVERSION = "mean_reversion"
 STRATEGY_MOMENTUM = "momentum"
@@ -121,6 +122,29 @@ def _calendar_pct_basis_series(rows: list[dict[str, Any]], *, window: int = 21) 
     return out
 
 
+def _regional_compute_power_basis_series(rows: list[dict[str, Any]]) -> list[float]:
+    """Region-A compute spark minus Region-B compute spark.
+
+    The row fields are written only by the public-proxy history builder today.
+    If real ERCOT/PJM/CAISO LMP plus regional GPU-rental histories are absent,
+    this returns no series rather than fabricating a basis from one region.
+    """
+    out: list[float] = []
+    for row in rows:
+        a_elec = _num(row.get("region_a_electricity_per_mwh"))
+        a_compute = _num(row.get("region_a_compute_per_gpu_hr"))
+        b_elec = _num(row.get("region_b_electricity_per_mwh"))
+        b_compute = _num(row.get("region_b_compute_per_gpu_hr"))
+        if min(a_elec, a_compute, b_elec, b_compute) <= 0.0:
+            continue
+        k = _num(row.get("k"), DEFAULT_K)
+        kwh = _num(row.get("kwh_per_gpu_hr", row.get("kWh_per_gpu_hr")), DEFAULT_KWH_PER_GPU_HR)
+        a_spark = a_compute - k * (a_elec / 1000.0) * kwh
+        b_spark = b_compute - k * (b_elec / 1000.0) * kwh
+        out.append(a_spark - b_spark)
+    return out
+
+
 SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
     SpreadFamily(
         family_id="compute_net_power_margin",
@@ -161,6 +185,17 @@ SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
         expensive_side="High = compute rich before PUE/utilization haircut.",
         trade_rule="Mean-revert: short when z is high, long when z is low.",
         value_fn=lambda x: x["compute_per_gpu_hr"] - x["raw_power_cost_per_gpu_hr"],
+    ),
+    SpreadFamily(
+        family_id="regional_compute_power_basis_proxy",
+        archetype_id="regional_compute_power_basis",
+        label="Regional compute-power basis proxy",
+        formula="region A compute spark - region B compute spark",
+        unit="USD/GPU-hr",
+        expensive_side="High = region A compute/power margin rich versus region B.",
+        trade_rule="Mean-revert or momentum depending on replay mode; region marks must be present in the row history.",
+        value_fn=lambda x: 0.0,
+        series_fn=_regional_compute_power_basis_series,
     ),
     SpreadFamily(
         family_id="compute_prompt_calendar_21d",
@@ -290,6 +325,13 @@ ELECTRICITY_INDEX_CATALOG = [
         "role": "calendar-spread input for front power tightness",
         "status": "derived_active",
     },
+    {
+        "id": "public_power_region_basis_proxy",
+        "label": "Public proxy power regional-basis basket",
+        "venue": "Yahoo/IBKR/Alpaca public close histories",
+        "role": "temporary regional-basis proxy until ISO LMP curves are wired",
+        "status": "proxy",
+    },
 ]
 
 COMPUTE_INDEX_CATALOG = [
@@ -384,6 +426,13 @@ COMPUTE_INDEX_CATALOG = [
         "role": "calendar-spread input for prompt compute tightness",
         "status": "derived_active",
     },
+    {
+        "id": "public_compute_region_basis_proxy",
+        "label": "Public proxy compute regional-basis basket",
+        "venue": "Yahoo/IBKR/Alpaca public close histories",
+        "role": "temporary regional compute basis proxy until regional GPU rental curves are wired",
+        "status": "proxy",
+    },
 ]
 
 SPREAD_ARCHETYPE_CATALOG = [
@@ -416,8 +465,8 @@ SPREAD_ARCHETYPE_CATALOG = [
         "label": "Regional compute-power basis",
         "formula": "region A compute spark - region B compute spark",
         "oil_analogy": "WTI-Brent or regional basis",
-        "status": "planned",
-        "required_indexes": ["two regional electricity marks", "two regional compute rental marks"],
+        "status": "proxy",
+        "required_indexes": ["two regional electricity marks or proxy baskets", "two regional compute rental marks or proxy baskets"],
     },
     {
         "id": "compute_calendar_spread",
@@ -454,6 +503,92 @@ SPREAD_ARCHETYPE_CATALOG = [
 ]
 
 
+USABLE_INDEX_STATUSES = {"active", "derived_active", "proxy", "proxy_only"}
+
+
+def _status_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _usable_index_count(rows: Iterable[dict[str, Any]]) -> int:
+    return sum(1 for row in rows if str(row.get("status") or "") in USABLE_INDEX_STATUSES)
+
+
+def _planned_index_gaps(rows: Iterable[dict[str, Any]], *, limit: int = 6) -> list[dict[str, str]]:
+    gaps: list[dict[str, str]] = []
+    for row in rows:
+        if str(row.get("status") or "") != "planned":
+            continue
+        gaps.append({
+            "id": str(row.get("id") or ""),
+            "label": str(row.get("label") or row.get("id") or ""),
+            "venue": str(row.get("venue") or ""),
+            "role": str(row.get("role") or ""),
+        })
+        if len(gaps) >= limit:
+            break
+    return gaps
+
+
+def _index_coverage(archetype_scoreboard: list[dict[str, Any]]) -> dict[str, Any]:
+    electricity_usable = _usable_index_count(ELECTRICITY_INDEX_CATALOG)
+    compute_usable = _usable_index_count(COMPUTE_INDEX_CATALOG)
+    replayed = [row for row in archetype_scoreboard if row.get("evidence_level") == "replayed"]
+    planned = [row for row in archetype_scoreboard if row.get("evidence_level") == "planned"]
+    promotable = [row for row in archetype_scoreboard if row.get("is_promotable")]
+    oos_pass = [row for row in archetype_scoreboard if row.get("oos_status") == "PASSED"]
+    oos_fail = [row for row in archetype_scoreboard if row.get("oos_status") == "FAILED"]
+    needs_history = [
+        {
+            "archetype_id": str(row.get("archetype_id") or ""),
+            "label": str(row.get("label") or row.get("archetype_id") or ""),
+            "required_indexes": row.get("required_indexes") or [],
+            "status": str(row.get("replay_status") or "NEEDS_INDEX_HISTORY"),
+        }
+        for row in planned
+    ][:6]
+    return {
+        "version": "index_coverage_v1",
+        "electricity": {
+            "total": len(ELECTRICITY_INDEX_CATALOG),
+            "usable": electricity_usable,
+            "status_counts": _status_counts(ELECTRICITY_INDEX_CATALOG),
+            "planned_gaps": _planned_index_gaps(ELECTRICITY_INDEX_CATALOG),
+        },
+        "compute": {
+            "total": len(COMPUTE_INDEX_CATALOG),
+            "usable": compute_usable,
+            "status_counts": _status_counts(COMPUTE_INDEX_CATALOG),
+            "planned_gaps": _planned_index_gaps(COMPUTE_INDEX_CATALOG),
+        },
+        "spread_archetypes": {
+            "total": len(SPREAD_ARCHETYPE_CATALOG),
+            "replayed": len(replayed),
+            "planned": len(planned),
+            "promotable": len(promotable),
+            "oos_passed": len(oos_pass),
+            "oos_failed": len(oos_fail),
+            "status_counts": _status_counts(SPREAD_ARCHETYPE_CATALOG),
+            "needs_history": needs_history,
+        },
+        "summary": (
+            f"{electricity_usable}/{len(ELECTRICITY_INDEX_CATALOG)} electricity indexes usable, "
+            f"{compute_usable}/{len(COMPUTE_INDEX_CATALOG)} compute indexes usable, "
+            f"{len(replayed)}/{len(SPREAD_ARCHETYPE_CATALOG)} spread forms replayed."
+        ),
+        "next_actions": [
+            "Keep active/derived/proxy indexes in the buy/sell path only after spread and proxy OOS checks pass.",
+            "Treat the regional basis replay as a public-proxy scaffold until physical LMP and regional GPU-rental histories exist.",
+            "Promote planned regional LMP and GPU-region basis indexes only after no-lookahead history exists.",
+            "Treat watchlist Polymarket/Kalshi/IBKR indexes as direct event legs, not mark-to-market price history.",
+        ],
+    }
+
+
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
@@ -480,6 +615,81 @@ def _max_drawdown(cumulative: list[float]) -> float:
         peak = max(peak, value)
         worst = min(worst, value - peak)
     return worst
+
+
+def _trade_stats(trades: list[dict[str, Any]]) -> dict[str, float]:
+    total = sum(_num(trade.get("pnl_per_unit")) for trade in trades)
+    wins = sum(1 for trade in trades if _num(trade.get("pnl_per_unit")) > 0.0)
+    win_rate = wins / len(trades) if trades else 0.0
+    return {
+        "trades": float(len(trades)),
+        "total_pnl_per_unit": total,
+        "win_rate": win_rate,
+    }
+
+
+def _out_of_sample_replay(
+    trades: list[dict[str, Any]],
+    *,
+    observations: int,
+    min_trades: int,
+    train_share: float = DEFAULT_OOS_TRAIN_SHARE,
+) -> dict[str, Any]:
+    if observations <= 0:
+        return {
+            "version": "spread_family_oos_replay_v1",
+            "policy": "fixed_70_30_trade_split",
+            "status": "INSUFFICIENT_HISTORY",
+            "passed": False,
+            "reason": "No mark-change history is available for train/test replay.",
+            "observations": observations,
+        }
+    split_idx = int(round(observations * max(0.1, min(0.9, train_share))))
+    train_trades = [trade for trade in trades if int(trade.get("entry_index", 0)) < split_idx]
+    test_trades = [trade for trade in trades if int(trade.get("entry_index", 0)) >= split_idx]
+    min_train_trades = max(3, int(math.ceil(min_trades * train_share)))
+    min_test_trades = max(2, min_trades - min_train_trades)
+    train = _trade_stats(train_trades)
+    test = _trade_stats(test_trades)
+    if len(train_trades) < min_train_trades or len(test_trades) < min_test_trades:
+        return {
+            "version": "spread_family_oos_replay_v1",
+            "policy": "fixed_70_30_trade_split",
+            "status": "INSUFFICIENT_TEST_TRADES",
+            "passed": False,
+            "reason": (
+                f"Need at least {min_train_trades} train and {min_test_trades} test trades; "
+                f"got {len(train_trades)} train and {len(test_trades)} test."
+            ),
+            "observations": observations,
+            "split_index": split_idx,
+            "train_trades": len(train_trades),
+            "test_trades": len(test_trades),
+            "train_total_pnl_per_unit": round(train["total_pnl_per_unit"], 8),
+            "train_win_rate": round(train["win_rate"] * 100.0, 2),
+            "test_total_pnl_per_unit": round(test["total_pnl_per_unit"], 8),
+            "test_win_rate": round(test["win_rate"] * 100.0, 2),
+        }
+    passed = test["total_pnl_per_unit"] > 0.0 and test["win_rate"] >= 0.55
+    return {
+        "version": "spread_family_oos_replay_v1",
+        "policy": "fixed_70_30_trade_split",
+        "status": "PASSED" if passed else "FAILED",
+        "passed": passed,
+        "reason": (
+            "Test-slice trades remain profitable with acceptable hit rate."
+            if passed
+            else "Test-slice trades do not clear positive PnL and hit-rate floors."
+        ),
+        "observations": observations,
+        "split_index": split_idx,
+        "train_trades": len(train_trades),
+        "test_trades": len(test_trades),
+        "train_total_pnl_per_unit": round(train["total_pnl_per_unit"], 8),
+        "train_win_rate": round(train["win_rate"] * 100.0, 2),
+        "test_total_pnl_per_unit": round(test["total_pnl_per_unit"], 8),
+        "test_win_rate": round(test["win_rate"] * 100.0, 2),
+    }
 
 
 def _status(
@@ -606,6 +816,11 @@ def replay_family(
     wins = sum(1 for trade in trades if trade["pnl_per_unit"] > 0)
     total_pnl = sum(trade["pnl_per_unit"] for trade in trades)
     win_rate = wins / len(trades) if trades else 0.0
+    out_of_sample = _out_of_sample_replay(
+        trades,
+        observations=observations,
+        min_trades=min_trades,
+    )
     status, reason, promotable = _status(
         raw_observations=raw_observations,
         observations=observations,
@@ -617,6 +832,10 @@ def replay_family(
         min_distinct=min_distinct,
         min_trades=min_trades,
     )
+    if promotable and out_of_sample.get("passed") is not True:
+        status = "FAILED_OOS_REPLAY"
+        reason = out_of_sample.get("reason") or "Out-of-sample replay did not clear promotion gates."
+        promotable = False
     return {
         "family_id": family.family_id,
         "archetype_id": family.archetype_id,
@@ -642,6 +861,11 @@ def replay_family(
         "total_pnl_per_unit": round(total_pnl, 8),
         "avg_pnl_per_unit": round(total_pnl / len(trades), 8) if trades else 0.0,
         "max_drawdown_per_unit": round(_max_drawdown(cumulative), 8),
+        "out_of_sample_replay": out_of_sample,
+        "oos_status": out_of_sample.get("status", ""),
+        "oos_test_trades": out_of_sample.get("test_trades", 0),
+        "oos_test_pnl_per_unit": out_of_sample.get("test_total_pnl_per_unit", 0),
+        "oos_test_win_rate": out_of_sample.get("test_win_rate", 0),
         "status": status,
         "status_reason": reason,
         "is_promotable": promotable,
@@ -690,6 +914,11 @@ def _archetype_scoreboard(families: list[dict[str, Any]]) -> list[dict[str, Any]
                 "tested_trades": best.get("tested_trades", 0),
                 "win_rate": best.get("win_rate", 0),
                 "total_pnl_per_unit": best.get("total_pnl_per_unit", 0),
+                "oos_status": best.get("oos_status", ""),
+                "oos_test_trades": best.get("oos_test_trades", 0),
+                "oos_test_pnl_per_unit": best.get("oos_test_pnl_per_unit", 0),
+                "oos_test_win_rate": best.get("oos_test_win_rate", 0),
+                "out_of_sample_replay": best.get("out_of_sample_replay", {}),
                 "evidence_level": "replayed",
             })
             continue
@@ -754,6 +983,7 @@ def summarize(
     )
     primary = families[0] if families else None
     archetype_scoreboard = _archetype_scoreboard(families)
+    index_coverage = _index_coverage(archetype_scoreboard)
     return {
         "version": "spread_family_replay_v1",
         "policy": "walk_forward_mean_reversion_no_lookahead",
@@ -765,6 +995,7 @@ def summarize(
         "primary_family": primary,
         "families": families,
         "archetype_scoreboard": archetype_scoreboard,
+        "index_coverage": index_coverage,
         "index_catalog": {
             "electricity": ELECTRICITY_INDEX_CATALOG,
             "compute": COMPUTE_INDEX_CATALOG,

@@ -24,6 +24,9 @@ DEFAULT_RECENT_MARK_DAYS = 7
 DEFAULT_TRADE_SHORT_WINDOW = 5
 DEFAULT_TRADE_LONG_WINDOW = 21
 DEFAULT_TRADE_EXIT_RETURN_PCT = -2.0
+DEFAULT_OOS_TRAIN_SHARE = 0.70
+DEFAULT_OOS_MIN_TRAIN_OBSERVATIONS = 15
+DEFAULT_OOS_MIN_TEST_OBSERVATIONS = 5
 TRAILING_WINDOWS: tuple[tuple[str, int], ...] = (
     ("5d", 5),
     ("1m", 21),
@@ -108,6 +111,49 @@ PROXY_BASKETS: tuple[ProxyBasketTemplate, ...] = (
             "NRG": 0.18,
             "CEG": 0.14,
             "NVDA": -0.20,
+        },
+    ),
+    ProxyBasketTemplate(
+        basket_id="compute_calendar_ai_capex",
+        label="Compute calendar AI-capex basket",
+        direction="compute_expensive",
+        thesis="Long prompt AI compute beneficiaries against power-cost proxies when spot GPU rental tightens versus term history.",
+        weights={
+            "NVDA": 0.36,
+            "VRT": 0.22,
+            "ETN": 0.16,
+            "CEG": -0.12,
+            "NRG": -0.08,
+            "BTC-USD": 0.04,
+            "ETH-USD": 0.02,
+        },
+    ),
+    ProxyBasketTemplate(
+        basket_id="electricity_calendar_power_prompt",
+        label="Electricity calendar power-prompt basket",
+        direction="electricity_expensive",
+        thesis="Long prompt power/fuel beneficiaries and short generic compute beta when front power tightens versus term history.",
+        weights={
+            "NG=F": 0.26,
+            "BZ=F": 0.16,
+            "NRG": 0.22,
+            "CEG": 0.18,
+            "ETN": 0.10,
+            "NVDA": -0.08,
+        },
+    ),
+    ProxyBasketTemplate(
+        basket_id="compute_power_calendar_pair",
+        label="Compute-power calendar basis basket",
+        direction="compute_expensive",
+        thesis="Long prompt compute beneficiaries and short power/fuel proxies when compute calendar premium widens versus power calendar premium.",
+        weights={
+            "NVDA": 0.34,
+            "VRT": 0.20,
+            "ETN": 0.16,
+            "NG=F": -0.12,
+            "CEG": -0.10,
+            "NRG": -0.08,
         },
     ),
 )
@@ -207,11 +253,84 @@ def _recent_index_marks(
         since_entry = ((index_values[idx] / entry_value) - 1.0) * 100.0 if entry_value else 0.0
         rows.append({
             "date": replay_dates[idx] if idx < len(replay_dates) else "",
+            "mark_type": "entry" if idx == start_idx else "mark",
             "index_close": round(index_values[idx], 4),
             "daily_return_pct": round(daily_return * 100.0, 4),
             "paper_return_since_entry_pct": round(since_entry, 4),
         })
     return rows
+
+
+def _win_rate_pct(values: list[float]) -> float:
+    return sum(1 for value in values if value > 0.0) / len(values) * 100.0 if values else 0.0
+
+
+def _out_of_sample_replay(
+    index_values: list[float],
+    replay_dates: list[str],
+    daily_returns: list[float],
+    *,
+    train_share: float = DEFAULT_OOS_TRAIN_SHARE,
+    min_train_observations: int = DEFAULT_OOS_MIN_TRAIN_OBSERVATIONS,
+    min_test_observations: int = DEFAULT_OOS_MIN_TEST_OBSERVATIONS,
+    min_test_return_pct: float = DEFAULT_MIN_RETURN_PCT,
+    min_test_win_rate: float = DEFAULT_MIN_WIN_RATE,
+) -> dict[str, Any]:
+    """Split the basket replay into train and test windows.
+
+    This is not a fitted model yet; it is a discipline check. A basket that
+    only looks good because of the early sample should not be promoted as a
+    fresh paper buy without showing the test slice separately.
+    """
+    observations = min(len(index_values), len(replay_dates))
+    if observations < min_train_observations + min_test_observations:
+        return {
+            "version": "proxy_oos_replay_v1",
+            "policy": "fixed_70_30_train_test_split",
+            "status": "INSUFFICIENT_HISTORY",
+            "passed": False,
+            "reason": (
+                f"Need at least {min_train_observations + min_test_observations} aligned marks "
+                "for a train/test replay."
+            ),
+            "observations": observations,
+        }
+
+    split_idx = int(round((observations - 1) * max(0.1, min(0.9, train_share))))
+    split_idx = max(min_train_observations - 1, min(split_idx, observations - min_test_observations))
+    train_start = index_values[0]
+    train_end = index_values[split_idx]
+    test_start = index_values[split_idx]
+    test_end = index_values[-1]
+    train_daily = daily_returns[:split_idx]
+    test_daily = daily_returns[split_idx:]
+    train_return = ((train_end / train_start) - 1.0) * 100.0 if train_start else 0.0
+    test_return = ((test_end / test_start) - 1.0) * 100.0 if test_start else 0.0
+    train_win = _win_rate_pct(train_daily)
+    test_win = _win_rate_pct(test_daily)
+    passed = test_return >= min_test_return_pct and test_win >= min_test_win_rate
+    return {
+        "version": "proxy_oos_replay_v1",
+        "policy": "fixed_70_30_train_test_split",
+        "status": "PASSED" if passed else "FAILED",
+        "passed": passed,
+        "reason": (
+            "Test slice return and hit rate clear the replay floor."
+            if passed
+            else "Test slice does not clear the replay floor; do not promote from full-sample PnL alone."
+        ),
+        "observations": observations,
+        "train_observations": split_idx + 1,
+        "test_observations": observations - split_idx,
+        "train_start_date": replay_dates[0] if replay_dates else "",
+        "train_end_date": replay_dates[split_idx] if split_idx < len(replay_dates) else "",
+        "test_start_date": replay_dates[split_idx] if split_idx < len(replay_dates) else "",
+        "test_end_date": replay_dates[-1] if replay_dates else "",
+        "train_return_pct": round(train_return, 4),
+        "train_win_rate": round(train_win, 2),
+        "test_return_pct": round(test_return, 4),
+        "test_win_rate": round(test_win, 2),
+    }
 
 
 def _window_return_pct(index_values: list[float], end_idx: int, points: int) -> float | None:
@@ -383,6 +502,17 @@ def _latest_signal(
     return "MONITOR", "Proxy replay is not strong enough for a buy or sell signal."
 
 
+def _current_action(*, latest_signal: str, recommendation: str) -> tuple[str, str]:
+    """Translate historical replay status plus latest mark into an operator action."""
+    if latest_signal == "SELL" or recommendation == "SELL_OR_AVOID":
+        return "SELL_OR_AVOID", "Do not open a fresh ticket; close local mock exposure if already open."
+    if latest_signal == "BUY" and recommendation == "BUY_OR_HOLD":
+        return "BUY_CANDIDATE", "Historical replay is promotable and recent marks confirm the direction."
+    if latest_signal == "HOLD" and recommendation == "BUY_OR_HOLD":
+        return "HOLD_EXISTING_ONLY", "Historical replay is promotable, but recent marks do not justify a fresh buy."
+    return "MONITOR_ONLY", "Insufficient or mixed proxy evidence; keep this in watch mode."
+
+
 def _status(
     *,
     observations: int,
@@ -490,6 +620,7 @@ def replay_basket(
     trailing_returns = _trailing_returns(index_values, replay_dates)
     recent_index_marks = _recent_index_marks(index_values, replay_dates, daily_returns)
     paper_trade_replay = _paper_trade_replay(index_values, replay_dates)
+    out_of_sample_replay = _out_of_sample_replay(index_values, replay_dates, daily_returns)
     status, reason, promotable, recommendation = _status(
         observations=observations,
         symbols_available=len(available_symbols),
@@ -506,6 +637,10 @@ def replay_basket(
         recommendation=recommendation,
         status=status,
         trailing_returns=trailing_returns,
+    )
+    current_action, current_action_reason = _current_action(
+        latest_signal=latest_signal,
+        recommendation=recommendation,
     )
     return {
         "basket_id": basket.basket_id,
@@ -528,12 +663,15 @@ def replay_basket(
         "recommendation": recommendation,
         "latest_signal": latest_signal,
         "signal_reason": signal_reason,
+        "current_action": current_action,
+        "current_action_reason": current_action_reason,
         "trailing_returns": trailing_returns,
         "recent_daily_returns_pct": [round(value * 100.0, 4) for value in daily_returns[-5:]],
         "recent_index_marks": recent_index_marks,
         "recent_entry_date": recent_index_marks[0]["date"] if recent_index_marks else "",
         "recent_exit_date": recent_index_marks[-1]["date"] if recent_index_marks else "",
         "paper_trade_replay": paper_trade_replay,
+        "out_of_sample_replay": out_of_sample_replay,
     }
 
 

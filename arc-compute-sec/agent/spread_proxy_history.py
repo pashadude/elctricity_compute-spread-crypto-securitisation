@@ -34,6 +34,18 @@ DEFAULT_COMPUTE_PROXY_WEIGHTS: dict[str, float] = {
     "ETN": 0.20,
     "BTC-USD": 0.10,
 }
+DEFAULT_REGION_B_ELECTRICITY_PROXY_WEIGHTS: dict[str, float] = {
+    "CEG": 0.42,
+    "NRG": 0.28,
+    "NG=F": 0.20,
+    "BZ=F": 0.10,
+}
+DEFAULT_REGION_B_COMPUTE_PROXY_WEIGHTS: dict[str, float] = {
+    "NVDA": 0.36,
+    "VRT": 0.26,
+    "ETN": 0.26,
+    "BTC-USD": 0.12,
+}
 DEFAULT_MIN_SYMBOLS = 2
 DEFAULT_REGION = "ERCOT|public-proxy-compute"
 
@@ -165,6 +177,8 @@ def build_spread_rows(
     compute_anchor_per_gpu_hr: float,
     electricity_weights: dict[str, float] | None = None,
     compute_weights: dict[str, float] | None = None,
+    region_b_electricity_weights: dict[str, float] | None = None,
+    region_b_compute_weights: dict[str, float] | None = None,
     k: float = DEFAULT_K,
     kwh_per_gpu_hr: float = DEFAULT_KWH_PER_GPU_HR,
     region: str = DEFAULT_REGION,
@@ -184,11 +198,33 @@ def build_spread_rows(
         label="public compute-infra proxy",
         min_symbols=min_symbols,
     )
+    region_b_electricity = build_proxy_index(
+        histories,
+        weights=region_b_electricity_weights or DEFAULT_REGION_B_ELECTRICITY_PROXY_WEIGHTS,
+        anchor_value=electricity_anchor_per_mwh,
+        label="public baseload/data-center power proxy",
+        min_symbols=min_symbols,
+    )
+    region_b_compute = build_proxy_index(
+        histories,
+        weights=region_b_compute_weights or DEFAULT_REGION_B_COMPUTE_PROXY_WEIGHTS,
+        anchor_value=compute_anchor_per_gpu_hr,
+        label="public AI-infra compute corridor proxy",
+        min_symbols=min_symbols,
+    )
     by_date: dict[str, dict[str, float]] = {}
     for date, value in zip(electricity.dates, electricity.values):
         by_date.setdefault(date, {})["electricity_per_mwh"] = value
     for date, value in zip(compute.dates, compute.values):
         by_date.setdefault(date, {})["compute_per_gpu_hr"] = value
+    for date, value in zip(electricity.dates, electricity.values):
+        by_date.setdefault(date, {})["region_a_electricity_per_mwh"] = value
+    for date, value in zip(compute.dates, compute.values):
+        by_date.setdefault(date, {})["region_a_compute_per_gpu_hr"] = value
+    for date, value in zip(region_b_electricity.dates, region_b_electricity.values):
+        by_date.setdefault(date, {})["region_b_electricity_per_mwh"] = value
+    for date, value in zip(region_b_compute.dates, region_b_compute.values):
+        by_date.setdefault(date, {})["region_b_compute_per_gpu_hr"] = value
     rows: list[dict[str, Any]] = []
     for date in sorted(by_date):
         marks = by_date[date]
@@ -210,6 +246,12 @@ def build_spread_rows(
             "mark_source": "public_proxy_history",
             "electricity_index": electricity.label,
             "compute_index": compute.label,
+            "region_a_electricity_per_mwh": round(float(marks.get("region_a_electricity_per_mwh", elec)), 6),
+            "region_a_compute_per_gpu_hr": round(float(marks.get("region_a_compute_per_gpu_hr", compute_value)), 6),
+            "region_b_electricity_per_mwh": round(float(marks.get("region_b_electricity_per_mwh", elec)), 6),
+            "region_b_compute_per_gpu_hr": round(float(marks.get("region_b_compute_per_gpu_hr", compute_value)), 6),
+            "region_a_label": "fuel/merchant-power compute region proxy",
+            "region_b_label": "baseload/data-center compute corridor proxy",
         })
     return {
         "version": "spread_proxy_history_v1",
@@ -227,6 +269,23 @@ def build_spread_rows(
             "missing_symbols": compute.missing_symbols,
             "weights": compute.weights,
         },
+        "regional_basis_indexes": {
+            "region_a": {
+                "label": "fuel/merchant-power compute region proxy",
+                "electricity_index": electricity.label,
+                "compute_index": compute.label,
+                "electricity_symbols_available": electricity.symbols_available,
+                "compute_symbols_available": compute.symbols_available,
+            },
+            "region_b": {
+                "label": "baseload/data-center compute corridor proxy",
+                "electricity_index": region_b_electricity.label,
+                "compute_index": region_b_compute.label,
+                "electricity_symbols_available": region_b_electricity.symbols_available,
+                "compute_symbols_available": region_b_compute.symbols_available,
+            },
+            "note": "Public-proxy regional basis replay; physical ERCOT/PJM/CAISO LMP history is still a v2 input.",
+        },
         "status": "READY" if rows else "INSUFFICIENT_HISTORY",
     }
 
@@ -236,7 +295,9 @@ def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     headers = [
         "ts", "date", "region", "electricity_per_mwh", "compute_per_gpu_hr",
         "S_t", "k", "kwh_per_gpu_hr", "mark_source", "electricity_index",
-        "compute_index",
+        "compute_index", "region_a_electricity_per_mwh", "region_a_compute_per_gpu_hr",
+        "region_b_electricity_per_mwh", "region_b_compute_per_gpu_hr",
+        "region_a_label", "region_b_label",
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=headers, delimiter="\t")

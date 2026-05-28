@@ -55,6 +55,10 @@ def test_identity_log_is_not_readable(tmp_path):
 
 def test_runtime_status_json_is_included(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("PROXY_BASKET_BACKTEST_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
     (tmp_path / "runtime_status.json").write_text(json.dumps({
         "state": "idle",
         "last_error": "",
@@ -213,6 +217,37 @@ def test_snapshot_reads_saved_proxy_basket_backtest(tmp_path, monkeypatch):
     assert snap["synthetic_instrument"]["outputs"]["proxy_basket_validation"]["entry_gate_pass"] is True
 
 
+def test_venue_evidence_uses_saved_proxy_replay_when_live_public_quotes_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    report = {
+        "version": "proxy_basket_replay_v1",
+        "entry_gate_pass": True,
+        "primary_basket": {
+            "basket_id": "miner_margin_power_pair",
+            "label": "Miner-margin power pair",
+            "status": "PROMOTABLE",
+            "recommendation": "BUY_OR_HOLD",
+            "latest_signal": "BUY",
+            "symbols_available": ["NRG", "CEG", "BTC-USD", "ETH-USD"],
+            "total_return_pct": 7.1,
+            "win_rate": 55.0,
+        },
+        "baskets": [],
+    }
+    (tmp_path / "proxy_basket_backtest.json").write_text(json.dumps(report))
+
+    snap = state.snapshot()
+    by_surface = {row["surface"]: row for row in snap["venue_evidence"]["rows"]}
+
+    assert by_surface["public_market"]["status"] == "REPLAY_PRICED"
+    assert by_surface["crypto"]["status"] == "REPLAY_PRICED"
+    assert "yahoo_close_history" in by_surface["public_market"]["quote_sources"]
+    assert "yahoo_close_history" in by_surface["crypto"]["quote_sources"]
+    assert by_surface["public_market"]["latest_pricing_status"] == "Close-history replay available"
+
+
 def test_snapshot_pnl_uses_proxy_basket_matching_signal_direction(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     _write_tsv(tmp_path / "arb_signals.tsv", [{
@@ -297,6 +332,50 @@ def test_snapshot_exposes_gated_pnl_status_without_reconciliation(tmp_path, monk
     assert "not realized PnL" in pnl["mark_to_market_note"]
 
 
+def test_snapshot_exposes_paper_portfolio_signal_next_to_settled_pnl(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("PROXY_BASKET_BACKTEST_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
+    proposal = {
+        "outputs": {
+            "spread_profitability_ledger": {
+                "version": "spread_profitability_ledger_v1",
+                "paper_notional_usdc": 1500,
+                "rows": [],
+            },
+            "portfolio_signal_summary": {
+                "version": "portfolio_signal_summary_v1",
+                "action": "CLOSE_OR_AVOID",
+                "headline": "Close or avoid current sell signal: Compute calendar spread.",
+                "paper_ticket_total_pnl_usdc": 42.5,
+                "paper_ticket_realized_pnl_usdc": 31.0,
+                "paper_ticket_open_pnl_usdc": 11.5,
+                "latest_mark_total_pnl_usdc": -7.25,
+                "buy_count": 0,
+                "close_or_avoid_count": 2,
+                "wait_count": 1,
+                "realized": False,
+            },
+        },
+    }
+    monkeypatch.setattr(state, "propose_synthetic_instrument", lambda **_kwargs: proposal)
+
+    snap = state.snapshot()
+
+    assert snap["portfolio_signal"]["action"] == "CLOSE_OR_AVOID"
+    assert snap["profitability_ledger"]["paper_notional_usdc"] == 1500
+    assert snap["pnl"]["status"] == "NO_SETTLED_PNL"
+    assert snap["pnl"]["paper_portfolio_action"] == "CLOSE_OR_AVOID"
+    assert snap["pnl"]["paper_portfolio_headline"].startswith("Close or avoid")
+    assert snap["pnl"]["paper_ticket_total_pnl_usdc"] == 42.5
+    assert snap["pnl"]["paper_ticket_realized_pnl_usdc"] == 31.0
+    assert snap["pnl"]["paper_ticket_open_pnl_usdc"] == 11.5
+    assert snap["pnl"]["paper_latest_mark_pnl_usdc"] == -7.25
+    assert snap["pnl"]["paper_close_or_avoid_count"] == 2
+
+
 def test_snapshot_exposes_real_venue_evidence_matrix(tmp_path, monkeypatch):
     state.cache.clear("public_quote")
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
@@ -330,6 +409,14 @@ def test_snapshot_exposes_real_venue_evidence_matrix(tmp_path, monkeypatch):
         "source": "yahoo_finance_chart",
         "source_priority": "ibkr,yahoo",
     })
+    monkeypatch.setattr(state, "_ibkr_client_portal_health", lambda: {
+        "status": "NEEDS_REAUTH",
+        "reachable": True,
+        "authenticated": False,
+        "connected": False,
+        "competing": False,
+        "action": "Open Client Portal and finish login/2FA.",
+    })
     (tmp_path / "ibkr_forecast_inventory.json").write_text(json.dumps({
         "events": [{
             "symbol": "RETXC",
@@ -357,8 +444,12 @@ def test_snapshot_exposes_real_venue_evidence_matrix(tmp_path, monkeypatch):
     assert by_surface["polymarket"]["premium_gate_required"] is True
     assert by_surface["kalshi"]["status"] == "LIVE_PRICED"
     assert by_surface["ibkr_prediction"]["status"] == "PROXY_PRICED"
+    assert by_surface["ibkr_prediction"]["auth_status"] == "NEEDS_REAUTH"
+    assert by_surface["ibkr_prediction"]["auth_authenticated"] is False
     assert by_surface["ibkr_prediction"]["external_proxy_count"] == 1
+    assert "IBKR Client Portal needs reauth" in by_surface["ibkr_prediction"]["gaps"][0]
     assert by_surface["public_market"]["priced_count"] == 2
+    assert by_surface["public_market"]["quote_sources"] == ["yahoo_finance_chart"]
     assert by_surface["crypto"]["status"] == "LIVE_PRICED"
     assert by_surface["opoint_nebius"]["evidence_only"] is True
     assert by_surface["opoint_nebius"]["can_drive_arc"] is False

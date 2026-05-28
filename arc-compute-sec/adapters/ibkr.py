@@ -179,6 +179,52 @@ def client_portal_auth_status() -> dict[str, Any]:
     return body if isinstance(body, dict) else {"raw": body}
 
 
+def client_portal_health(*, timeout: float | None = None) -> dict[str, Any]:
+    """Return a sanitized Client Portal health snapshot for operator UI.
+
+    The raw IBKR status can include local hardware identifiers. This helper
+    deliberately exposes only connectivity/auth booleans and an action hint.
+    """
+    base_url = _cp_base_url()
+    login_url = base_url.rsplit("/v1/api", 1)[0] if base_url.endswith("/v1/api") else base_url
+    try:
+        status = _cp_get(
+            "/iserver/auth/status",
+            timeout=timeout if timeout is not None else min(_cp_timeout(), 2.0),
+        )
+    except RuntimeError as exc:
+        cause = exc.__cause__
+        return {
+            "status": "UNREACHABLE",
+            "reachable": False,
+            "authenticated": False,
+            "connected": False,
+            "competing": False,
+            "error_code": cause.__class__.__name__ if cause else exc.__class__.__name__,
+            "action": f"Start Client Portal Gateway and open {login_url} to login.",
+        }
+    authenticated = _cp_status_bool(status, "authenticated") is True
+    connected = _cp_status_bool(status, "connected") is True
+    competing = _cp_status_bool(status, "competing") is True
+    if authenticated and connected and not competing:
+        health_status = "AUTHENTICATED"
+        action = "Client Portal is authenticated; venue EC quotes can be requested."
+    elif competing:
+        health_status = "COMPETING_SESSION"
+        action = "Close duplicate IBKR sessions or use a separate login, then reauthenticate Client Portal."
+    else:
+        health_status = "NEEDS_REAUTH"
+        action = f"Open {login_url}, finish login/2FA, then run npm run ibkr:cp-watchdog-once."
+    return {
+        "status": health_status,
+        "reachable": True,
+        "authenticated": authenticated,
+        "connected": connected,
+        "competing": competing,
+        "action": action,
+    }
+
+
 def client_portal_user_status() -> dict[str, Any]:
     body = _cp_get("/one/user")
     return body if isinstance(body, dict) else {"raw": body}
