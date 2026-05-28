@@ -59,9 +59,9 @@ const proxySourceLabel = (source, stale = false) => {
   if (low === 'ibkr_forecast_inventory') return 'IBKR ForecastTrader inventory';
   if (low === 'polymarket_direct_watchlist') return 'Polymarket Gamma';
   if (low === 'kalshi_direct_ai_watchlist') return 'Kalshi public API';
-  if (low === 'yahoo_finance_chart') return 'Yahoo fallback';
+  if (low === 'yahoo_finance_chart') return 'External proxy: Yahoo public quotes';
   if (low === 'yahoo_close_history') return 'Yahoo close-history replay';
-  if (low === 'alpaca_market_data') return 'Alpaca fallback';
+  if (low === 'alpaca_market_data') return 'External proxy: Alpaca market data';
   if (low === 'ibkr_tws') return 'IBKR paper TWS';
   return source || 'external proxy';
 };
@@ -528,10 +528,10 @@ const mapSnapshotToDashboardData = (snapshot) => {
     syntheticInstrument: proposal,
     pnl: {
       total: numberOr(pnl.total),
-      totalDisplay: pnl.display_total || (hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'No settled PnL'),
+      totalDisplay: pnl.display_total || (hasReconciled ? `$${numberOr(pnl.total).toFixed(4)}` : 'No reconciled venue PnL'),
       winRate: numberOr(pnl.win_rate),
       trades: reconciledTrades,
-      tradesDisplay: pnl.display_trades || (hasReconciled ? String(reconciledTrades) : '0 settled'),
+      tradesDisplay: pnl.display_trades || (hasReconciled ? String(reconciledTrades) : '0 venue fills'),
       wrappedJobs,
       executes,
       hasReconciled,
@@ -959,25 +959,51 @@ const SyndicatedInstrumentMenuPanel = ({ proposal }) => {
   const statusColor = (status) => status === 'PAPER_BUY_ONLY' || status === 'READY_FOR_JUDGE'
     ? 'primary'
     : (status === 'AVOID_OR_SELL' ? 'red' : 'amber');
+  const fmtMoney = (value) => (
+    value === null || value === undefined || value === ''
+      ? '-'
+      : Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+  );
+  const fmtPct = (value) => (
+    value === null || value === undefined || value === ''
+      ? '-'
+      : `${Number(value).toFixed(1)}%`
+  );
+  const actionLabel = (status) => {
+    const text = String(status || '').toUpperCase();
+    if (text === 'PAPER_BUY_ONLY' || text === 'READY_FOR_JUDGE') return 'Fund test ticket';
+    if (text.includes('SELL') || text.includes('AVOID')) return 'Avoid / sell';
+    return 'Monitor';
+  };
   return (
     <Card glow style={{ marginBottom: '16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '10px' }}>
         <div style={{ minWidth: 0 }}>
-          <SectionLabel>Syndicated Instrument Menu</SectionLabel>
+          <SectionLabel>Investable Spread Notes</SectionLabel>
           <div style={{ fontFamily: THEME.font.heading, fontSize: '20px', color: THEME.text.primary, fontWeight: 800 }}>
-            Spread-copying structures
+            Circle-funded paper tickets
           </div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, marginTop: '3px', lineHeight: 1.35 }}>
-            These are synthetic expressions of the compute/energy spread. They become asset-backed only after collateral is attached and the judge gate clears.
+            Each note copies one compute/energy spread archetype, shows the Circle test USDC ask, and marks paper PnL from the replay ledger. Asset-backed status requires uploaded compute collateral.
           </div>
         </div>
-        <Badge color="amber">NOT ABS YET</Badge>
+        <Badge color="amber">PAPER INVEST</Badge>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
-        {menu.slice(0, 5).map(item => {
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: '10px' }}>
+        {menu.slice(0, 6).map(item => {
           const trailing = item.trailing_returns || {};
           const ret5 = trailing['5d']?.return_pct;
           const ret1 = trailing['1m']?.return_pct;
+          const ret6m = trailing['6m']?.return_pct ?? item.total_return_pct;
+          const ask = Number(item.circle_testnet_ask_usdc || 0);
+          const replay = item.paper_trade_replay || {};
+          const replayReturn = replay.total_return_pct ?? replay.realized_return_pct ?? item.out_of_sample_replay?.test_return_pct;
+          const replayPnl = ask && replayReturn !== undefined && replayReturn !== ''
+            ? ask * Number(replayReturn || 0) / 100
+            : null;
+          const oos = item.out_of_sample_replay || {};
+          const action = actionLabel(item.status);
+          const actionTone = action.includes('Fund') ? THEME.primary[400] : (action.includes('Avoid') ? THEME.red[400] : THEME.amber[400]);
           return (
             <div key={item.instrument_type} style={{ padding: '10px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}`, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '6px' }}>
@@ -994,11 +1020,14 @@ const SyndicatedInstrumentMenuPanel = ({ proposal }) => {
                   <Badge color={statusColor(item.status)}>{String(item.status || '').replaceAll('_', ' ')}</Badge>
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px', marginBottom: '6px' }}>
                 {[
+                  ['Circle ticket', ask ? `${Number(ask).toLocaleString()} USDC` : 'Pending', THEME.amber[400]],
+                  ['Paper replay PnL', replayPnl === null ? '-' : fmtMoney(replayPnl), replayPnl !== null && replayPnl < 0 ? THEME.red[400] : THEME.primary[400]],
+                  ['6m return', fmtPct(ret6m), Number(ret6m || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+                  ['OOS test', oos.status ? `${String(oos.status).replaceAll('_', ' ')} ${fmtPct(oos.test_return_pct)}` : '-', oos.status === 'PASSED' ? THEME.primary[400] : THEME.amber[400]],
                   ['Signal', item.latest_signal || 'MONITOR', signalColor(item.latest_signal)],
-                  ['5d', ret5 === undefined ? '-' : `${Number(ret5 || 0).toFixed(1)}%`, Number(ret5 || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
-                  ['1m', ret1 === undefined ? '-' : `${Number(ret1 || 0).toFixed(1)}%`, Number(ret1 || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
+                  ['5d / 1m', `${fmtPct(ret5)} / ${fmtPct(ret1)}`, Number(ret5 || 0) >= 0 && Number(ret1 || 0) >= 0 ? THEME.primary[400] : THEME.red[400]],
                 ].map(([label, value, color]) => (
                   <div key={label} style={{ padding: '6px', borderRadius: '6px', background: THEME.bg.surface, minWidth: 0 }}>
                     <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted }}>{label}</div>
@@ -1006,11 +1035,36 @@ const SyndicatedInstrumentMenuPanel = ({ proposal }) => {
                   </div>
                 ))}
               </div>
+              <div style={{ padding: '7px', borderRadius: '6px', background: THEME.bg.surface, border: `1px solid ${THEME.border.subtle}`, marginBottom: '6px' }}>
+                <div style={{ fontFamily: THEME.font.body, fontSize: '9px', color: THEME.text.muted, textTransform: 'uppercase', fontWeight: 800, marginBottom: '3px' }}>Investment action</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.secondary, lineHeight: 1.35 }}>
+                    {item.status_reason}
+                  </div>
+                  <a href="/account" style={{
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: '30px',
+                    padding: '0 10px',
+                    borderRadius: '6px',
+                    border: `1px solid ${actionTone}55`,
+                    background: `${actionTone}12`,
+                    color: actionTone,
+                    fontFamily: THEME.font.body,
+                    fontSize: '11px',
+                    fontWeight: 800,
+                    textDecoration: 'none',
+                    whiteSpace: 'nowrap',
+                  }}>{action}</a>
+                </div>
+              </div>
               <div style={{ fontFamily: THEME.font.body, fontSize: '10px', color: THEME.text.muted, lineHeight: 1.35 }}>
-                {item.status_reason}
+                Collateral needed: {(item.collateral_needed || []).slice(0, 3).join(', ') || 'none listed'}.
               </div>
               <div style={{ fontFamily: THEME.font.mono, fontSize: '10px', color: THEME.text.faint, marginTop: '5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                priced: {(item.priced_symbols || []).slice(0, 5).join(', ') || 'none'}
+                priced legs: {(item.priced_symbols || []).slice(0, 6).join(', ') || 'none'}{(item.missing_symbols || []).length ? ` · missing ${(item.missing_symbols || []).join(', ')}` : ''}
               </div>
             </div>
           );
@@ -1415,7 +1469,7 @@ const PnlStatusPanel = ({ pnl }) => {
         <div>
           <SectionLabel>Profitability Ledger</SectionLabel>
           <div style={{ fontFamily: THEME.font.heading, fontSize: '18px', color: THEME.text.primary, fontWeight: 800 }}>
-            {pnl.statusLabel || 'PnL status'}
+            {pnl.hasReconciled ? (pnl.statusLabel || 'Venue PnL reconciled') : 'No venue fills reconciled yet'}
           </div>
           <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.faint, lineHeight: 1.35, marginTop: '3px' }}>
             Settled PnL is shown only after reconciliation. Replay and local tickets stay labelled separately.
@@ -1425,8 +1479,8 @@ const PnlStatusPanel = ({ pnl }) => {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px' }}>
         {[
-          ['Settled PnL', pnl.totalDisplay || 'No settled PnL', pnl.hasReconciled ? THEME.primary[400] : THEME.amber[400]],
-          ['Trades', pnl.tradesDisplay || '0 settled', THEME.text.secondary],
+          ['Settled venue PnL', pnl.totalDisplay || 'No reconciled venue PnL', pnl.hasReconciled ? THEME.primary[400] : THEME.amber[400]],
+          ['Venue fills', pnl.tradesDisplay || '0 venue fills', THEME.text.secondary],
           ['Wrapped Jobs', pnl.wrappedJobs || 0, THEME.text.secondary],
           ['Judge EXECUTEs', pnl.executes || 0, THEME.text.secondary],
         ].map(([label, value, color]) => (
@@ -1437,7 +1491,7 @@ const PnlStatusPanel = ({ pnl }) => {
         ))}
       </div>
       <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.4, marginTop: '9px' }}>
-        {pnl.note || 'No reconciled PnL note available.'}
+        {pnl.note || 'Arc/Circle jobs can exist before venue fills are reconciled. Settled PnL stays blank until the fill ledger writes reconciliation rows.'}
       </div>
       {hasPaperSignal && (
         <div style={{ marginTop: '10px', padding: '9px', borderRadius: '6px', background: THEME.bg.elevated, border: `1px solid ${THEME.border.subtle}` }}>
@@ -2678,6 +2732,9 @@ const DashboardPage = ({ refreshRate }) => {
     && construction.judge_verdict?.label === 'EXECUTE';
   const recommendation = topCanBuy ? (construction.recommendation_label || 'Open paper hedge') : (construction.recommendation_label || 'Monitor');
   const topRecommendationColor = recommendationColor(construction, topCanBuy);
+  const directQuoteMissingCount = (data.directInventory || []).filter(row => (
+    row.surface === 'ibkr_prediction' && row.pricingStatus === 'ibkr_quote_unavailable'
+  )).length;
 
   return (
     <div style={{ padding: isMobile ? '18px 14px 32px' : '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -2709,14 +2766,20 @@ const DashboardPage = ({ refreshRate }) => {
         <StatCard label="Mock Notional" value={construction.hedge_notional_usdc ? `$${Number(construction.hedge_notional_usdc).toLocaleString()}` : 'Pending'} />
         <StatCard label="Circle Ask" value={construction.circle_testnet_usdc_request ? `${Number(construction.circle_testnet_usdc_request).toLocaleString()} USDC` : 'Pending'} color={THEME.amber[400]} />
         <StatCard label="Agent Recommendation" value={recommendation} color={topRecommendationColor} />
-        <StatCard label="Quote Source" value={quoteSourceText || 'Pending'} valueSize={16} />
+        <StatCard label="Quote Layer" value={quoteSourceText || 'Pending'} valueSize={16} />
       </div>
+      {directQuoteMissingCount > 0 && (
+        <div style={{ padding: '9px 10px', borderRadius: '6px', background: `${THEME.amber[400]}10`, border: `1px solid ${THEME.amber[400]}25`, marginBottom: '16px' }}>
+          <div style={{ fontFamily: THEME.font.body, fontSize: '11px', color: THEME.text.secondary, lineHeight: 1.4 }}>
+            IBKR ForecastTrader contracts are discovered, but {directQuoteMissingCount} direct event quote{directQuoteMissingCount === 1 ? '' : 's'} currently have no bid/ask/last. Yahoo is shown only as an external proxy mark for tracking, not as the event venue.
+          </div>
+        </div>
+      )}
 
+      <SyndicatedInstrumentMenuPanel proposal={data.syntheticInstrument} />
       <PnlStatusPanel pnl={data.pnl} />
       <PortfolioSignalSummaryPanel proposal={data.syntheticInstrument} />
       <SpreadProfitabilityLedgerPanel proposal={data.syntheticInstrument} />
-      <OperatorSignalSheetPanel proposal={data.syntheticInstrument} />
-      <TelegramCampaignPanel campaign={data.telegramCampaign} />
 
       {/* Signal + Candidates */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
@@ -2727,7 +2790,6 @@ const DashboardPage = ({ refreshRate }) => {
         </div>
       </div>
 
-      <SyndicatedInstrumentMenuPanel proposal={data.syntheticInstrument} />
       <IndexCatalogPanel data={data} />
       <SpreadTradeMapPanel proposal={data.syntheticInstrument} />
 

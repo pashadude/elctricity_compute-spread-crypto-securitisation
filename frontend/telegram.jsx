@@ -26,9 +26,9 @@ const tgProxySourceLabel = (leg = {}) => {
   if (low === 'ibkr_forecast_inventory') return 'IBKR ForecastTrader inventory';
   if (low === 'polymarket_direct_watchlist') return 'Polymarket Gamma';
   if (low === 'kalshi_direct_ai_watchlist') return 'Kalshi public API';
-  if (low === 'yahoo_finance_chart') return 'Yahoo fallback';
+  if (low === 'yahoo_finance_chart') return 'External proxy: Yahoo public quotes';
   if (low === 'yahoo_close_history') return 'Yahoo close-history replay';
-  if (low === 'alpaca_market_data') return 'Alpaca fallback';
+  if (low === 'alpaca_market_data') return 'External proxy: Alpaca market data';
   return leg.externalProxySource || '';
 };
 
@@ -1210,10 +1210,6 @@ const TgAlerts = ({ setScreen, goBack, data }) => {
   const [alerts, setAlerts] = React.useState({
     signals: true, verdicts: true, positions: true, pnl: false, oracle: false,
   });
-  const campaign = tgCampaign(data || {});
-  const total = Number(campaign.total_posts || campaign.posts?.length || 0);
-  const posted = Number(campaign.posted_count || 0);
-  const pending = Number(campaign.pending_count || Math.max(0, total - posted));
   const Toggle = ({ on, onToggle }) => (
     <button onClick={onToggle} style={{
       width: 44, height: 26, borderRadius: 13, border: 'none', cursor: 'pointer',
@@ -1228,30 +1224,6 @@ const TgAlerts = ({ setScreen, goBack, data }) => {
   );
   return (
     <TgScreen title="Alert Settings" onBack={goBack}>
-      <div style={{ background: TG_THEME.surface, borderRadius: '12px', margin: '16px 16px 12px', padding: '14px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
-          <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-            Channel Campaign
-          </div>
-          <TgBadge color={pending === 0 && total > 0 ? TG_THEME.green : TG_THEME.orange}>{posted}/{total} posted</TgBadge>
-        </div>
-        <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.4, marginBottom: '8px' }}>
-          Four sparse posts explain indexes, profitability, real venue roles, and the Arc/collateral wrapper without raw reject spam.
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '8px' }}>
-          {(campaign.posts || []).map(post => (
-            <div key={post.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px' }}>
-              <span style={{ color: TG_THEME.text, overflowWrap: 'anywhere' }}>{post.title}</span>
-              <span style={{ color: post.posted ? TG_THEME.green : TG_THEME.orange, fontFamily: TG_THEME.mono, flexShrink: 0 }}>
-                {post.posted ? 'POSTED' : 'READY'}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, overflowWrap: 'anywhere', lineHeight: 1.35 }}>
-          {campaign.post_command || 'npm run telegram:campaign-post'}
-        </div>
-      </div>
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', margin: '16px' }}>
         {Object.entries({ signals: 'Mock Contract Updates', verdicts: 'Buy / Monitor Recommendations', positions: 'Operator Runtime Errors', pnl: 'PnL Drag Warnings', oracle: 'Scouting Evidence Updates' }).map(([k, label]) => (
           <TgListItem key={k} title={label} trailing={
