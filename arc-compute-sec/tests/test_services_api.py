@@ -137,6 +137,99 @@ def test_api_account_demo_payment_sets_server_session(tmp_path, monkeypatch):
     assert "Max-Age=0" in logout_headers["set-cookie"]
 
 
+def test_api_account_portfolio_opens_and_closes_server_position(tmp_path, monkeypatch):
+    _serve(tmp_path, monkeypatch)
+    monkeypatch.setenv("ACCOUNT_SESSION_SECRET", "test-secret")
+    monkeypatch.setenv("ALLOW_DEMO_OPERATOR_PAYMENT", "1")
+
+    fake_snapshot = {
+        "synthetic_instrument": {
+            "outputs": {
+                "syndicated_instrument_menu": [{
+                    "instrument_type": "compute_receivable_hedge_note",
+                    "basket_id": "miner_margin_power_pair",
+                    "title": "ERCOT compute receivable hedge note",
+                    "spread_archetype": "fuel_stack_compute_spread",
+                    "payoff": "Long power exposure and short miner-margin beta.",
+                    "collateral_needed": ["compute sale invoice"],
+                    "direct_leg_target": "long energy/grid stress vs short compute demand",
+                    "latest_signal": "BUY",
+                    "status": "PAPER_BUY_ONLY",
+                    "collateral_status": "not_asset_backed_v0",
+                    "circle_testnet_ask_usdc": 1560,
+                    "priced_symbols": ["BTC-USD", "NRG"],
+                    "replay_status": "PROMOTABLE",
+                    "win_rate": 62,
+                    "max_drawdown_pct": -4.2,
+                    "arc_gate": "LOCKED_UNTIL_JUDGE_EXECUTE",
+                }]
+            }
+        },
+        "profitability_ledger": {
+            "rows": [{
+                "archetype_id": "fuel_stack_compute_spread",
+                "basket_id": "miner_margin_power_pair",
+                "latest_signal": "BUY",
+                "profitability_status": "PAPER_BUY",
+                "paper_total_return_pct": 4,
+                "recent_paper_marks": [
+                    {"index_close": 100},
+                    {"index_close": 104},
+                ],
+                "supports_fresh_buy": True,
+            }]
+        },
+        "public_hedges": [
+            {"instrument": "BTC-USD", "last_price": 100000, "source": "yahoo"},
+            {"instrument": "NRG", "last_price": 80, "source": "yahoo"},
+        ],
+        "direct_inventory": [],
+    }
+    from services import user_portfolio
+    monkeypatch.setattr(user_portfolio.state, "snapshot", lambda **_kwargs: fake_snapshot)
+
+    no_session_status, no_session_body = _request("GET", "/api/account/portfolio")
+    pay_status, _pay_payload, pay_headers = _request(
+        "POST",
+        "/api/account/operator/demo-payment",
+        body=json.dumps({
+            "wallet_address": "0x7a3B4C6D8E9F1029384756aBcDEF1234567890aB",
+            "tx_hash": "0xabc",
+        }).encode(),
+        headers={"Content-Type": "application/json"},
+        return_headers=True,
+    )
+    cookie = pay_headers["set-cookie"].split(";", 1)[0]
+    portfolio_status, portfolio_body = _request("GET", "/api/account/portfolio", headers={"Cookie": cookie})
+    instrument_id = json.loads(portfolio_body)["instruments"][0]["id"]
+    open_status, open_body = _request(
+        "POST",
+        "/api/account/portfolio/open",
+        body=json.dumps({"instrument_id": instrument_id, "notional_usdc": 500}).encode(),
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    opened = json.loads(open_body)
+    close_status, close_body = _request(
+        "POST",
+        "/api/account/portfolio/close",
+        body=json.dumps({"position_id": opened["positions"][0]["positionId"]}).encode(),
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    closed = json.loads(close_body)
+
+    assert no_session_status == 200
+    assert json.loads(no_session_body)["account_required"] is True
+    assert pay_status == 200
+    assert portfolio_status == 200
+    assert open_status == 200
+    assert opened["positions"][0]["notionalUsdc"] == 500
+    assert opened["positions"][0]["entryMark"] == 1.04
+    assert opened["summary"]["openCount"] == 1
+    assert close_status == 200
+    assert closed["summary"]["openCount"] == 0
+    assert closed["summary"]["realizedCount"] == 1
+
+
 def test_api_account_demo_payment_can_be_disabled(tmp_path, monkeypatch):
     _serve(tmp_path, monkeypatch)
     monkeypatch.setenv("ALLOW_DEMO_OPERATOR_PAYMENT", "0")

@@ -9,6 +9,7 @@
   "scripts": {
     "test": ".venv/bin/python -m pytest tests/",
     "test:py": ".venv/bin/python -m pytest tests/",
+    "test:e2e": "playwright test tests/e2e/power-dashboard.spec.mjs",
     "account:test": ".venv/bin/python -m pytest tests/test_accounts.py tests/test_services_api.py",
     "typecheck": "tsc --noEmit",
     "feeds:smoke": "set -a; source .env; set +a; .venv/bin/python scripts/feeds_smoke.py",
@@ -64,6 +65,7 @@
     "viem": "^2.48.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/node": "^25.7.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"

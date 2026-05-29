@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from services import accounts, scan_requests, state
+from services import accounts, scan_requests, state, user_portfolio
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -100,6 +100,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "mode": accounts.account_mode(),
             })
             return
+        if path == "/api/account/portfolio":
+            account = accounts.account_from_cookie(self.headers.get("Cookie"))
+            self._send_json(200, user_portfolio.portfolio_state(account))
+            return
         self._serve_static(path)
 
     def do_POST(self) -> None:
@@ -119,6 +123,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                 {"ok": True, "account": None},
                 headers={"Set-Cookie": accounts.clear_session_cookie_header()},
             )
+            return
+        if path == "/api/account/portfolio/open":
+            self._handle_portfolio_open()
+            return
+        if path == "/api/account/portfolio/close":
+            self._handle_portfolio_close()
             return
         if path not in {"/api/scans", "/api/scans/live"}:
             self._send_json(404, {"ok": False, "error": "not_found"})
@@ -172,6 +182,45 @@ class ApiHandler(BaseHTTPRequestHandler):
             {"ok": True, "account": account, "mode": accounts.account_mode()},
             headers={"Set-Cookie": accounts.session_cookie_header(account["id"])},
         )
+
+    def _handle_portfolio_open(self) -> None:
+        account = accounts.account_from_cookie(self.headers.get("Cookie"))
+        if not account:
+            self._send_json(401, {"ok": False, "error": "account_required"})
+            return
+        payload = self._read_json_body()
+        try:
+            result = user_portfolio.open_position(
+                account,
+                instrument_id=str(payload.get("instrument_id") or payload.get("instrumentId") or ""),
+                notional_usdc=payload.get("notional_usdc") or payload.get("notionalUsdc"),
+            )
+        except PermissionError as exc:
+            self._send_json(401, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        self._send_json(200, result)
+
+    def _handle_portfolio_close(self) -> None:
+        account = accounts.account_from_cookie(self.headers.get("Cookie"))
+        if not account:
+            self._send_json(401, {"ok": False, "error": "account_required"})
+            return
+        payload = self._read_json_body()
+        try:
+            result = user_portfolio.close_position(
+                account,
+                position_id=str(payload.get("position_id") or payload.get("positionId") or ""),
+            )
+        except PermissionError as exc:
+            self._send_json(401, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        self._send_json(200, result)
 
     def _handle_circle_webhook(self) -> None:
         raw_body = self._read_body_bytes()

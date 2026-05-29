@@ -91,8 +91,8 @@ const GlowButton = ({ children, onClick, variant = 'primary', size = 'md', style
         display: 'inline-flex', alignItems: 'center', gap: '8px',
         padding: `${s.py}px ${s.px}px`, borderRadius: '10px',
         fontSize: `${s.fs}px`, fontWeight: 600, fontFamily: THEME.font.body,
-        cursor: disabled ? 'not-allowed' : 'pointer', border: 'none',
-        transition: 'all 0.25s ease', letterSpacing: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer', border: 'none', whiteSpace: 'nowrap',
+        transition: 'all 0.25s ease', letterSpacing: '-0.01em',
         opacity: disabled ? 0.5 : 1,
         ...(isPrimary ? {
           background: hovered ? THEME.primary[300] : THEME.primary[400],
@@ -123,13 +123,10 @@ const Divider = ({ style }) => (
 );
 
 /* ── Nav ── */
-const readNavOperatorAccount = () => window.readDemoOperatorAccount?.() || window.__operatorAccount || null;
-
 const Nav = ({ page, setPage }) => {
   const [scrolled, setScrolled] = React.useState(false);
-  const [account, setAccount] = React.useState(readNavOperatorAccount);
+  const [account, setAccount] = React.useState(window.__operatorAccount || null);
   const isMobile = useIsMobile(760);
-
   React.useEffect(() => {
     const el = document.getElementById('app-scroll');
     if (!el) return;
@@ -137,25 +134,17 @@ const Nav = ({ page, setPage }) => {
     el.addEventListener('scroll', h);
     return () => el.removeEventListener('scroll', h);
   }, []);
-
   React.useEffect(() => {
-    const refresh = (event) => {
-      if (event?.type === 'botozen:account') setAccount(event.detail || null);
-      else setAccount(readNavOperatorAccount());
-    };
-    window.addEventListener('storage', refresh);
-    window.addEventListener('botozen:account', refresh);
-    return () => {
-      window.removeEventListener('storage', refresh);
-      window.removeEventListener('botozen:account', refresh);
-    };
+    const h = (event) => setAccount(event.detail || window.__operatorAccount || null);
+    window.addEventListener('botozen:account', h);
+    return () => window.removeEventListener('botozen:account', h);
   }, []);
 
   const links = [
     { id: 'landing', label: 'Home' },
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'telegram', label: 'Telegram App' },
-    ...(account ? [{ id: 'account', label: 'Account' }] : []),
+    { id: 'telegram', label: 'Telegram Bot' },
+    { id: 'account', label: 'Account' },
   ];
 
   return (
@@ -171,20 +160,26 @@ const Nav = ({ page, setPage }) => {
       borderBottom: scrolled ? `1px solid ${THEME.border.subtle}` : '1px solid transparent',
       transition: 'all 0.3s ease',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', minWidth: 0 }} onClick={() => setPage('landing')}>
-        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-          <path d="M14 2L2 26h8l4-8 4 8h8L14 2z" fill={THEME.primary[400]} />
-          <path d="M14 10l-4 8h8l-4-8z" fill={THEME.primary[300]} opacity="0.6" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '11px', cursor: 'pointer', minWidth: 0 }} onClick={() => setPage('landing')}>
+        <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+          <rect x="1" y="1" width="28" height="28" rx="8" stroke={THEME.primary[400]} strokeWidth="1.5" fill={THEME.primary[400] + '12'} />
+          <path d="M16.5 6L10 16.5h4.2L13 24l6.8-11h-4.3L16.5 6z" fill={THEME.primary[400]} />
         </svg>
-        <span style={{ fontFamily: THEME.font.heading, fontWeight: 700, fontSize: isMobile ? '16px' : '18px', color: THEME.text.primary, letterSpacing: 0, whiteSpace: 'nowrap' }}>
-          arc<span style={{ color: THEME.primary[400] }}>·</span>compute
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
+          <span style={{ fontFamily: THEME.font.heading, fontWeight: 700, fontSize: isMobile ? '16px' : '17px', color: THEME.text.primary, letterSpacing: '-0.02em' }}>
+            Power<span style={{ color: THEME.primary[400] }}> ·</span>
+          </span>
+          <span style={{ fontFamily: THEME.font.mono, fontWeight: 500, fontSize: '9.5px', color: THEME.text.muted, letterSpacing: '0.14em', textTransform: 'uppercase', marginTop: '3px' }}>
+            by Botozen
+          </span>
+        </div>
       </div>
       <div style={{
         display: 'flex', gap: '4px',
         order: isMobile ? 3 : 0,
         width: isMobile ? '100%' : 'auto',
         overflowX: isMobile ? 'auto' : 'visible',
+        minWidth: 0,
         paddingBottom: isMobile ? '2px' : 0,
       }}>
         {links.map(l => (
@@ -199,9 +194,7 @@ const Nav = ({ page, setPage }) => {
           }}>{l.label}</button>
         ))}
       </div>
-      <GlowButton size="sm" onClick={() => setPage(account ? 'account' : 'dashboard')} style={{ flexShrink: 0 }}>
-        {account ? 'Operator Account' : 'Launch App'}
-      </GlowButton>
+      <GlowButton size="sm" onClick={() => setPage(account ? 'dashboard' : 'account')} style={{ flexShrink: 0 }}>{account ? 'Open Desk' : 'Operator'}</GlowButton>
     </nav>
   );
 };
@@ -218,13 +211,7 @@ const Sparkline = ({ data, width = 120, height = 32, color = THEME.primary[400],
   }).join(' ');
   const areaPoints = points + ` ${width},${height} 0,${height}`;
   return (
-    <svg
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      style={{ display: 'block', maxWidth: '100%', ...style }}
-    >
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ display: 'block', maxWidth: '100%', ...style }}>
       <defs>
         <linearGradient id={`sg-${color.replace('#','')}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.3" />
@@ -264,7 +251,6 @@ const CirclePaymentModal = ({ plan, onClose, onComplete }) => {
   const [paymentRequested, setPaymentRequested] = React.useState(false);
   const [paymentError, setPaymentError] = React.useState('');
   const isMobile = useIsMobile(520);
-
   const payableWallet = walletAddr || window.DEMO_OPERATOR_WALLET || '0x7a3B4C6D8E9F1029384756aBcDEF1234567890aB';
 
   React.useEffect(() => {
@@ -276,19 +262,18 @@ const CirclePaymentModal = ({ plan, onClose, onComplete }) => {
 
   React.useEffect(() => {
     if (step !== 'done' || account || paymentPending || paymentRequested) return;
-    if (typeof window.createDemoOperatorAccount === 'function') {
-      setPaymentRequested(true);
-      setPaymentPending(true);
-      setPaymentError('');
-      window.createDemoOperatorAccount({
-        plan,
-        wallet: payableWallet,
-        txHash: window.DEMO_OPERATOR_TX || '0x3fbd4a19e88c0e2bf98d4c0f6134a946a3e22f19ea2346e8076bb4ac9f789678',
-      })
-        .then(setAccount)
-        .catch(err => setPaymentError(String(err.message || err)))
-        .finally(() => setPaymentPending(false));
-    }
+    if (typeof window.createDemoOperatorAccount !== 'function') return;
+    setPaymentRequested(true);
+    setPaymentPending(true);
+    setPaymentError('');
+    window.createDemoOperatorAccount({
+      plan,
+      wallet: payableWallet,
+      txHash: window.DEMO_OPERATOR_TX || '0x3fbd4a19e88c0e2bf98d4c0f6134a946a3e22f19ea2346e8076bb4ac9f789678',
+    })
+      .then(setAccount)
+      .catch(err => setPaymentError(String(err.message || err)))
+      .finally(() => setPaymentPending(false));
   }, [step, account, paymentPending, paymentRequested, plan, payableWallet]);
 
   return (
@@ -327,7 +312,7 @@ const CirclePaymentModal = ({ plan, onClose, onComplete }) => {
             <Badge color="primary">Arc Testnet</Badge>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', padding: '6px 10px', borderRadius: '6px', background: THEME.amber[400] + '10' }}>
-            <span style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.amber[400] }}>Test tokens only — no real value. Request {plan.usdc} USDC from faucet.circle.com.</span>
+            <span style={{ fontFamily: THEME.font.mono, fontSize: '11px', color: THEME.amber[400] }}>Test tokens only - no real value. Request {plan.usdc} USDC from faucet.circle.com.</span>
           </div>
         </div>
 
