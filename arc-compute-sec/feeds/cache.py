@@ -98,7 +98,14 @@ def put(ns: str, key: str, value: Any, ttl_seconds: float = 60.0) -> None:
     with _lock:
         _mem[(ns, key)] = (expires, encoded)
         for attempt in range(2):
-            conn = _db()
+            try:
+                conn = _db()
+            except sqlite3.DatabaseError:
+                _quarantine_db()
+                _mem[(ns, key)] = (expires, encoded)
+                if attempt == 1:
+                    return
+                continue
             try:
                 conn.execute(
                     "INSERT OR REPLACE INTO cache (ns, key, expires_at, value) VALUES (?, ?, ?, ?)",
@@ -108,8 +115,10 @@ def put(ns: str, key: str, value: Any, ttl_seconds: float = 60.0) -> None:
                 return
             except sqlite3.DatabaseError:
                 if attempt == 1:
-                    raise
+                    _mem[(ns, key)] = (expires, encoded)
+                    return
                 _quarantine_db()
+                _mem[(ns, key)] = (expires, encoded)
             finally:
                 conn.close()
 

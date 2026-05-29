@@ -713,11 +713,13 @@ def test_proposal_exposes_multiple_syndicated_instrument_types(monkeypatch):
 
     menu = proposal["outputs"]["syndicated_instrument_menu"]
 
-    assert len(menu) >= 8
+    assert len(menu) >= 10
     instrument_types = {row["instrument_type"] for row in menu}
     assert "compute_calendar_forward_hedge" in instrument_types
     assert "electricity_calendar_power_hedge" in instrument_types
     assert "compute_power_calendar_basis_note" in instrument_types
+    assert "regional_compute_capacity_basis_note" in instrument_types
+    assert "regional_power_congestion_basis_note" in instrument_types
     assert menu[0]["instrument_type"] == "miner_margin_power_pair"
     assert menu[0]["latest_signal"] == "BUY"
     assert menu[0]["status"] == "PAPER_BUY_ONLY"
@@ -929,6 +931,11 @@ def test_profitability_ledger_does_not_promote_proxy_buy_without_spread_replay(m
     regional = next(row for row in trade_map if row["archetype_id"] == "regional_compute_power_basis")
     assert regional["selected_expression"]["latest_signal"] == "BUY"
     assert regional["tradability_action"] == "WAIT_FOR_SPREAD_REPLAY"
+    menu_row = next(row for row in proposal["outputs"]["syndicated_instrument_menu"] if row["spread_archetype"] == "regional_compute_power_basis")
+    assert menu_row["latest_signal"] == "BUY"
+    assert menu_row["status"] == "WAIT_FOR_SPREAD_REPLAY"
+    assert menu_row["spread_replay_promotable"] is False
+    assert "spread replay has not cleared" in menu_row["status_reason"]
     ledger_row = next(row for row in proposal["outputs"]["spread_profitability_ledger"]["rows"] if row["archetype_id"] == "regional_compute_power_basis")
     assert ledger_row["profitability_status"] == "WAIT_FOR_SPREAD_REPLAY"
     assert ledger_row["supports_fresh_buy"] is False

@@ -1,9 +1,13 @@
 """Small stdlib HTTP API for the local operator dashboard."""
 from __future__ import annotations
 
+import gzip
 import json
 import mimetypes
 import os
+import threading
+import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -11,32 +15,177 @@ from urllib.parse import unquote, urlparse
 from services import accounts, scan_requests, state, user_portfolio
 
 
+_SNAPSHOT_RESPONSE_LOCK = threading.RLock()
+_SNAPSHOT_RESPONSE_BUILD_LOCK = threading.Lock()
+_SNAPSHOT_RESPONSE_CACHE: dict[bool, tuple[float, bytes]] = {}
+_API_METRICS_LOCK = threading.RLock()
+_API_METRICS: dict[str, object] = {
+    "started_at": time.time(),
+    "paths": {},
+}
+_RATE_LIMIT_LOCK = threading.RLock()
+_RATE_LIMITS: dict[str, deque[float]] = {}
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw in ("", None):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _record_response(path: str, status: int, byte_count: int) -> None:
+    now = time.time()
+    with _API_METRICS_LOCK:
+        paths = _API_METRICS.setdefault("paths", {})
+        assert isinstance(paths, dict)
+        row = paths.setdefault(path, {"count": 0, "bytes": 0, "last_status": 0, "last_at": 0.0})
+        assert isinstance(row, dict)
+        row["count"] = int(row.get("count") or 0) + 1
+        row["bytes"] = int(row.get("bytes") or 0) + max(0, int(byte_count))
+        row["last_status"] = int(status)
+        row["last_at"] = now
+
+
+def _api_metrics() -> dict[str, object]:
+    with _API_METRICS_LOCK:
+        started_at = float(_API_METRICS.get("started_at") or time.time())
+        paths = _API_METRICS.get("paths") if isinstance(_API_METRICS.get("paths"), dict) else {}
+        rows = []
+        for path, row in paths.items():
+            if not isinstance(row, dict):
+                continue
+            rows.append({
+                "path": path,
+                "count": int(row.get("count") or 0),
+                "bytes": int(row.get("bytes") or 0),
+                "last_status": int(row.get("last_status") or 0),
+                "last_at": float(row.get("last_at") or 0.0),
+            })
+        rows.sort(key=lambda row: (int(row["bytes"]), int(row["count"])), reverse=True)
+    return {
+        "started_at": started_at,
+        "uptime_seconds": max(0.0, time.time() - started_at),
+        "paths": rows[:12],
+    }
+
+
+def _rate_limited(path: str, *, limit: int, window_seconds: float) -> bool:
+    if limit <= 0 or window_seconds <= 0:
+        return False
+    now = time.time()
+    cutoff = now - window_seconds
+    with _RATE_LIMIT_LOCK:
+        rows = _RATE_LIMITS.setdefault(path, deque())
+        while rows and rows[0] < cutoff:
+            rows.popleft()
+        if len(rows) >= limit:
+            return True
+        rows.append(now)
+    return False
+
+
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "ArcComputeSecAPI/0.1"
+    protocol_version = "HTTP/1.0"
+
+    def setup(self) -> None:
+        super().setup()
+        timeout = _float_env("API_SOCKET_TIMEOUT_SECONDS", 5.0)
+        if timeout > 0 and hasattr(self.connection, "settimeout"):
+            self.connection.settimeout(timeout)
+
+    def handle(self) -> None:
+        self.close_connection = True
+        self.handle_one_request()
 
     def log_message(self, fmt: str, *args) -> None:
         if state.bool_env("API_ACCESS_LOG", False):
             super().log_message(fmt, *args)
 
     def _send_json(self, status: int, payload: dict | list, *, headers: dict[str, str] | None = None) -> None:
-        body = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        body = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+        compressed = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        if compressed:
+            body = gzip.compress(body)
+        self._send_json_bytes(status, body, compressed=compressed, headers=headers)
+
+    def _send_json_bytes(
+        self,
+        status: int,
+        body: bytes,
+        *,
+        compressed: bool = False,
+        headers: dict[str, str] | None = None,
+        cache_control: str = "no-store",
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("Connection", "close")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Access-Control-Allow-Origin", os.environ.get("API_CORS_ORIGIN", "*"))
         if headers:
             for key, value in headers.items():
                 self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass
+        _record_response(urlparse(self.path).path, status, len(body))
+        self.close_connection = True
+
+    def _send_snapshot(self) -> None:
+        compressed = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        cache_seconds = _float_env(
+            "API_SNAPSHOT_RESPONSE_CACHE_SECONDS",
+            _float_env("SNAPSHOT_CACHE_SECONDS", 60.0),
+        )
+        cache_control = f"public, max-age={max(1, int(cache_seconds))}, stale-while-revalidate={max(30, int(cache_seconds * 2))}"
+        if cache_seconds > 0:
+            now = time.time()
+            with _SNAPSHOT_RESPONSE_LOCK:
+                cached = _SNAPSHOT_RESPONSE_CACHE.get(compressed)
+                if cached and cached[0] > now:
+                    self._send_json_bytes(200, cached[1], compressed=compressed, cache_control=cache_control)
+                    return
+
+            _SNAPSHOT_RESPONSE_BUILD_LOCK.acquire()
+            try:
+                now = time.time()
+                with _SNAPSHOT_RESPONSE_LOCK:
+                    cached = _SNAPSHOT_RESPONSE_CACHE.get(compressed)
+                    if cached and cached[0] > now:
+                        self._send_json_bytes(200, cached[1], compressed=compressed, cache_control=cache_control)
+                        return
+
+                body = json.dumps(state.compact_snapshot(), separators=(",", ":"), default=str).encode("utf-8")
+                if compressed:
+                    body = gzip.compress(body)
+                with _SNAPSHOT_RESPONSE_LOCK:
+                    _SNAPSHOT_RESPONSE_CACHE[compressed] = (time.time() + cache_seconds, body)
+                self._send_json_bytes(200, body, compressed=compressed, cache_control=cache_control)
+                return
+            finally:
+                _SNAPSHOT_RESPONSE_BUILD_LOCK.release()
+
+        self._send_json(200, state.compact_snapshot())
 
     def _send_empty(self, status: int, *, headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
+        self.send_header("Connection", "close")
         if headers:
             for key, value in headers.items():
                 self.send_header(key, value)
         self.end_headers()
+        _record_response(urlparse(self.path).path, status, 0)
+        self.close_connection = True
 
     def _read_body_bytes(self) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
@@ -74,12 +223,23 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._send_json(200, {
                 "ok": True,
-                "mode": state.snapshot()["mode"],
+                "mode": {
+                    "live_chain_enabled": state.bool_env("ENABLE_LIVE_CHAIN", False),
+                    "telegram_enabled": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
+                },
                 "runtime": state.runtime_status(),
+                "api": _api_metrics(),
             })
             return
         if path == "/api/snapshot":
-            self._send_json(200, state.snapshot())
+            if _rate_limited(
+                path,
+                limit=int(_float_env("API_RATE_LIMIT_SNAPSHOT_PER_10S", 80.0)),
+                window_seconds=10.0,
+            ):
+                self._send_json(429, {"ok": False, "error": "rate_limited", "retry_after": 10}, headers={"Retry-After": "10"})
+                return
+            self._send_snapshot()
             return
         if path == "/api/verdicts":
             self._send_json(200, state.verdict_state())
@@ -94,6 +254,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(200, list(scan_requests.requests_by_id().values()))
             return
         if path == "/api/account":
+            if _rate_limited(
+                path,
+                limit=int(_float_env("API_RATE_LIMIT_ACCOUNT_PER_10S", 30.0)),
+                window_seconds=10.0,
+            ):
+                self._send_json(429, {"ok": False, "error": "rate_limited", "retry_after": 10}, headers={"Retry-After": "10"})
+                return
             self._send_json(200, {
                 "ok": True,
                 "account": accounts.account_from_cookie(self.headers.get("Cookie")),
@@ -101,8 +268,18 @@ class ApiHandler(BaseHTTPRequestHandler):
             })
             return
         if path == "/api/account/portfolio":
+            if _rate_limited(
+                path,
+                limit=int(_float_env("API_RATE_LIMIT_ACCOUNT_PER_10S", 30.0)),
+                window_seconds=10.0,
+            ):
+                self._send_json(429, {"ok": False, "error": "rate_limited", "retry_after": 10}, headers={"Retry-After": "10"})
+                return
             account = accounts.account_from_cookie(self.headers.get("Cookie"))
-            self._send_json(200, user_portfolio.portfolio_state(account))
+            if not account:
+                self._send_json(200, user_portfolio.portfolio_state(account, snapshot_data={"synthetic_instrument": {"outputs": {}}}))
+                return
+            self._send_json(200, user_portfolio.portfolio_state(account, snapshot_data=state.compact_snapshot()))
             return
         self._serve_static(path)
 
@@ -266,18 +443,30 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store" if target.suffix in {".html", ".jsx"} else "public, max-age=60")
+        self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass
+        _record_response(url_path, 200, len(body))
+        self.close_connection = True
+
+
+class ArcThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
 
 
 def make_server(host: str = "0.0.0.0", port: int = 8080) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), ApiHandler)
+    return ArcThreadingHTTPServer((host, port), ApiHandler)
 
 
 def main() -> int:
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("PORT") or os.environ.get("API_PORT") or "8080")
     httpd = make_server(host, port)
+    threading.Thread(target=state.warm_compact_snapshot_cache, daemon=True).start()
     print(f"[api] serving http://{host}:{port}")
     try:
         httpd.serve_forever()

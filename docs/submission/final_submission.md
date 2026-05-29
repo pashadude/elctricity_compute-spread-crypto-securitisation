@@ -132,9 +132,9 @@ What worked well:
   submits a deliverable hash, and an evaluator completes the job.
 - ERC-8004 identity/reputation gives the demo a clean audit trail beyond "we
   emitted a transaction."
-- `arc-canteen` is useful for hackathon visibility and for authenticated RPC
-  URLs. The local queue behavior is helpful when the server is temporarily
-  unreachable.
+- `arc-canteen` is useful for hackathon visibility. Its authenticated RPC proxy
+  is helpful when healthy, but projects should keep the public Arc RPC as the
+  default fallback so demos survive proxy DNS/server outages.
 
 Where Circle / Arc could improve:
 
@@ -157,6 +157,8 @@ Where Circle / Arc could improve:
   as one object.
 - Give `arc-canteen` an edit/delete command for queued updates. During a live
   hackathon, it is easy to paste too much into the interactive prompt.
+- Make the recommended RPC migration path explicit in docs: if the Canteen RPC
+  proxy is down, set `ARC_RPC`/`RPC` to `https://rpc.testnet.arc.network`.
 - Add a local deterministic simulator for the ERC-8183 lifecycle so builders
   can test create/fund/submit/complete without waiting on faucet/RPC state.
 

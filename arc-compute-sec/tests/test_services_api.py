@@ -1,3 +1,4 @@
+import gzip
 import json
 from io import BytesIO
 
@@ -78,6 +79,39 @@ def test_api_serves_health_snapshot_and_frontend(tmp_path, monkeypatch):
     assert snap["ok"] is True
     assert html == "<html>ok</html>"
     assert account_html == "<html>ok</html>"
+
+
+def test_api_gzips_json_when_requested(tmp_path, monkeypatch):
+    _serve(tmp_path, monkeypatch)
+
+    status, payload, headers = _request(
+        "GET",
+        "/api/health",
+        headers={"Accept-Encoding": "gzip"},
+        return_headers=True,
+    )
+    body = json.loads(gzip.decompress(payload))
+
+    assert status == 200
+    assert headers["content-encoding"] == "gzip"
+    assert headers["connection"] == "close"
+    assert body["ok"] is True
+
+
+def test_api_rate_limits_account_loop(tmp_path, monkeypatch):
+    _serve(tmp_path, monkeypatch)
+    monkeypatch.setenv("API_RATE_LIMIT_ACCOUNT_PER_10S", "1")
+    import services.api as api
+    api._RATE_LIMITS.clear()
+
+    first_status, _first_payload = _request("GET", "/api/account")
+    second_status, second_payload, second_headers = _request("GET", "/api/account", return_headers=True)
+    body = json.loads(second_payload)
+
+    assert first_status == 200
+    assert second_status == 429
+    assert body["error"] == "rate_limited"
+    assert second_headers["retry-after"] == "10"
 
 
 def test_api_enqueues_dry_run_scan_and_blocks_live_when_disabled(tmp_path, monkeypatch):

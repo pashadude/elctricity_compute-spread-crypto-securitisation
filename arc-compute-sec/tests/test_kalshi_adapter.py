@@ -68,6 +68,19 @@ def test_fetch_ai_events_does_not_match_short_terms_across_words(monkeypatch):
     assert kalshi.fetch_ai_events(max_events=4) == []
 
 
+def test_fetch_ai_events_forwards_timeout(monkeypatch):
+    seen = {}
+
+    def fake_fetch_events(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(kalshi, "fetch_events", fake_fetch_events)
+
+    assert kalshi.fetch_ai_events(timeout=1.25) == []
+    assert seen["timeout"] == 1.25
+
+
 def test_paper_fill_is_read_only_snapshot():
     fill = kalshi.paper_fill(
         "kalshi:KXOPENAI-26",

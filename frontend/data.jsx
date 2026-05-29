@@ -25,6 +25,8 @@ const FORM_LABELS = {
   compute_power_calendar_basis: 'Compute-power calendar basis',
   electricity_calendar_spread: 'Electricity calendar spread',
   compute_calendar_spread: 'Compute calendar spread',
+  regional_compute_basis: 'Regional compute basis',
+  regional_power_basis: 'Regional power basis',
   locational_power_compute_basis: 'Locational power/compute basis',
   grid_event_hazard_spread: 'Grid-event hazard spread',
   miner_margin_power_pair: 'Miner-margin power pair',
@@ -36,6 +38,8 @@ const DEFAULT_SPREAD_FORMS = [
   { id: 'compute_power_calendar_basis', name: 'Compute-power calendar basis', desc: 'Front compute tenor versus forward power tenor' },
   { id: 'electricity_calendar_spread', name: 'Electricity calendar spread', desc: 'Prompt power scarcity versus later delivery' },
   { id: 'compute_calendar_spread', name: 'Compute calendar spread', desc: 'Prompt GPU-hour price versus forward compute' },
+  { id: 'regional_compute_basis', name: 'Regional compute basis', desc: 'Region A GPU rental versus Region B GPU rental' },
+  { id: 'regional_power_basis', name: 'Regional power basis', desc: 'Region A power price versus Region B power price' },
   { id: 'locational_power_compute_basis', name: 'Locational basis', desc: 'Regional compute capacity versus grid hub pricing' },
   { id: 'grid_event_hazard_spread', name: 'Grid-event hazard', desc: 'Scarcity, outage, and siting-event exposure' },
   { id: 'miner_margin_power_pair', name: 'Miner-margin pair', desc: 'Proof-of-work revenue beta versus electricity cost' },
@@ -43,8 +47,45 @@ const DEFAULT_SPREAD_FORMS = [
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const num = (value, fallback = 0) => {
+  if (value === null || value === undefined || value === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const prettyLabel = (value, fallback = 'unknown') => String(value || fallback)
+  .replace(/[_-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const sourceLabel = (value) => {
+  const low = String(value || '').toLowerCase();
+  if (low === 'yahoo_finance_chart') return 'Yahoo public quote';
+  if (low === 'yahoo_close_history') return 'Yahoo replay history';
+  if (low === 'ibkr_energy_history_csv') return 'IBKR paper CSV';
+  if (low === 'ibkr_tws_front_future') return 'IBKR TWS future';
+  if (low === 'ibkr_tws_stock') return 'IBKR TWS stock';
+  if (low === 'ibkr_forecast_inventory') return 'IBKR ForecastTrader inventory';
+  if (low === 'polymarket_direct_watchlist') return 'Polymarket Gamma';
+  if (low === 'kalshi_direct_ai_watchlist') return 'Kalshi public API';
+  if (low === 'alpaca_market_data') return 'Alpaca market data';
+  return value || '';
+};
+
+const surfaceIcon = (surface) => ({
+  polymarket: 'PM',
+  ibkr_prediction: 'IB',
+  ibkr: 'IB',
+  kalshi: 'K',
+  crypto: 'C',
+  public_market: '$',
+  mock_contract: 'MC',
+}[String(surface || '').toLowerCase()] || 'S');
+
+const formatEventDate = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
 const readPath = (obj, path, fallback) => {
@@ -59,15 +100,26 @@ const readPath = (obj, path, fallback) => {
 const formName = (id) => FORM_LABELS[id] || DEFAULT_SPREAD_FORMS.find(f => f.id === id)?.name || id || 'Spread';
 
 const apiJson = async (path, options = {}) => {
-  const resp = await fetch(path, {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
-  const body = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
-  return body;
+  const timeoutMs = Number(options.timeoutMs || 12000);
+  const controller = options.signal ? null : new AbortController();
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const resp = await fetch(path, {
+      credentials: 'same-origin',
+      cache: options.cache || (path === '/api/snapshot' ? 'default' : 'no-store'),
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      ...options,
+      signal: options.signal || controller?.signal,
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+    return body;
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new Error(`HTTP timeout reading ${path}`);
+    throw err;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 };
 
 const noteSignalFromBackend = (note) => {
@@ -177,8 +229,86 @@ const normalizeSpread = (snapshot, notes) => {
   };
 };
 
+const normalizeIndexRows = (rows, kind) => normalizeArray(rows).map((row, idx) => ({
+  ...row,
+  id: row.id || row.archetype_id || row.family_id || `${kind}-${idx}`,
+  label: row.label || row.name || formName(row.archetype_id || row.id) || `${kind} index`,
+  status: row.status || row.evidence_level || 'planned',
+  family: row.family || '',
+  tradeability: row.tradeability || '',
+  tradeabilityLabel: row.tradeability_label || '',
+  copyRole: row.copy_role || '',
+  canMarkToMarket: Boolean(row.can_mark_to_market),
+  canBeDirectLeg: Boolean(row.can_be_direct_leg),
+  requiresPremiumGate: Boolean(row.requires_premium_gate),
+  requiresJudge: Boolean(row.requires_judge),
+  role: row.role || row.formula || row.oil_analogy || row.venue || row.source || '',
+  source: row.source || row.venue || row.provider || '',
+  description: row.description || row.desc || row.trade_rule || row.formula || '',
+}));
+
+const normalizeDirectInventory = (rows) => normalizeArray(rows).map(row => ({
+  ...row,
+  surface: row.surface || '',
+  instrument: row.instrument || '',
+  slug: row.leg_slug || row.slug || row.instrument || '',
+  displayName: row.leg_title || row.display_label || row.title || row.instrument || 'research leg',
+  description: row.leg_description || row.description || '',
+  directPairRole: row.direct_pair_role || row.pair_role || row.leg_role || row.role || '',
+  direction: row.direction || '',
+  pricingStatus: row.pricing_status || row.label || '',
+  pricingStatusLabel: row.pricing_status_label || row.external_proxy_status_label || row.pricing_status || row.label || 'watchlist',
+  endDate: row.leg_end_date || row.end_date || row.endDate || '',
+  externalProxySymbol: row.external_proxy_symbol || '',
+  externalProxyTitle: row.external_proxy_title || '',
+  externalProxyLastPrice: row.external_proxy_last_price === '' || row.external_proxy_last_price === undefined ? null : num(row.external_proxy_last_price, null),
+  externalProxySource: row.external_proxy_source || '',
+  externalProxyStale: Boolean(row.external_proxy_stale),
+  externalProxyRole: row.external_proxy_role || '',
+  externalProxyRegularMarketTime: row.external_proxy_regular_market_time || '',
+  connection: row.leg_connection || '',
+}));
+
+const normalizeProfitabilityRows = (rows) => normalizeArray(rows).map(row => ({
+  ...row,
+  id: row.archetype_id || row.basket_id || row.label || '',
+  label: row.label || formName(row.archetype_id),
+  status: row.profitability_status || row.tradability_action || 'MONITOR',
+  action: row.latest_signal || row.current_action || 'MONITOR',
+  replayStatus: row.spread_replay_status || '',
+  oosStatus: row.oos_status || row.spread_oos_status || '',
+  paper5d: num(row.paper_5d_return_pct, 0),
+  paper1m: num(row.paper_1m_return_pct, 0),
+  paperTotal: num(row.paper_total_return_pct, 0),
+  latestPnl: row.latest_paper_pnl_usdc === '' || row.latest_paper_pnl_usdc === undefined ? null : num(row.latest_paper_pnl_usdc, 0),
+  ticketPnl: row.paper_trade_total_pnl_usdc === '' || row.paper_trade_total_pnl_usdc === undefined ? null : num(row.paper_trade_total_pnl_usdc, 0),
+  winRate: num(row.paper_win_rate || row.spread_replay_win_rate, 0),
+  reason: row.signal_reason || row.current_action_reason || row.reason || '',
+  pricedSymbols: normalizeArray(row.priced_symbols),
+  missingSymbols: normalizeArray(row.missing_symbols),
+  supportsFreshBuy: Boolean(row.supports_fresh_buy),
+  requiresClose: Boolean(row.requires_close_or_avoid),
+}));
+
+const normalizePnl = (snapshot) => {
+  const pnl = snapshot?.pnl || {};
+  return {
+    ...pnl,
+    hasReconciled: Boolean(pnl.has_reconciled),
+    statusLabel: pnl.status_label || (pnl.has_reconciled ? 'Settled PnL' : 'No settled PnL'),
+    totalDisplay: pnl.display_total || fmtSigned(pnl.total || 0, 4),
+    tradesDisplay: pnl.display_trades || `${pnl.trades || 0} settled`,
+    paperTicketTotalDisplay: pnl.paper_ticket_total_pnl_usdc === '' || pnl.paper_ticket_total_pnl_usdc === undefined
+      ? 'No paper tickets'
+      : fmtSigned(pnl.paper_ticket_total_pnl_usdc),
+  };
+};
+
 const normalizeIndexCatalog = (snapshot) => {
   const rows = normalizeArray(readPath(snapshot, ['synthetic_instrument', 'outputs', 'spread_archetype_trade_map'], []));
+  const spreadFamilies = snapshot?.spread_families || {};
+  const rawCatalog = spreadFamilies.index_catalog || {};
+  const profitabilityLedger = snapshot?.profitability_ledger || readPath(snapshot, ['synthetic_instrument', 'outputs', 'spread_profitability_ledger'], {});
   const spreadForms = rows.length
     ? rows.map(row => ({
         id: row.archetype_id,
@@ -186,6 +316,10 @@ const normalizeIndexCatalog = (snapshot) => {
         desc: row.formula || row.oil_analogy || row.tradability_reason || '',
         headline: row.rank === 1 || row.tradability_action === 'PAPER_BUY_ONLY',
         status: row.tradability_action || 'MONITOR',
+        oilAnalogy: row.oil_analogy || '',
+        replayStatus: row.replay_status || '',
+        tradabilityReason: row.tradability_reason || '',
+        selectedExpression: row.selected_expression || {},
       }))
     : DEFAULT_SPREAD_FORMS;
   const publicHedges = normalizeArray(snapshot?.public_hedges).map(row => ({
@@ -202,7 +336,118 @@ const normalizeIndexCatalog = (snapshot) => {
     value: row.pricing_status || row.label || 'watch',
     changePct: 0,
   })).filter(row => row.sym);
-  return { spreadForms, publicHedges, direct };
+  return {
+    spreadForms,
+    publicHedges,
+    direct,
+    electricityIndexes: normalizeIndexRows(rawCatalog.electricity, 'electricity'),
+    computeIndexes: normalizeIndexRows(rawCatalog.compute, 'compute'),
+    spreadArchetypes: normalizeIndexRows(rawCatalog.spread_archetypes || spreadFamilies.archetype_scoreboard, 'spread'),
+    archetypeScoreboard: normalizeIndexRows(spreadFamilies.archetype_scoreboard, 'spread-score'),
+    coverage: spreadFamilies.index_coverage || null,
+    tradeMap: rows,
+    profitabilityLedger,
+    profitabilityRows: normalizeProfitabilityRows(profitabilityLedger.rows),
+    venueCopyMatrix: readPath(snapshot, ['synthetic_instrument', 'outputs', 'real_venue_copy_matrix'], {}),
+  };
+};
+
+const emptyDashboardData = () => {
+  const indexCatalog = normalizeIndexCatalog({});
+  return {
+    connection: { status: 'loading' },
+    syntheticInstrument: null,
+    directInventory: [],
+    publicHedges: [],
+    indexCatalog,
+    spreadFamilies: {
+      families: [],
+      archetypeScoreboard: [],
+      indexCoverage: null,
+      indexCatalog: {
+        electricity: indexCatalog.electricityIndexes,
+        compute: indexCatalog.computeIndexes,
+        spread_archetypes: indexCatalog.spreadArchetypes,
+      },
+      entryGatePass: false,
+    },
+    proxyBaskets: { baskets: [], entryGatePass: false },
+    venueEvidence: { rows: [] },
+    oracleResults: {},
+    goalCoverage: { overall_status: 'NEEDS_WORK', overall_score: 0, items: [], summary: '' },
+    telegramCampaign: { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 },
+    telegramMiniappRelease: { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 },
+    pnl: normalizePnl({ pnl: {} }),
+    spread: { elec: '0.00', compute: '0.0000', st: '0.0000', source: '', baseElec: null, proxyMovePct: null, powerSharePct: null },
+    z: 0,
+    direction: 'no_signal',
+    verdicts: [],
+    positions: [],
+    candidates: [],
+  };
+};
+
+const mapSnapshotToDashboardData = (snapshot) => {
+  const spreadLatest = readPath(snapshot, ['spread', 'latest'], {});
+  const signalLatest = readPath(snapshot, ['signal', 'latest'], {});
+  const elec = num(spreadLatest.electricity_per_mwh, 0);
+  const compute = num(spreadLatest.compute_per_gpu_hr, 0);
+  const st = num(spreadLatest.S_t, compute - num(spreadLatest.power_cost_per_gpu_hr, 0));
+  const directInventory = normalizeDirectInventory(snapshot?.direct_inventory);
+  const proxyBaskets = snapshot?.proxy_baskets || {};
+  const indexCatalog = normalizeIndexCatalog(snapshot);
+  return {
+    connection: { status: snapshot?.ok === false ? 'offline' : 'live', generatedAt: snapshot?.generated_at || null },
+    syntheticInstrument: snapshot?.synthetic_instrument || null,
+    directInventory,
+    publicHedges: normalizeArray(snapshot?.public_hedges),
+    indexCatalog,
+    spreadFamilies: {
+      ...(snapshot?.spread_families || {}),
+      families: normalizeArray(snapshot?.spread_families?.families),
+      archetypeScoreboard: normalizeArray(snapshot?.spread_families?.archetype_scoreboard),
+      indexCoverage: snapshot?.spread_families?.index_coverage || null,
+      indexCatalog: {
+        ...(snapshot?.spread_families?.index_catalog || {}),
+        electricity: normalizeArray(snapshot?.spread_families?.index_catalog?.electricity).length
+          ? normalizeIndexRows(snapshot?.spread_families?.index_catalog?.electricity, 'electricity')
+          : indexCatalog.electricityIndexes,
+        compute: normalizeArray(snapshot?.spread_families?.index_catalog?.compute).length
+          ? normalizeIndexRows(snapshot?.spread_families?.index_catalog?.compute, 'compute')
+          : indexCatalog.computeIndexes,
+        spread_archetypes: normalizeArray(snapshot?.spread_families?.index_catalog?.spread_archetypes).length
+          ? normalizeIndexRows(snapshot?.spread_families?.index_catalog?.spread_archetypes, 'spread')
+          : indexCatalog.spreadArchetypes,
+      },
+      entryGatePass: Boolean(snapshot?.spread_families?.entry_gate_pass),
+      primarySource: snapshot?.spread_families?.primary_source || '',
+    },
+    proxyBaskets: {
+      ...proxyBaskets,
+      baskets: normalizeArray(proxyBaskets.baskets),
+      entryGatePass: Boolean(proxyBaskets.entry_gate_pass),
+    },
+    venueEvidence: snapshot?.venue_evidence || { rows: [] },
+    oracleResults: snapshot?.oracle || {},
+    goalCoverage: snapshot?.goal_coverage || { overall_status: 'NEEDS_WORK', overall_score: 0, items: [], summary: '' },
+    telegramCampaign: snapshot?.telegram_campaign || { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 },
+    telegramMiniappRelease: snapshot?.telegram_miniapp_release || { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 },
+    pnl: normalizePnl(snapshot),
+    spread: {
+      elec: elec.toFixed(2),
+      compute: compute.toFixed(4),
+      st: st.toFixed(4),
+      source: spreadLatest.electricity_source || spreadLatest.compute_source || '',
+      baseElec: spreadLatest.electricity_base_per_mwh === '' || spreadLatest.electricity_base_per_mwh === undefined ? null : num(spreadLatest.electricity_base_per_mwh, null),
+      proxyMovePct: spreadLatest.electricity_proxy_weighted_return_pct === '' || spreadLatest.electricity_proxy_weighted_return_pct === undefined ? null : num(spreadLatest.electricity_proxy_weighted_return_pct, null),
+      powerSharePct: spreadLatest.power_cost_share_pct === '' || spreadLatest.power_cost_share_pct === undefined ? null : num(spreadLatest.power_cost_share_pct, null),
+    },
+    z: num(signalLatest.z, 0),
+    direction: signalLatest.direction || 'no_signal',
+    verdicts: normalizeArray(snapshot?.verdicts),
+    positions: normalizeArray(snapshot?.positions),
+    candidates: directInventory,
+  };
 };
 
 function usePowerDeskData(refreshRate) {
@@ -218,18 +463,27 @@ function usePowerDeskData(refreshRate) {
     spread: { k: 0.5, kwh: 0.7, history: [1, 1], latest: {}, signal: {} },
     stats: { mean: 1, std: 0.001, cur: 1, z: 0, regime: 'NEUTRAL', electricity: 0, compute: 0 },
     indexCatalog: { spreadForms: DEFAULT_SPREAD_FORMS, publicHedges: [], direct: [] },
+    goalCoverage: { overall_status: 'NEEDS_WORK', overall_score: 0, items: [], summary: '' },
     refreshedAt: null,
   });
 
   const refresh = React.useCallback(async () => {
+    if (document.visibilityState === 'hidden') return;
     try {
-      const [snapshot, accountBody, portfolio] = await Promise.all([
+      const [snapshot, accountBody] = await Promise.all([
         apiJson('/api/snapshot'),
         apiJson('/api/account'),
-        apiJson('/api/account/portfolio'),
       ]);
       const account = accountBody.account || null;
       if (typeof emitOperatorAccount === 'function') emitOperatorAccount(account, accountBody.mode);
+      let portfolio = null;
+      if (account) {
+        try {
+          portfolio = await apiJson('/api/account/portfolio', { timeoutMs: 5000 });
+        } catch (_portfolioErr) {
+          portfolio = null;
+        }
+      }
       const notes = normalizeNotes(portfolio, snapshot);
       const marks = buildMarks(notes);
       const spreadState = normalizeSpread(snapshot, notes);
@@ -245,6 +499,7 @@ function usePowerDeskData(refreshRate) {
         spread: spreadState.spread,
         stats: spreadState.stats,
         indexCatalog: normalizeIndexCatalog(snapshot),
+        goalCoverage: snapshot?.goal_coverage || { overall_status: 'NEEDS_WORK', overall_score: 0, items: [], summary: '' },
         refreshedAt: new Date().toISOString(),
       });
     } catch (err) {
@@ -254,8 +509,15 @@ function usePowerDeskData(refreshRate) {
 
   React.useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, Math.max(2000, Number(refreshRate || 5000)));
-    return () => clearInterval(iv);
+    const iv = setInterval(refresh, Math.max(10000, Number(refreshRate || 10000)));
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refresh, refreshRate]);
 
   React.useEffect(() => {
@@ -280,6 +542,9 @@ const closePaperPosition = async ({ positionId }) => apiJson('/api/account/portf
 Object.assign(window, {
   fmtUsd, fmtSigned, fmtPct, fmtNav,
   SIGNAL_META, REGIME_META, DEFAULT_SPREAD_FORMS,
-  formName, apiJson, normalizeNotes, usePowerDeskData,
+  formName, prettyLabel, sourceLabel, surfaceIcon, formatEventDate,
+  apiJson, normalizeNotes, normalizeIndexCatalog, normalizeDirectInventory,
+  normalizeProfitabilityRows, emptyDashboardData, mapSnapshotToDashboardData,
+  usePowerDeskData,
   openPaperPosition, closePaperPosition,
 });

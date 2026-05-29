@@ -91,6 +91,90 @@ def test_telegram_campaign_state_reads_sent_keys_without_message_bodies(tmp_path
     assert "must-not-leak" not in json.dumps(campaign)
 
 
+def test_telegram_miniapp_release_state_reads_sent_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    (tmp_path / "telegram_sent.jsonl").write_text(
+        "\n".join([
+            json.dumps({"ts": 1, "key": "channel-miniapp-release:v1:home", "text": "must-not-leak"}),
+            json.dumps({"ts": 2, "key": "channel-miniapp-release:v1:contract"}),
+        ])
+    )
+
+    release = state.telegram_miniapp_release_state()
+
+    assert release["version"] == "telegram_miniapp_release_state_v1"
+    assert release["channel_configured"] is True
+    assert release["total_posts"] == 5
+    assert release["posted_count"] == 2
+    assert release["pending_count"] == 3
+    assert release["posts"][0]["status"] == "POSTED"
+    assert release["posts"][2]["status"] == "READY_TO_POST"
+    assert release["post_command"] == "npm run telegram:miniapp-release-post"
+    assert "must-not-leak" not in json.dumps(release)
+
+
+def test_goal_coverage_summarizes_product_goal_without_secret_text():
+    coverage = state.goal_coverage_state(
+        spread_families={
+            "index_coverage": {
+                "summary": "5/12 electricity indexes usable, 4/15 compute indexes usable, 10/10 spread forms replayed.",
+                "electricity": {
+                    "usable": 5,
+                    "total": 12,
+                    "family_counts": {"physical_power": 5, "fuel_stack": 2},
+                    "tradeability_counts": {"live_mark": 1, "priced_proxy": 4},
+                },
+                "compute": {
+                    "usable": 4,
+                    "total": 15,
+                    "family_counts": {"gpu_rental": 5, "miner_margin": 2},
+                    "tradeability_counts": {"live_mark": 1, "direct_event_watchlist": 3},
+                },
+                "spread_archetypes": {"total": 10, "replayed": 10, "oos_passed": 3},
+            }
+        },
+        synthetic_instrument={
+            "outputs": {
+                "syndicated_instrument_menu": [{"title": f"note-{i}"} for i in range(5)],
+                "spread_archetype_trade_map": [
+                    {"is_promotable": True, "oos_status": "PASSED"},
+                    {"is_promotable": True},
+                ],
+                "direct_event_pair_candidates": {"ready_for_judge_count": 1, "total_count": 3},
+            }
+        },
+        profitability_ledger={
+            "realized_note": "Replay is paper-only.",
+            "rows": [
+                {"paper_total_return_pct": 4.2, "profitability_status": "PAPER_BUY"},
+                {"latest_mark_pnl_usdc": 2.0, "profitability_status": "CLOSE_OR_AVOID"},
+            ],
+        },
+        portfolio_signal={"action": "CLOSE_OR_AVOID", "rows": [{"id": "row"}]},
+        venue_evidence={
+            "guardrail": "judge before Arc",
+            "summary": {"direct_event_surfaces": 3, "priced_surfaces": 2, "real_feed_surfaces": 4},
+            "rows": [{}, {}, {}],
+        },
+        oracle_evidence={"current_desk_row_count": 2},
+        telegram_campaign={"posted_count": 4, "total_posts": 4},
+        telegram_miniapp_release={"posted_count": 5, "total_posts": 5},
+        pnl={"paper_buy_count": 1, "paper_latest_mark_pnl_usdc": 12.3, "mark_to_market_note": "paper only"},
+    )
+
+    assert coverage["version"] == "goal_coverage_v1"
+    assert coverage["overall_status"] == "READY"
+    assert coverage["items"][0]["id"] == "indexes_spreads"
+    assert coverage["items"][2]["status"] == "READY"
+    assert coverage["requirements"][0]["id"] == "req_1_indexes_spreads"
+    assert coverage["requirements"][0]["status"] == "READY"
+    assert coverage["requirements"][2]["status"] == "READY"
+    assert "5 syndicated instruments" in coverage["summary"]
+    assert "judge.classify() returns EXECUTE" in coverage["guardrail"]
+    assert "secret" not in json.dumps(coverage).lower()
+
+
 def test_snapshot_includes_spread_family_replay_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
     rows = []
@@ -465,6 +549,45 @@ def test_snapshot_exposes_real_venue_evidence_matrix(tmp_path, monkeypatch):
     assert oracle_output["oracle_evidence_hash"]
 
 
+def test_oracle_evidence_prefers_compute_power_receipts_for_current_desk(tmp_path):
+    (tmp_path / "energy_llm_oracle.jsonl").write_text(
+        "\n".join([
+            json.dumps({
+                "ts": "2026-05-23T20:48:43+00:00",
+                "slug": "ai-data-center-moratorium-passed-before-2027",
+                "event_slug": "ai-data-center-moratorium-passed-before-2027",
+                "energy_template_id": "energy_ai_infra",
+                "analyst_model": "deepseek-ai/DeepSeek-V3.2",
+                "verdict": "DEFER",
+                "reason_code": "no_opoint_evidence",
+                "coverage": {"raw": 50, "after_filter": 0},
+                "query": {"label": "data_center_power_policy"},
+            }),
+            json.dumps({
+                "ts": "2026-05-24T20:48:43+00:00",
+                "slug": "will-80-or-more-ships-transit-the-strait-of-hormuz-between-april-13-april-19",
+                "event_slug": "how-many-ships-transit-the-strait-of-hormuz-this-week-apr-13-19",
+                "energy_template_id": "energy_geopolitics",
+                "analyst_model": "deepseek-ai/DeepSeek-V3.2",
+                "verdict": "VETO",
+                "reason_code": "analyst_veto",
+                "coverage": {"raw": 20, "after_filter": 4},
+                "query": {"label": "hormuz_transit"},
+            }),
+        ]) + "\n"
+    )
+
+    oracle_state = state._oracle_evidence_state(logs=tmp_path)
+
+    assert oracle_state["row_count"] == 2
+    assert oracle_state["current_desk_row_count"] == 1
+    assert oracle_state["latest_scope"] == "compute_power"
+    assert oracle_state["latest_query_label"] == "data_center_power_policy"
+    assert oracle_state["latest_slug"] == "ai-data-center-moratorium-passed-before-2027"
+    assert oracle_state["latest_pricing_status"] == "DEFER"
+    assert oracle_state["verdict_counts"] == {"DEFER": 1, "VETO": 1}
+
+
 def test_public_quote_uses_configured_source_order(monkeypatch):
     state.cache.clear("public_quote")
     monkeypatch.setenv("PUBLIC_HEDGE_PRICE_SOURCES", "alpaca,yahoo")
@@ -513,6 +636,36 @@ def test_public_quote_can_use_call_site_source_order(monkeypatch):
     assert quote["price"] == 96.5
     assert quote["source"] == "ibkr_tws_front_future"
     assert quote["source_priority"] == "ibkr,yahoo"
+
+
+def test_ibkr_public_quote_skips_container_localhost(monkeypatch):
+    monkeypatch.delenv("IBKR_HOST", raising=False)
+    monkeypatch.setattr(state, "_running_in_docker", lambda: True)
+
+    quote = state._fetch_ibkr_public_quote("NVDA")
+
+    assert quote["price"] is None
+    assert quote["source"] == "ibkr_tws"
+    assert quote["error"] == "ibkr_host_points_to_container"
+    assert "host.docker.internal" in quote["action"]
+
+
+def test_ibkr_public_quote_fast_skips_unreachable_socket(monkeypatch):
+    monkeypatch.setenv("IBKR_HOST", "host.docker.internal")
+    monkeypatch.setenv("IBKR_GATEWAY_PORT", "4002")
+    monkeypatch.setattr(state, "_running_in_docker", lambda: False)
+    monkeypatch.setattr(
+        state.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("closed")),
+    )
+
+    quote = state._fetch_ibkr_public_quote("NVDA")
+
+    assert quote["price"] is None
+    assert quote["source"] == "ibkr_tws"
+    assert quote["error"] == "ibkr_tws_unreachable"
+    assert "host.docker.internal:4002" in quote["action"]
 
 
 def test_snapshot_enriches_polymarket_leg_identity_from_cache(tmp_path, monkeypatch):
@@ -594,6 +747,10 @@ def test_snapshot_marks_mock_polymarket_rows(tmp_path, monkeypatch):
 
 def test_snapshot_marks_legacy_artifacts(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("PROXY_BASKET_BACKTEST_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
     _write_tsv(tmp_path / "positions.tsv", [{
         "ts": "1",
         "stage": "funded",
@@ -660,6 +817,10 @@ def test_snapshot_hides_thesis_mismatched_prediction_rows(tmp_path, monkeypatch)
 
 def test_snapshot_labels_ibkr_prediction_as_direct_event(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("PROXY_BASKET_BACKTEST_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
     _write_tsv(tmp_path / "judgements.tsv", [{
         "ts": "2",
         "surface": "ibkr_prediction",
@@ -892,6 +1053,10 @@ def test_snapshot_marks_stale_ibkr_energy_history_proxy(tmp_path, monkeypatch):
 
 def test_snapshot_rolls_up_repeated_rejects_and_groups_package(tmp_path, monkeypatch):
     monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("PROXY_BASKET_BACKTEST_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
     _write_tsv(tmp_path / "judgements.tsv", [
         {
             "ts": "10",
@@ -935,6 +1100,43 @@ def test_snapshot_rolls_up_repeated_rejects_and_groups_package(tmp_path, monkeyp
     assert snap["packages"][0]["direct_leg_count"] == 1
     assert snap["packages"][0]["repeat_count"] == 2
     assert snap["packages"][0]["direct_blocked_summary"] == "2 direct event scan rows blocked by premium_gate_fail"
+
+
+def test_compact_snapshot_removes_duplicate_replay_blobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECT_EVENT_INVENTORY_ENABLED", "0")
+    monkeypatch.setenv("PUBLIC_HEDGE_FETCH", "0")
+    monkeypatch.setenv("PROXY_BASKET_BACKTEST_FETCH", "0")
+    monkeypatch.setenv("IBKR_FORECAST_PROXY_QUOTE_FETCH", "0")
+
+    snap = state.compact_snapshot(logs=tmp_path)
+
+    outputs = snap["synthetic_instrument"]["outputs"]
+    assert "spread_family_validation" not in outputs
+    assert "proxy_basket_validation" not in outputs
+    assert "recorded_history_replay" not in snap["spread_families"]
+    assert "proxy_history_replay" not in snap["spread_families"]
+
+
+def test_direct_inventory_degrades_when_one_surface_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARC_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(state, "_ibkr_inventory_rows", lambda logs=None: [{
+        "surface": "ibkr_prediction",
+        "instrument": "ibkr-prediction:RETXC",
+        "leg_title": "Texas electricity generation revenue",
+        "leg_description": "ERCOT power sales event contract.",
+    }])
+    monkeypatch.setattr(state, "_polymarket_inventory_rows", lambda: [{
+        "surface": "polymarket",
+        "instrument": "polymarket:ai-grid",
+        "leg_title": "AI data center grid stress",
+        "leg_description": "Direct power grid stress event.",
+    }])
+    monkeypatch.setattr(state, "_kalshi_inventory_rows", lambda: (_ for _ in ()).throw(RuntimeError("cache unavailable")))
+
+    rows = state.direct_inventory_state(logs=tmp_path)
+
+    assert {row["surface"] for row in rows} == {"ibkr_prediction", "polymarket"}
 
 
 def test_snapshot_package_reason_prefers_execute_leg_over_rejected_direct_leg(tmp_path, monkeypatch):

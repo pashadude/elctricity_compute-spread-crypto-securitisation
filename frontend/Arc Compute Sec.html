@@ -62,7 +62,7 @@
 
   <script type="text/babel">
     const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-      "refreshRate": 2000
+      "refreshRate": 10000
     }/*EDITMODE-END*/;
 
     const pathToPage = () => {
@@ -150,9 +150,9 @@
                 label="Data Refresh Rate"
                 value={tweaks.refreshRate}
                 onChange={v => setTweak('refreshRate', v)}
-                min={500}
-                max={10000}
-                step={500}
+                min={5000}
+                max={30000}
+                step={1000}
                 format={v => `${(v / 1000).toFixed(1)}s`}
               />
             </TweakSection>

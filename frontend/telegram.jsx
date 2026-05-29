@@ -6,6 +6,7 @@ const TG_THEME = {
   red: '#EF4444', orange: '#F59E0B', text: '#FFFFFF',
   secondary: '#A1B5AB', tertiary: '#6B8578',
   accent: '#00DC82', accentBg: '#00DC8215',
+  border: '#1E2D25', mono: 'SF Mono, ui-monospace, monospace',
 };
 
 const TG_BOT_URL = 'https://t.me/BotozenPowerBot';
@@ -177,7 +178,98 @@ const TgWebLinks = () => {
   );
 };
 
-const TG_SCREEN_IDS = new Set(['home', 'dashboard', 'scouting', 'alerts', 'billing', 'scan']);
+const TgMiniWalkthrough = ({ setScreen, account }) => (
+  <div style={{
+    background: TG_THEME.surface,
+    borderRadius: '12px',
+    padding: '14px 16px',
+    marginBottom: '16px',
+  }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+      <div>
+        <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          Mini App walkthrough
+        </div>
+        <div style={{ fontSize: '12px', color: TG_THEME.secondary, marginTop: '2px', lineHeight: 1.35 }}>
+          Same product as the web desk, compressed for Telegram.
+        </div>
+      </div>
+      <TgBadge color={TG_THEME.green}>NEW</TgBadge>
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '7px', marginBottom: '10px' }}>
+      {[
+        ['1', 'Read signal', 'dashboard'],
+        ['2', account ? 'Open ticket' : 'Create account', account ? 'dashboard' : 'billing'],
+        ['3', 'Track PnL', account ? 'portfolio' : 'billing'],
+        ['4', 'Check venues', 'scouting'],
+      ].map(([step, label, screen]) => (
+        <button key={step} type="button" onClick={() => setScreen(screen)} style={{
+          background: TG_THEME.elevated,
+          border: `1px solid ${TG_THEME.border}`,
+          borderRadius: '8px',
+          padding: '9px 8px',
+          textAlign: 'left',
+          cursor: 'pointer',
+        }}>
+          <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono }}>step {step}</div>
+          <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 800, marginTop: '2px' }}>{label}</div>
+        </button>
+      ))}
+    </div>
+    <button type="button" onClick={() => setScreen('updates')} style={{
+      width: '100%',
+      padding: '11px 12px',
+      borderRadius: '9px',
+      border: 'none',
+      background: TG_THEME.green,
+      color: '#000',
+      fontSize: '13px',
+      fontWeight: 800,
+      cursor: 'pointer',
+    }}>
+      View What Changed
+    </button>
+  </div>
+);
+
+const TG_SCREEN_IDS = new Set(['home', 'dashboard', 'portfolio', 'scouting', 'alerts', 'billing', 'scan', 'updates']);
+const TG_RELEASE_STORY = [
+  {
+    label: 'Home / user path',
+    file: 'miniapp-home.png',
+    desc: 'Status, notional, Circle ask, Operator setup, and the four-step flow.',
+    screen: 'home',
+    color: TG_THEME.green,
+  },
+  {
+    label: 'Mock contract',
+    file: 'miniapp-contract.png',
+    desc: 'Spread metrics, weighted legs, buy/monitor/sell recommendation, and judge gate.',
+    screen: 'dashboard',
+    color: TG_THEME.orange,
+  },
+  {
+    label: 'Portfolio ledger',
+    file: 'miniapp-portfolio.png',
+    desc: 'Server-side account, wallet label, open tickets, realized ledger, and net paper PnL.',
+    screen: 'portfolio',
+    color: TG_THEME.green,
+  },
+  {
+    label: 'Profitability ledger',
+    file: 'profitability.png',
+    desc: 'Paper ticket replay, latest mark PnL, OOS state, and buy/avoid labels.',
+    screen: 'dashboard',
+    color: TG_THEME.blue,
+  },
+  {
+    label: 'Venue scouting',
+    file: 'venue-copy.png',
+    desc: 'IBKR, Polymarket, Kalshi, public quotes, crypto, and Opoint/Nebius roles.',
+    screen: 'scouting',
+    color: TG_THEME.blue,
+  },
+];
 
 const useTgScreenRouter = () => {
   const [history, setHistory] = React.useState(() => {
@@ -204,22 +296,88 @@ const useTelegramBackendData = () => {
   React.useEffect(() => {
     let cancelled = false;
     const load = async () => {
+      if (document.visibilityState === 'hidden') return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
       try {
-        const resp = await fetch('/api/snapshot', { cache: 'no-store' });
+        const resp = await fetch('/api/snapshot', { cache: 'default', signal: controller.signal });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const snapshot = await resp.json();
         if (!cancelled) {
           setData(window.mapSnapshotToDashboardData ? window.mapSnapshotToDashboardData(snapshot) : data);
         }
       } catch (err) {
-        if (!cancelled) setData(prev => ({ ...prev, connection: { status: 'offline', error: String(err.message || err) } }));
+        if (!cancelled) {
+          const message = err?.name === 'AbortError' ? 'HTTP timeout reading /api/snapshot' : String(err.message || err);
+          setData(prev => ({ ...prev, connection: { status: 'offline', error: message } }));
+        }
+      } finally {
+        clearTimeout(timeout);
       }
     };
     load();
-    const t = setInterval(load, 3000);
-    return () => { cancelled = true; clearInterval(t); };
+    const t = setInterval(load, 10000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
   return data;
+};
+
+const useTelegramAccountData = () => {
+  const [state, setState] = React.useState({
+    loading: true,
+    error: '',
+    account: window.readDemoOperatorAccount?.() || null,
+    portfolio: null,
+  });
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const account = window.refreshOperatorAccount
+        ? await window.refreshOperatorAccount()
+        : (window.readDemoOperatorAccount?.() || null);
+      setState(prev => ({ ...prev, loading: false, error: '', account: account || null }));
+      if (!account || !window.refreshAccountPortfolio) {
+        setState(prev => ({ ...prev, portfolio: null }));
+        return;
+      }
+      try {
+        const portfolio = await window.refreshAccountPortfolio();
+        setState(prev => ({ ...prev, loading: false, error: '', account: account || null, portfolio: portfolio || null }));
+      } catch (portfolioErr) {
+        setState(prev => ({ ...prev, loading: false, error: '', account: account || null, portfolio: prev.portfolio || null }));
+      }
+    } catch (err) {
+      setState(prev => ({ ...prev, loading: false, error: String(err.message || err) }));
+    }
+  }, []);
+
+  React.useEffect(() => {
+    refresh();
+    const t = setInterval(() => {
+      if (document.visibilityState !== 'hidden') refresh();
+    }, 15000);
+    const onAccount = () => refresh();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('botozen:account', onAccount);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('botozen:account', onAccount);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refresh]);
+
+  return { ...state, refresh };
 };
 
 const requestBackendScan = async () => {
@@ -239,19 +397,35 @@ const tgWeightedLegs = (data) => tgMockConstruction(data).weighted_legs || [];
 const tgSpreadFamilies = (data) => data.spreadFamilies?.families || [];
 const tgSpreadArchetypes = (data) => data.spreadFamilies?.archetypeScoreboard || [];
 const tgIndexCoverage = (data) => data.spreadFamilies?.indexCoverage || null;
+const tgIndexCatalog = (data) => data.spreadFamilies?.indexCatalog || data.indexCatalog || null;
 const tgProxyBaskets = (data) => data.proxyBaskets?.baskets || [];
 const tgInstrumentMenu = (data) => data.syntheticInstrument?.outputs?.syndicated_instrument_menu || [];
 const tgSpreadTradeMap = (data) => data.syntheticInstrument?.outputs?.spread_archetype_trade_map || [];
-const tgProfitabilityLedger = (data) => data.syntheticInstrument?.outputs?.spread_profitability_ledger || null;
+const tgProfitabilityLedger = (data) => data.syntheticInstrument?.outputs?.spread_profitability_ledger
+  || data.indexCatalog?.profitabilityLedger
+  || { realized_note: 'Waiting for backend profitability rows.', rows: [] };
 const tgPortfolioSignal = (data) => data.syntheticInstrument?.outputs?.portfolio_signal_summary || null;
 const tgVenueCopyMatrix = (data) => data.syntheticInstrument?.outputs?.real_venue_copy_matrix || {};
 const tgDirectEventPairs = (data) => data.syntheticInstrument?.outputs?.direct_event_pair_candidates || {};
 const tgVenueEvidence = (data) => data.venueEvidence?.rows || [];
 const tgOracleEvidence = (data) => data.oracleResults || {};
+const tgGoalCoverage = (data) => data.goalCoverage || { overall_status: 'NEEDS_WORK', overall_score: 0, items: [] };
 const tgCampaign = (data) => data.telegramCampaign || { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 };
+const tgMiniappRelease = (data) => data.telegramMiniappRelease || { posts: [], posted_count: 0, total_posts: 0, pending_count: 0 };
 const tgUsdc = (value, fallback = 'Pending') => {
   const n = Number(value || 0);
   return n > 0 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : fallback;
+};
+const tgMoney = (value, digits = 2) => {
+  const n = Number(value || 0);
+  return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+};
+const tgBestBuyableInstrument = (portfolio) => {
+  const instruments = portfolio?.instruments || [];
+  return instruments.find(item => item.supportsFreshBuy)
+    || instruments.find(item => item.signal === 'ENTER')
+    || instruments[0]
+    || null;
 };
 const tgCanOpen = (construction) => {
   const score = Number(construction.entry_signal_score ?? construction.profitability_score ?? 0);
@@ -267,7 +441,7 @@ const tgWeightLabel = (leg) => `${leg.side || 'hold'} ${leg.slug || leg.symbol |
 
 /* ── Mini App Screens ── */
 
-const TgHome = ({ setScreen, data, requestScan }) => {
+const TgHome = ({ setScreen, data, accountData, requestScan }) => {
   const construction = tgMockConstruction(data);
   const searchCount = tgSearchPlan(data).length + (data.directInventory?.length || 0);
   const recommendation = tgRecommendation(construction);
@@ -275,6 +449,13 @@ const TgHome = ({ setScreen, data, requestScan }) => {
   const recommendationParts = String(recommendation || 'Monitor').split(':');
   const recommendationHeadline = recommendationParts[0] || 'Monitor';
   const recommendationHint = recommendationParts.slice(1).join(':').trim();
+  const account = accountData?.account || null;
+  const summary = accountData?.portfolio?.summary || {};
+  const openCount = Number(summary.openCount || 0);
+  const netPnl = Number(summary.netPnlUsdc || 0);
+  const goalCoverage = tgGoalCoverage(data);
+  const coverageItems = (goalCoverage.items || []).slice(0, 5);
+  const requirementItems = (goalCoverage.requirements || []).slice(0, 5);
   return (
   <TgScreen title="Botozen Power" subtitle="Compute/Energy Spread Desk">
     <div style={{ padding: '16px' }}>
@@ -319,6 +500,78 @@ const TgHome = ({ setScreen, data, requestScan }) => {
         </div>
       </div>
 
+      <TgMiniWalkthrough setScreen={setScreen} account={account} />
+
+      {coverageItems.length > 0 && (
+        <div style={{
+          background: TG_THEME.surface,
+          borderRadius: '12px',
+          padding: '14px 16px',
+          marginBottom: '16px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+            <div>
+              <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                Goal coverage
+              </div>
+              <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '2px' }}>
+                {goalCoverage.summary || 'Backend readiness telemetry.'}
+              </div>
+            </div>
+            <TgBadge color={goalCoverage.overall_status === 'READY' ? TG_THEME.green : TG_THEME.orange}>
+              {Math.round(Number(goalCoverage.overall_score || 0))}%
+            </TgBadge>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
+            {(requirementItems.length ? requirementItems : coverageItems).map(item => (
+              <div key={item.id} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 800, overflowWrap: 'anywhere' }}>{item.label}</div>
+                    <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.3, marginTop: '2px' }}>
+                      {item.metric || `${Number(item.score || 0).toFixed(0)}% proven`}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: item.status === 'READY' ? TG_THEME.green : TG_THEME.orange, fontWeight: 800, textAlign: 'right' }}>
+                    {String(item.status || '').replaceAll('_', ' ')}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{
+        background: TG_THEME.surface,
+        borderRadius: '12px',
+        padding: '14px 16px',
+        marginBottom: '16px',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', marginBottom: '8px' }}>
+          <div>
+            <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Account</div>
+            <div style={{ fontSize: '13px', color: TG_THEME.secondary, marginTop: '2px' }}>
+              {account ? `${account.id} · ${openCount} open tickets` : 'No signed Operator workspace'}
+            </div>
+          </div>
+          <TgBadge color={account ? TG_THEME.green : TG_THEME.orange}>{account ? 'ACTIVE' : 'SETUP'}</TgBadge>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+            <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>Net paper PnL</div>
+            <div style={{ fontSize: '14px', color: netPnl < 0 ? TG_THEME.red : TG_THEME.green, fontFamily: TG_THEME.mono, fontWeight: 800 }}>{tgMoney(netPnl)}</div>
+          </div>
+          <button onClick={() => setScreen(account ? 'portfolio' : 'billing')} style={{
+            background: account ? TG_THEME.green : TG_THEME.orange,
+            color: '#000', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
+            cursor: 'pointer',
+          }}>
+            {account ? 'Open Portfolio' : 'Create Account'}
+          </button>
+        </div>
+      </div>
+
       <div style={{
         background: TG_THEME.surface,
         borderRadius: '12px',
@@ -360,7 +613,9 @@ const TgHome = ({ setScreen, data, requestScan }) => {
     {/* Menu */}
     <div style={{ background: TG_THEME.surface, borderRadius: '12px', margin: '0 16px 16px' }}>
       <TgListItem icon="▦" title="Mock Contract" subtitle="Buy / monitor / sell live-priced basket" accent={TG_THEME.green} onClick={() => setScreen('dashboard')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
+      <TgListItem icon="$" title="My Portfolio" subtitle={account ? 'Server-side account PnL and paper tickets' : 'Create account before saving tickets'} accent={TG_THEME.green} onClick={() => setScreen(account ? 'portfolio' : 'billing')} trailing={<TgBadge color={account ? TG_THEME.green : TG_THEME.orange}>{account ? `${openCount}` : 'setup'}</TgBadge>} />
       <TgListItem icon="⌕" title="Agent Scouting" subtitle="IBKR, Polymarket, Opoint/Nebius research" accent={TG_THEME.blue} onClick={() => setScreen('scouting')} trailing={<TgBadge color={TG_THEME.blue}>{searchCount}</TgBadge>} />
+      <TgListItem icon="★" title="What Changed" subtitle="Mini App release notes and screenshot map" accent={TG_THEME.orange} onClick={() => setScreen('updates')} trailing={<TgBadge color={TG_THEME.orange}>new</TgBadge>} />
       <TgListItem icon="!" title="Alerts" subtitle="Sparse product and runtime updates" accent={TG_THEME.orange} onClick={() => setScreen('alerts')} trailing={<span style={{ color: TG_THEME.secondary }}>›</span>} />
       <TgListItem icon="$" title="Subscription" subtitle="Operator plan · 5 test USDC" accent={TG_THEME.green} onClick={() => setScreen('billing')} trailing={<TgBadge color={TG_THEME.green}>$5</TgBadge>} />
     </div>
@@ -386,9 +641,42 @@ const TgHome = ({ setScreen, data, requestScan }) => {
   );
 };
 
-const TgDashboard = ({ setScreen, goBack, data }) => {
+const TgDashboard = ({ setScreen, goBack, data, accountData }) => {
   const weightedLegs = tgWeightedLegs(data);
   const searchPlan = tgSearchPlan(data);
+  const construction = tgMockConstruction(data);
+  const account = accountData?.account || null;
+  const portfolio = accountData?.portfolio || null;
+  const buyable = tgBestBuyableInstrument(portfolio);
+  const summary = portfolio?.summary || {};
+  const indexCatalog = tgIndexCatalog(data);
+  const profitabilityLedger = tgProfitabilityLedger(data);
+  const [ticketBusy, setTicketBusy] = React.useState(false);
+  const [ticketError, setTicketError] = React.useState('');
+  const [ticketDone, setTicketDone] = React.useState('');
+  const openMiniTicket = async () => {
+    if (!account) {
+      setScreen('billing');
+      return;
+    }
+    if (!buyable?.id) {
+      setTicketError('No backend instrument is currently available for a paper ticket.');
+      return;
+    }
+    setTicketBusy(true);
+    setTicketError('');
+    setTicketDone('');
+    try {
+      const notional = Math.max(50, Number(buyable.circleAskUsdc || construction.circle_testnet_usdc_request || 500));
+      await window.openPaperPosition?.({ instrumentId: buyable.id, notionalUsdc: notional });
+      await accountData?.refresh?.();
+      setTicketDone(`Opened ${buyable.name || buyable.id}`);
+    } catch (err) {
+      setTicketError(String(err.message || err));
+    } finally {
+      setTicketBusy(false);
+    }
+  };
   return (
   <TgScreen title="Mock Contract" subtitle="Live-priced demo" onBack={goBack}>
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -452,7 +740,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
             </div>
           </div>
         )}
-        {data.spreadFamilies?.indexCatalog && (
+        {indexCatalog && (
           <div style={{ marginTop: '12px' }}>
             <div style={{ fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700, marginBottom: '6px' }}>Index catalog</div>
             {tgIndexCoverage(data)?.summary && (
@@ -475,9 +763,9 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
               </div>
             )}
             {[
-              ['Electricity', data.spreadFamilies.indexCatalog.electricity || []],
-              ['Compute', data.spreadFamilies.indexCatalog.compute || []],
-              ['Spread forms', data.spreadFamilies.indexCatalog.spread_archetypes || []],
+              ['Electricity', indexCatalog.electricity || indexCatalog.electricityIndexes || []],
+              ['Compute', indexCatalog.compute || indexCatalog.computeIndexes || []],
+              ['Spread forms', indexCatalog.spread_archetypes || indexCatalog.spreadArchetypes || []],
             ].map(([label, rows]) => (
               <div key={label} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px', marginBottom: '6px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '5px' }}>
@@ -583,6 +871,59 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
         )}
       </div>
 
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+          <div>
+            <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Account ticket</div>
+            <div style={{ fontSize: '12px', color: TG_THEME.secondary, marginTop: '2px' }}>
+              {account ? `${account.id} · ${summary.openCount || 0} open` : 'Sign in before a ticket can be saved'}
+            </div>
+          </div>
+          <TgBadge color={account ? TG_THEME.green : TG_THEME.orange}>{account ? 'SERVER' : 'NO ACCOUNT'}</TgBadge>
+        </div>
+        <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', marginBottom: '10px' }}>
+          <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>
+            {buyable?.name || 'No syndicated note available yet'}
+          </div>
+          <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '3px' }}>
+            {buyable ? `${buyable.latestSignal || buyable.signal || 'MONITOR'} · ${buyable.profitabilityStatus || buyable.status || 'watch'} · ask ${tgUsdc(buyable.circleAskUsdc, 'not sized')} test USDC` : 'Run a scan or wait for the backend instrument menu.'}
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+          <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+            <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>Unrealized</div>
+            <div style={{ fontSize: '13px', color: Number(summary.unrealizedPnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green, fontFamily: TG_THEME.mono, fontWeight: 800 }}>{tgMoney(summary.unrealizedPnlUsdc || 0)}</div>
+          </div>
+          <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px' }}>
+            <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>Realized</div>
+            <div style={{ fontSize: '13px', color: Number(summary.realizedPnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green, fontFamily: TG_THEME.mono, fontWeight: 800 }}>{tgMoney(summary.realizedPnlUsdc || 0)}</div>
+          </div>
+        </div>
+        {ticketError && <div style={{ fontSize: '11px', color: TG_THEME.red, lineHeight: 1.35, marginBottom: '8px' }}>{ticketError}</div>}
+        {ticketDone && <div style={{ fontSize: '11px', color: TG_THEME.green, lineHeight: 1.35, marginBottom: '8px' }}>{ticketDone}</div>}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          <button onClick={openMiniTicket} disabled={ticketBusy || !buyable} style={{
+            padding: '12px', borderRadius: '9px', border: 'none',
+            background: account ? TG_THEME.green : TG_THEME.orange,
+            color: '#000', fontSize: '13px', fontWeight: 800,
+            cursor: ticketBusy || !buyable ? 'wait' : 'pointer',
+            opacity: ticketBusy || !buyable ? 0.65 : 1,
+          }}>
+            {account ? (ticketBusy ? 'Opening...' : 'Open Paper Ticket') : 'Create Account'}
+          </button>
+          <button onClick={() => setScreen('portfolio')} style={{
+            padding: '12px', borderRadius: '9px', border: `1px solid ${TG_THEME.separator}`,
+            background: TG_THEME.elevated, color: TG_THEME.text, fontSize: '13px', fontWeight: 800,
+            cursor: 'pointer',
+          }}>
+            Portfolio
+          </button>
+        </div>
+        <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginTop: '8px' }}>
+          This saves a paper ticket to the backend account ledger. It is not an IBKR, Polymarket, Circle, or Arc order.
+        </div>
+      </div>
+
       {tgInstrumentMenu(data).length > 0 && (
         <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
@@ -658,7 +999,7 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
         </div>
       )}
 
-      {tgProfitabilityLedger(data)?.rows?.length > 0 && (
+      {profitabilityLedger && (
         <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
             <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
@@ -667,14 +1008,14 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
             <TgBadge color={TG_THEME.orange}>PAPER PNL</TgBadge>
           </div>
           <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.35, marginBottom: '8px' }}>
-            {tgProfitabilityLedger(data).realized_note}
-            {tgProfitabilityLedger(data).paper_notional_usdc
-              ? ` Paper notional $${Number(tgProfitabilityLedger(data).paper_notional_usdc).toLocaleString()}.`
+            {profitabilityLedger.realized_note}
+            {profitabilityLedger.paper_notional_usdc
+              ? ` Paper notional $${Number(profitabilityLedger.paper_notional_usdc).toLocaleString()}.`
               : ''}
             {' First mark is the entry baseline; $0 there is expected.'}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {tgProfitabilityLedger(data).rows.slice(0, 4).map(row => {
+            {(profitabilityLedger.rows || []).length ? profitabilityLedger.rows.slice(0, 4).map(row => {
               const status = row.profitability_status || 'MONITOR';
               const color = status === 'PAPER_BUY'
                 ? TG_THEME.green
@@ -752,7 +1093,11 @@ const TgDashboard = ({ setScreen, goBack, data }) => {
                   </div>
                 </div>
               );
-            })}
+            }) : (
+              <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35 }}>
+                Waiting for spread replay and paper-ticket rows from the backend. The panel stays visible so users know where profitability will appear.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1059,14 +1404,54 @@ const TgScouting = ({ setScreen, goBack, data }) => {
   const venueRows = tgVenueEvidence(data);
   const venueCopy = tgVenueCopyMatrix(data);
   const venueCopyRows = venueCopy.rows || [];
+  const indexCoverage = tgIndexCoverage(data) || {};
+  const indexCatalog = tgIndexCatalog(data) || {};
+  const electricityIndexes = indexCatalog.electricity || [];
+  const computeIndexes = indexCatalog.compute || [];
   const oracle = tgOracleEvidence(data);
   const verdictCounts = oracle.verdict_counts || {};
   const verdictText = Object.entries(verdictCounts).map(([k, v]) => `${k}:${v}`).join(' · ') || 'none';
+  const familyLine = (counts) => Object.entries(counts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([k, v]) => `${String(k).replaceAll('_', ' ')} ${v}`)
+    .join(' · ');
+  const tradeabilityLine = (counts) => Object.entries(counts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([k, v]) => `${String(k).replaceAll('_', ' ')} ${v}`)
+    .join(' · ');
   return (
   <TgScreen title="Agent Scouting" subtitle="Research only" onBack={goBack}>
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div style={{ background: TG_THEME.surface, borderRadius: '10px', padding: '14px', fontSize: '13px', color: TG_THEME.secondary, lineHeight: 1.45 }}>
         These rows are not the contract. The agent uses Opoint/Nebius, IBKR ForecastTrader, and Polymarket to find legs that are actually driven by the compute/energy spread. Public channel posts stay quiet until the mock contract changes or an operator action is needed.
+      </div>
+      <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+          <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            Index universe
+          </div>
+          <TgBadge color={TG_THEME.green}>
+            {(indexCoverage.spread_archetypes?.replayed || 0)}/{(indexCoverage.spread_archetypes?.total || 0)} replayed
+          </TgBadge>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+          {[
+            ['Power', `${indexCoverage.electricity?.usable || 0}/${indexCoverage.electricity?.total || electricityIndexes.length}`, familyLine(indexCoverage.electricity?.family_counts), tradeabilityLine(indexCoverage.electricity?.tradeability_counts)],
+            ['Compute', `${indexCoverage.compute?.usable || 0}/${indexCoverage.compute?.total || computeIndexes.length}`, familyLine(indexCoverage.compute?.family_counts), tradeabilityLine(indexCoverage.compute?.tradeability_counts)],
+          ].map(([label, value, detail, tradeability]) => (
+            <div key={label} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px', minWidth: 0 }}>
+              <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>{label} indexes</div>
+              <div style={{ fontSize: '15px', color: TG_THEME.text, fontWeight: 800, fontFamily: 'SF Mono, monospace' }}>{value}</div>
+              <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.3, marginTop: '3px', overflowWrap: 'anywhere' }}>{detail || 'families pending'}</div>
+              <div style={{ fontSize: '10px', color: TG_THEME.tertiary, lineHeight: 1.3, marginTop: '4px', overflowWrap: 'anywhere' }}>{tradeability || 'tradeability pending'}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35 }}>
+          Registered rows include physical power marks, fuel-stack proxies, GPU rental marks, direct-event watchlists, public equities, and miner-margin proxies. Planned rows are shown as research gaps, not tradable marks.
+        </div>
       </div>
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '14px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
@@ -1080,6 +1465,9 @@ const TgScouting = ({ setScreen, goBack, data }) => {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
           {[
             ['Receipts', oracle.row_count || 0],
+            ['Desk receipts', oracle.current_desk_row_count || 0],
+            ['Scope', String(oracle.latest_scope || 'none').replaceAll('_', ' ')],
+            ['Query', String(oracle.latest_query_label || 'none').replaceAll('_', ' ')],
             ['Verdicts', verdictText],
             ['Articles', `${oracle.filtered_articles || 0}/${oracle.raw_articles || 0}`],
             ['Reason', oracle.latest_reason_code || 'none'],
@@ -1091,7 +1479,7 @@ const TgScouting = ({ setScreen, goBack, data }) => {
           ))}
         </div>
         <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '8px' }}>
-          Evidence only: Opoint/Nebius can support or criticize a leg, but Arc stays locked until scorer and judge gates clear.
+          Evidence only: Opoint/Nebius can support or criticize a leg, but Arc stays locked until scorer and judge gates clear. Compute/power receipts are preferred over generic energy receipts on this desk.
         </div>
       </div>
       <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
@@ -1203,6 +1591,203 @@ const TgScouting = ({ setScreen, goBack, data }) => {
       </div>
     </div>
   </TgScreen>
+  );
+};
+
+const TgUpdates = ({ setScreen, goBack, data, accountData }) => {
+  const account = accountData?.account || null;
+  const menuCount = tgInstrumentMenu(data).length;
+  const ledgerRows = tgProfitabilityLedger(data)?.rows || [];
+  const venueRows = tgVenueCopyMatrix(data)?.rows || [];
+  const releaseState = tgMiniappRelease(data);
+  const releasePosted = Number(releaseState.posted_count || 0);
+  const releaseTotal = Number(releaseState.total_posts || TG_RELEASE_STORY.length);
+  const updates = [
+    {
+      title: 'Account-backed Mini App',
+      desc: account
+        ? 'Operator account is active. Paper tickets and PnL refresh from the backend ledger.'
+        : 'Create Operator once; then tickets and PnL are restored by signed backend session.',
+      status: account ? 'ACTIVE' : 'SETUP',
+      color: account ? TG_THEME.green : TG_THEME.orange,
+      screen: account ? 'portfolio' : 'billing',
+    },
+    {
+      title: 'Mock contract actions',
+      desc: 'Mock Contract now owns the user path: read signal, open paper ticket, monitor marks, close from Portfolio.',
+      status: 'LIVE',
+      color: TG_THEME.green,
+      screen: 'dashboard',
+    },
+    {
+      title: 'Syndicated spread menu',
+      desc: `${menuCount || 'No'} structures are wired to oil-style spread replay, public proxy marks, and judge-gated Arc language.`,
+      status: menuCount ? `${menuCount}` : 'WAIT',
+      color: menuCount ? TG_THEME.green : TG_THEME.orange,
+      screen: 'dashboard',
+    },
+    {
+      title: 'Profitability discipline',
+      desc: `${ledgerRows.length || 'No'} ledger rows separate paper-ticket PnL from settled venue PnL, so users know what is mock-traded.`,
+      status: ledgerRows.length ? `${ledgerRows.length}` : 'WAIT',
+      color: ledgerRows.length ? TG_THEME.green : TG_THEME.orange,
+      screen: 'dashboard',
+    },
+    {
+      title: 'Scouting stays separate',
+      desc: `${venueRows.length || 'No'} venue-copy rows explain IBKR, Polymarket, Kalshi, Opoint/Nebius, and public quote roles without channel reject spam.`,
+      status: venueRows.length ? `${venueRows.length}` : 'RESEARCH',
+      color: TG_THEME.blue,
+      screen: 'scouting',
+    },
+  ];
+  return (
+    <TgScreen title="What's New" subtitle="Release notes" onBack={goBack}>
+      <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', marginBottom: '8px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Telegram product layer</div>
+              <div style={{ fontSize: '18px', color: TG_THEME.text, fontWeight: 850, lineHeight: 1.2, marginTop: '5px' }}>
+                Mini App is now the user trading surface
+              </div>
+            </div>
+            <TgBadge color={TG_THEME.green}>SCREENSHOT READY</TgBadge>
+          </div>
+          <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.45 }}>
+            Channel posts now pair short release notes with actual Mini App screenshots. Each post explains one new product section, what the user can do there, and what stays paper-only or judge-gated.
+          </div>
+        </div>
+
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+            <div>
+              <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Channel screenshot deck</div>
+              <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '2px' }}>
+                Public posts are sparse: product changes, screenshots, and operator-relevant context only.
+              </div>
+            </div>
+            <TgBadge color={releasePosted === releaseTotal && releaseTotal > 0 ? TG_THEME.green : TG_THEME.orange}>
+              {releasePosted}/{releaseTotal}
+            </TgBadge>
+          </div>
+          <div style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '8px', marginBottom: '9px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.text, fontWeight: 800 }}>
+                {String(releaseState.status || 'READY_TO_POST').replaceAll('_', ' ')}
+              </div>
+              <div style={{ fontSize: '9px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono }}>
+                {releaseState.post_command || 'npm run telegram:miniapp-release-post'}
+              </div>
+            </div>
+            <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '3px' }}>
+              Status is read from sent post keys only. Bot tokens and message bodies are never exposed to the Mini App.
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '7px' }}>
+            {TG_RELEASE_STORY.map(item => (
+              <button key={item.file} type="button" onClick={() => setScreen(item.screen)} style={{
+                width: '100%',
+                display: 'grid',
+                gridTemplateColumns: '34px minmax(0, 1fr)',
+                gap: '9px',
+                alignItems: 'center',
+                textAlign: 'left',
+                background: TG_THEME.elevated,
+                border: `1px solid ${TG_THEME.border}`,
+                borderRadius: '9px',
+                padding: '9px',
+                cursor: 'pointer',
+              }}>
+                <div style={{
+                  width: 34, height: 34, borderRadius: '8px',
+                  background: item.color + '20',
+                  color: item.color,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '16px',
+                  fontWeight: 900,
+                }}>
+                  ◼
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '7px', alignItems: 'baseline' }}>
+                    <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 800, overflowWrap: 'anywhere' }}>{item.label}</div>
+                    <div style={{ fontSize: '9px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, whiteSpace: 'nowrap' }}>{item.file}</div>
+                  </div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '2px', overflowWrap: 'anywhere' }}>{item.desc}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+          <a
+            href={TG_CHANNEL_URL}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              minHeight: '38px',
+              marginTop: '10px',
+              borderRadius: '9px',
+              background: TG_THEME.green,
+              color: '#000',
+              fontSize: '13px',
+              fontWeight: 800,
+              textDecoration: 'none',
+            }}
+          >
+            Open Channel
+          </a>
+        </div>
+
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+          {updates.map((item, i) => (
+            <button key={item.title} type="button" onClick={() => setScreen(item.screen)} style={{
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              borderTop: i ? `0.5px solid ${TG_THEME.separator}` : 'none',
+              padding: '12px 16px',
+              textAlign: 'left',
+              cursor: 'pointer',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 800, overflowWrap: 'anywhere' }}>{item.title}</div>
+                  <div style={{ fontSize: '11px', color: TG_THEME.secondary, lineHeight: 1.4, marginTop: '3px', overflowWrap: 'anywhere' }}>{item.desc}</div>
+                </div>
+                <TgBadge color={item.color}>{item.status}</TgBadge>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '10px' }}>Screenshot map</div>
+          {[
+            { label: 'Release notes', file: 'miniapp-updates.png', desc: 'This screen, used for the compact Mini App update post.' },
+            ...TG_RELEASE_STORY,
+            { label: 'Index/spread menu', file: 'indexes-spreads.png', desc: 'Electricity and compute indexes plus oil-style spread forms.' },
+          ].map(({ label, file, desc }) => (
+            <div key={file} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 118px', gap: '8px', alignItems: 'center', padding: '7px 0', borderTop: `1px solid ${TG_THEME.border}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 750 }}>{label}</div>
+                <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '2px' }}>{desc}</div>
+              </div>
+              <div style={{ fontSize: '9px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, textAlign: 'right', overflowWrap: 'anywhere' }}>{file}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          <button onClick={() => setScreen('dashboard')} style={{ padding: '13px', borderRadius: '10px', border: 'none', background: TG_THEME.green, color: '#000', fontSize: '13px', fontWeight: 800 }}>Mock Contract</button>
+          <button onClick={() => setScreen('scouting')} style={{ padding: '13px', borderRadius: '10px', border: `1px solid ${TG_THEME.separator}`, background: TG_THEME.elevated, color: TG_THEME.text, fontSize: '13px', fontWeight: 800 }}>Scouting</button>
+        </div>
+      </div>
+    </TgScreen>
   );
 };
 
@@ -1338,6 +1923,158 @@ const TgBilling = ({ setScreen, goBack }) => {
   );
 };
 
+const TgPortfolio = ({ setScreen, goBack, accountData }) => {
+  const account = accountData?.account || null;
+  const portfolio = accountData?.portfolio || null;
+  const summary = portfolio?.summary || {};
+  const positions = portfolio?.positions || [];
+  const realized = portfolio?.realized || [];
+  const instruments = portfolio?.instruments || [];
+  const best = tgBestBuyableInstrument(portfolio);
+  const [closing, setClosing] = React.useState('');
+  const [error, setError] = React.useState('');
+
+  const closePosition = async (positionId) => {
+    setClosing(positionId);
+    setError('');
+    try {
+      await window.closePaperPosition?.({ positionId });
+      await accountData?.refresh?.();
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setClosing('');
+    }
+  };
+
+  const openWebAccount = () => {
+    const url = `${window.location.origin}/account`;
+    if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url);
+    else window.location.href = '/account';
+  };
+
+  if (!account) {
+    return (
+      <TgScreen title="My Portfolio" subtitle="Account required" onBack={goBack}>
+        <div style={{ padding: '16px' }}>
+          <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px', marginBottom: '12px' }}>
+            <TgBadge color={TG_THEME.orange}>NO ACCOUNT</TgBadge>
+            <div style={{ fontSize: '18px', color: TG_THEME.text, fontWeight: 800, marginTop: '12px', lineHeight: 1.25 }}>
+              Create Operator before saving paper tickets
+            </div>
+            <div style={{ fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.45, marginTop: '8px' }}>
+              The Mini App no longer uses browser-only mock state. Positions and PnL are stored server-side under a signed session cookie and payer wallet.
+            </div>
+          </div>
+          <button onClick={() => setScreen('billing')} style={{
+            width: '100%', padding: '14px', borderRadius: '10px', border: 'none',
+            background: TG_THEME.green, color: '#000', fontSize: '15px', fontWeight: 800,
+          }}>Create Operator Account</button>
+        </div>
+      </TgScreen>
+    );
+  }
+
+  return (
+    <TgScreen title="My Portfolio" subtitle="Server-side paper ledger" onBack={goBack}>
+      <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', marginBottom: '10px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Operator account</div>
+              <div style={{ fontSize: '12px', color: TG_THEME.secondary, fontFamily: TG_THEME.mono, overflowWrap: 'anywhere', marginTop: '3px' }}>{account.id}</div>
+            </div>
+            <TgBadge color={TG_THEME.green}>ACTIVE</TgBadge>
+          </div>
+          <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, overflowWrap: 'anywhere' }}>
+            wallet {account.walletAddress || 'not set'}
+          </div>
+        </div>
+
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ fontSize: '11px', color: TG_THEME.green, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '10px' }}>PnL</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {[
+              ['Open notional', `$${Number(summary.openNotionalUsdc || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, TG_THEME.text],
+              ['Unrealized', tgMoney(summary.unrealizedPnlUsdc || 0), Number(summary.unrealizedPnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green],
+              ['Realized', tgMoney(summary.realizedPnlUsdc || 0), Number(summary.realizedPnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green],
+              ['Net', tgMoney(summary.netPnlUsdc || 0), Number(summary.netPnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green],
+            ].map(([label, value, color]) => (
+              <div key={label} style={{ background: TG_THEME.elevated, borderRadius: '8px', padding: '9px' }}>
+                <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>{label}</div>
+                <div style={{ fontSize: '14px', color, fontFamily: TG_THEME.mono, fontWeight: 800, marginTop: '2px' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: '10px', color: TG_THEME.secondary, lineHeight: 1.35, marginTop: '9px' }}>
+            Paper PnL is current backend NAV minus entry NAV. It is not settled venue PnL or Arc escrow PnL.
+          </div>
+        </div>
+
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            Open positions
+          </div>
+          {positions.length ? positions.map(pos => (
+            <div key={pos.positionId} style={{ padding: '12px 16px', borderTop: `0.5px solid ${TG_THEME.separator}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', color: TG_THEME.text, fontWeight: 700, overflowWrap: 'anywhere' }}>{pos.noteName}</div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.tertiary, fontFamily: TG_THEME.mono, marginTop: '2px' }}>
+                    {pos.positionId} · entry {Number(pos.entryMark || 0).toFixed(4)} / mark {Number(pos.currentMark || 0).toFixed(4)}
+                  </div>
+                  <div style={{ fontSize: '10px', color: TG_THEME.secondary, marginTop: '3px' }}>
+                    {Number(pos.notionalUsdc || 0).toLocaleString()} test USDC · {Number(pos.returnPct || 0).toFixed(2)}%
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: '13px', color: Number(pos.unrealizedPnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green, fontFamily: TG_THEME.mono, fontWeight: 800 }}>
+                    {tgMoney(pos.unrealizedPnlUsdc || 0)}
+                  </div>
+                  <button onClick={() => closePosition(pos.positionId)} disabled={closing === pos.positionId} style={{
+                    marginTop: '6px', padding: '6px 9px', borderRadius: '7px', border: `1px solid ${TG_THEME.separator}`,
+                    background: TG_THEME.elevated, color: TG_THEME.text, fontSize: '11px', fontWeight: 700,
+                  }}>{closing === pos.positionId ? 'Closing' : 'Close'}</button>
+                </div>
+              </div>
+            </div>
+          )) : (
+            <div style={{ padding: '14px 16px', fontSize: '12px', color: TG_THEME.secondary, lineHeight: 1.45 }}>
+              No open paper positions yet. The current buyable note is {best?.name || 'waiting for backend promotion'}.
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: TG_THEME.surface, borderRadius: '12px', overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', fontSize: '11px', color: TG_THEME.secondary, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            Realized ledger
+          </div>
+          {realized.length ? realized.slice(0, 5).map(row => (
+            <div key={row.positionId} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 74px', gap: '8px', padding: '10px 16px', borderTop: `0.5px solid ${TG_THEME.separator}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '12px', color: TG_THEME.text, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.noteName}</div>
+                <div style={{ fontSize: '10px', color: TG_THEME.tertiary }}>{Number(row.retPct || 0).toFixed(2)}% · {Number(row.notionalUsdc || 0).toLocaleString()} test USDC</div>
+              </div>
+              <div style={{ fontSize: '12px', color: Number(row.pnlUsdc || 0) < 0 ? TG_THEME.red : TG_THEME.green, fontFamily: TG_THEME.mono, fontWeight: 800, textAlign: 'right' }}>{tgMoney(row.pnlUsdc || 0)}</div>
+            </div>
+          )) : (
+            <div style={{ padding: '14px 16px', fontSize: '12px', color: TG_THEME.secondary }}>
+              No closed paper tickets yet.
+            </div>
+          )}
+        </div>
+
+        {error && <div style={{ fontSize: '12px', color: TG_THEME.red }}>{error}</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          <button onClick={() => setScreen('dashboard')} style={{ padding: '13px', borderRadius: '10px', border: 'none', background: TG_THEME.green, color: '#000', fontSize: '13px', fontWeight: 800 }}>Mock Contract</button>
+          <button onClick={openWebAccount} style={{ padding: '13px', borderRadius: '10px', border: `1px solid ${TG_THEME.separator}`, background: TG_THEME.elevated, color: TG_THEME.text, fontSize: '13px', fontWeight: 800 }}>Web Account</button>
+        </div>
+      </div>
+    </TgScreen>
+  );
+};
+
 const TgScanRunning = ({ setScreen, goBack }) => {
   const [step, setStep] = React.useState(0);
   const [queued, setQueued] = React.useState('');
@@ -1403,13 +2140,14 @@ const TgScanRunning = ({ setScreen, goBack }) => {
 const TelegramPage = () => {
   const { screen, setScreen, goBack } = useTgScreenRouter();
   const data = useTelegramBackendData();
+  const accountData = useTelegramAccountData();
   const viewport = useViewport();
   const isMobile = viewport.width <= 900;
   const deviceWidth = Math.min(375, Math.max(300, viewport.width - 32));
   const deviceHeight = isMobile ? Math.min(720, Math.max(620, Math.round(deviceWidth * 1.82))) : 700;
   const screens = {
-    home: TgHome, dashboard: TgDashboard, scouting: TgScouting,
-    alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
+    home: TgHome, dashboard: TgDashboard, portfolio: TgPortfolio, scouting: TgScouting,
+    updates: TgUpdates, alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
   };
   const Screen = screens[screen] || TgHome;
 
@@ -1468,7 +2206,7 @@ const TelegramPage = () => {
         order: isMobile ? 1 : 2,
       }}>
         <IOSDevice width={deviceWidth} height={deviceHeight} dark>
-          <Screen setScreen={setScreen} goBack={goBack} data={data} requestScan={requestBackendScan} />
+          <Screen setScreen={setScreen} goBack={goBack} data={data} accountData={accountData} requestScan={requestBackendScan} />
         </IOSDevice>
       </div>
     </div>
@@ -1478,9 +2216,10 @@ const TelegramPage = () => {
 const TelegramMiniApp = () => {
   const { screen, setScreen, goBack } = useTgScreenRouter();
   const data = useTelegramBackendData();
+  const accountData = useTelegramAccountData();
   const screens = {
-    home: TgHome, dashboard: TgDashboard, scouting: TgScouting,
-    alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
+    home: TgHome, dashboard: TgDashboard, portfolio: TgPortfolio, scouting: TgScouting,
+    updates: TgUpdates, alerts: TgAlerts, billing: TgBilling, scan: TgScanRunning,
   };
   const Screen = screens[screen] || TgHome;
 
@@ -1499,7 +2238,7 @@ const TelegramMiniApp = () => {
       paddingTop: 'env(safe-area-inset-top, 0px)',
       background: TG_THEME.bg, color: TG_THEME.text,
     }}>
-      <Screen setScreen={setScreen} goBack={goBack} data={data} requestScan={requestBackendScan} />
+      <Screen setScreen={setScreen} goBack={goBack} data={data} accountData={accountData} requestScan={requestBackendScan} />
     </div>
   );
 };

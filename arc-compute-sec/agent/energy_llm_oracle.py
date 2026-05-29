@@ -59,6 +59,7 @@ class QuerySpec:
     core_terms: list[str]
     context_terms: list[str]
     opoint_topic_ids: tuple[str, ...] = ()
+    negative_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +171,19 @@ MEDIATOPIC_SEMICONDUCTOR = "20000230"
 MEDIATOPIC_SOFTWARE = "20000231"
 MEDIATOPIC_INTERNATIONAL_TRADE = "20000373"
 
+COMPUTE_POWER_NEGATIVE_TERMS = (
+    "strait of hormuz",
+    "hormuz transit",
+    "oil tanker",
+    "tankers",
+    "shipping lane",
+    "shipping chokepoint",
+    "red sea",
+    "opec",
+    "crude cargo",
+    "iranian navy",
+)
+
 
 def _opoint_topic_ids(*mediatopic_ids: str) -> tuple[str, ...]:
     out: list[str] = []
@@ -233,16 +247,30 @@ def _contains_any(blob: str, terms: Iterable[str]) -> bool:
     return any(term.lower() in lower for term in terms if term)
 
 
+def _query_spec(
+    label: str,
+    core_terms: list[str],
+    context_terms: list[str],
+    topics: tuple[str, ...],
+    *,
+    negative_terms: tuple[str, ...] = (),
+) -> QuerySpec:
+    return QuerySpec(label, _build_searchline(core_terms), core_terms, context_terms, topics, negative_terms)
+
+
 def is_relevant_article(
     article: ArticleSnippet,
     *,
     core_terms: list[str],
     context_terms: list[str],
+    negative_terms: Iterable[str] = (),
     max_rank: int = 10,
 ) -> bool:
     if article.rank_global is not None and article.rank_global > max_rank:
         return False
     blob = f"{article.title} {article.summary}"
+    if _contains_any(blob, negative_terms):
+        return False
     return _contains_any(blob, core_terms) and _contains_any(blob, context_terms)
 
 
@@ -258,7 +286,7 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
             MEDIATOPIC_ENERGY_MARKET,
             MEDIATOPIC_INTERNATIONAL_TRADE,
         )
-        return QuerySpec("hormuz_transit", _build_searchline(core), core, context, topics)
+        return _query_spec("hormuz_transit", core, context, topics)
 
     if "gpt-5" in slug_blob or "gpt-5pt5" in slug_blob:
         core = ["GPT-5", "GPT-5.5", "OpenAI"]
@@ -268,7 +296,7 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
             MEDIATOPIC_SCIENTIFIC_INNOVATION,
             MEDIATOPIC_SOFTWARE,
         )
-        return QuerySpec("gpt_release", _build_searchline(core), core, context, topics)
+        return _query_spec("gpt_release", core, context, topics)
 
     if "best-math-ai" in slug_blob or "best-coding-ai" in slug_blob or "best-ai-model" in slug_blob:
         core = ["OpenAI", "Anthropic", "Claude", "GPT", "Gemini", "DeepSeek"]
@@ -278,7 +306,66 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
             MEDIATOPIC_SCIENTIFIC_INNOVATION,
             MEDIATOPIC_SOFTWARE,
         )
-        return QuerySpec("ai_leaderboard", _build_searchline(core), core, context, topics)
+        return _query_spec("ai_leaderboard", core, context, topics)
+
+    if "nuclear" not in slug_blob and (
+        "data-center" in slug_blob
+        or "data center" in slug_blob
+        or "datacenter" in slug_blob
+        or "moratorium" in slug_blob
+        or "interconnect" in slug_blob
+        or "grid-stress" in slug_blob
+        or "grid stress" in slug_blob
+    ):
+        core = ["AI data center", "data center", "grid interconnection", "power capacity"]
+        context = ["power", "electricity", "grid", "interconnection", "moratorium", "permitting", "load", "capacity"]
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_ENERGY_RESOURCE,
+            MEDIATOPIC_ENERGY_MARKET,
+            MEDIATOPIC_ECONOMY_BUSINESS,
+        )
+        return _query_spec(
+            "data_center_power_policy",
+            core,
+            context,
+            topics,
+            negative_terms=COMPUTE_POWER_NEGATIVE_TERMS,
+        )
+
+    if "ai-bubble" in slug_blob or "ai bubble" in slug_blob or "ai-capex" in slug_blob or "capex" in slug_blob:
+        core = ["AI capex", "AI infrastructure", "hyperscaler", "data center", "GPU capacity"]
+        context = ["compute", "GPU", "power", "electricity", "capital expenditure", "capacity", "infrastructure"]
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_SEMICONDUCTOR,
+            MEDIATOPIC_ECONOMY_BUSINESS,
+            MEDIATOPIC_ENERGY_RESOURCE,
+        )
+        return _query_spec(
+            "ai_capex_compute_demand",
+            core,
+            context,
+            topics,
+            negative_terms=COMPUTE_POWER_NEGATIVE_TERMS,
+        )
+
+    if "nuclear" in slug_blob and ("data-center" in slug_blob or "data center" in slug_blob or "compute" in slug_blob):
+        core = ["nuclear", "AI data center", "data center"]
+        context = ["power", "electricity", "reactor", "grid", "PPA", "capacity", "load"]
+        topics = _opoint_topic_ids(
+            MEDIATOPIC_ENERGY_RESOURCE,
+            MEDIATOPIC_ENERGY_MARKET,
+            MEDIATOPIC_SCIENCE_TECH,
+            MEDIATOPIC_ECONOMY_BUSINESS,
+        )
+        return _query_spec(
+            "nuclear_power_compute",
+            core,
+            context,
+            topics,
+            negative_terms=COMPUTE_POWER_NEGATIVE_TERMS,
+        )
 
     if "nvda" in slug_blob or "nvidia" in slug_blob:
         core = ["NVIDIA", "NVDA"]
@@ -288,7 +375,13 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
             MEDIATOPIC_SEMICONDUCTOR,
             MEDIATOPIC_ECONOMY_BUSINESS,
         )
-        return QuerySpec("nvidia_ai_infra", _build_searchline(core), core, context, topics)
+        return _query_spec(
+            "nvidia_ai_infra",
+            core,
+            context,
+            topics,
+            negative_terms=COMPUTE_POWER_NEGATIVE_TERMS if template == "energy_ai_infra" else (),
+        )
 
     if "app-store" in slug_blob or "free-app" in slug_blob:
         core = ["ChatGPT", "OpenAI", "Apple App Store"]
@@ -297,7 +390,7 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
             MEDIATOPIC_SOFTWARE,
             MEDIATOPIC_SCIENCE_TECH,
         )
-        return QuerySpec("ai_app_store", _build_searchline(core), core, context, topics)
+        return _query_spec("ai_app_store", core, context, topics)
 
     if template == "energy_ai_infra":
         core = ["OpenAI", "Anthropic", "NVIDIA", "data center", "AI compute"]
@@ -306,7 +399,13 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
             MEDIATOPIC_SCIENCE_TECH,
             MEDIATOPIC_ENERGY_RESOURCE,
         )
-        return QuerySpec("ai_infra", _build_searchline(core), core, context, topics)
+        return _query_spec(
+            "ai_infra",
+            core,
+            context,
+            topics,
+            negative_terms=COMPUTE_POWER_NEGATIVE_TERMS,
+        )
 
     core = ["energy", "power", "oil", "gas"]
     context = ["price", "supply", "demand", "outage", "policy"]
@@ -315,7 +414,7 @@ def query_spec_for_candidate(candidate: EnergyOracleCandidate) -> QuerySpec:
         MEDIATOPIC_ENERGY_MARKET,
         MEDIATOPIC_ECONOMY_BUSINESS,
     )
-    return QuerySpec(template or "energy", _build_searchline(core), core, context, topics)
+    return _query_spec(template or "energy", core, context, topics)
 
 
 def _opoint_search_payload(
@@ -430,7 +529,12 @@ def fetch_opoint_articles(
     deduped = _dedupe_articles(raw_articles)
     filtered = [
         article for article in deduped
-        if is_relevant_article(article, core_terms=query.core_terms, context_terms=query.context_terms)
+        if is_relevant_article(
+            article,
+            core_terms=query.core_terms,
+            context_terms=query.context_terms,
+            negative_terms=query.negative_terms,
+        )
     ][:n_articles]
     return filtered, {
         "raw": len(raw_articles),
@@ -683,6 +787,7 @@ def _receipt(
         "core_terms": query.core_terms,
         "context_terms": query.context_terms,
         "opoint_topic_ids": list(query.opoint_topic_ids),
+        "negative_terms": list(query.negative_terms),
     }
     evidence_blob = [asdict(a) for a in articles]
     analysis_blob = {

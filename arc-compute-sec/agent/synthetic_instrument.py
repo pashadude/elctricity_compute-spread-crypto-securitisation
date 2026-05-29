@@ -214,6 +214,26 @@ SYNDICATED_INSTRUMENT_TYPES = [
         "collateral_needed": ["compute sale tenor", "regional power tenor", "calendar-basis mark policy"],
         "direct_leg_target": "compute calendar premium vs power calendar premium",
     },
+    {
+        "instrument_type": "regional_compute_capacity_basis_note",
+        "basket_id": "regional_compute_capacity_basis",
+        "signal_direction": DIRECTION_COMPUTE_EXPENSIVE,
+        "title": "Regional compute capacity basis note",
+        "spread_archetype": "regional_compute_basis",
+        "payoff": "Long compute-capacity beneficiaries when one GPU rental region gets rich versus another.",
+        "collateral_needed": ["regional compute sale", "regional GPU rental mark policy", "delivery region evidence"],
+        "direct_leg_target": "regional compute scarcity vs alternate-region compute availability",
+    },
+    {
+        "instrument_type": "regional_power_congestion_basis_note",
+        "basket_id": "regional_power_congestion_basis",
+        "signal_direction": DIRECTION_ELEC_EXPENSIVE,
+        "title": "Regional power congestion basis note",
+        "spread_archetype": "regional_power_basis",
+        "payoff": "Long merchant power, baseload, and grid equipment exposure when one power region gets rich versus another.",
+        "collateral_needed": ["regional power hedge", "load-zone meter", "ISO basis mark policy"],
+        "direct_leg_target": "regional grid congestion vs alternate-region power availability",
+    },
 ]
 
 
@@ -1346,8 +1366,14 @@ def _syndicated_instrument_menu(
     hedge_basket: list[dict[str, Any]],
     mock_construction: dict[str, Any],
     proxy_basket_validation: dict[str, Any] | None,
+    spread_family_validation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     by_id = _basket_by_id(proxy_basket_validation)
+    replay_by_archetype = {
+        str(row.get("archetype_id")): row
+        for row in ((spread_family_validation or {}).get("archetype_scoreboard") or [])
+        if isinstance(row, dict) and row.get("archetype_id")
+    }
     priced_symbols = {str(leg.get("slug") or "").upper() for leg in hedge_basket}
     base_ask = _num(mock_construction.get("circle_testnet_usdc_request"))
     rows: list[dict[str, Any]] = []
@@ -1365,6 +1391,15 @@ def _syndicated_instrument_menu(
             collateral_status=collateral_status,
             has_direct_legs=direct_ready,
         )
+        replay = replay_by_archetype.get(str(template["spread_archetype"])) or {}
+        spread_replay_promotable = bool(replay.get("is_promotable"))
+        spread_replay_status = _first_nonempty(replay.get("replay_status"), replay.get("status"), default="NO_REPLAY")
+        if status in {"PAPER_BUY_ONLY", "READY_FOR_JUDGE"} and not spread_replay_promotable:
+            status = "WAIT_FOR_SPREAD_REPLAY"
+            status_reason = (
+                "Proxy replay says BUY, but the underlying spread replay has not cleared "
+                "the promotion gate; keep it in monitor/paper-watch mode."
+            )
         trailing = basket.get("trailing_returns") if isinstance(basket.get("trailing_returns"), dict) else {}
         paper_trade_replay = basket.get("paper_trade_replay") if isinstance(basket.get("paper_trade_replay"), dict) else {}
         out_of_sample_replay = basket.get("out_of_sample_replay") if isinstance(basket.get("out_of_sample_replay"), dict) else {}
@@ -1381,6 +1416,9 @@ def _syndicated_instrument_menu(
             "status_reason": status_reason,
             "latest_signal": _text(basket.get("latest_signal"), "MONITOR"),
             "signal_reason": _text(basket.get("signal_reason"), _text(basket.get("status_reason"), "Backtest not available.")),
+            "spread_replay_promotable": spread_replay_promotable,
+            "spread_replay_status": spread_replay_status,
+            "spread_oos_status": _text(replay.get("oos_status")),
             "replay_status": _text(basket.get("status"), "NO_REPLAY"),
             "recommendation": _text(basket.get("recommendation"), "MONITOR_ONLY"),
             "total_return_pct": _round_units(basket.get("total_return_pct")),
@@ -1402,7 +1440,14 @@ def _syndicated_instrument_menu(
             "arc_gate": "LOCKED_UNTIL_JUDGE_EXECUTE",
         })
     signal_rank = {"BUY": 0, "HOLD": 1, "MONITOR": 2, "SELL": 3}
-    status_rank = {"READY_FOR_JUDGE": 0, "PAPER_BUY_ONLY": 1, "MONITOR_ONLY": 2, "NEEDS_DIRECT_LEGS": 3, "AVOID_OR_SELL": 4}
+    status_rank = {
+        "READY_FOR_JUDGE": 0,
+        "PAPER_BUY_ONLY": 1,
+        "MONITOR_ONLY": 2,
+        "WAIT_FOR_SPREAD_REPLAY": 3,
+        "NEEDS_DIRECT_LEGS": 4,
+        "AVOID_OR_SELL": 5,
+    }
     rows.sort(key=lambda row: (
         0 if row.get("direction_aligned") or clean_signal_direction in {"", "no_signal"} else 1,
         0 if row.get("has_basket_replay") else 1,
@@ -2415,6 +2460,7 @@ def propose_synthetic_instrument(
         hedge_basket=hedge_basket,
         mock_construction=mock_construction,
         proxy_basket_validation=proxy_basket_validation,
+        spread_family_validation=spread_family_validation,
     )
     spread_trade_map = _spread_archetype_trade_map(
         signal_direction=direction,

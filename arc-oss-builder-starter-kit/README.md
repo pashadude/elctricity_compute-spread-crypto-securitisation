@@ -41,14 +41,19 @@ CIRCLE_ENTITY_SECRET=...
 ARC_OSS_REPO_URL=https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation/tree/main/arc-oss-builder-starter-kit
 ```
 
-Optional, for the hackathon authenticated RPC:
+Optional, for the hackathon authenticated RPC when the Canteen proxy is healthy:
 
 ```bash
 arc-canteen login
 arc-canteen rpc-url --export
 ```
 
-Paste the printed URL into `.env` as `ARC_RPC`.
+Paste the printed URL into `.env` as `ARC_RPC`. If `arc-canteen rpc eth_chainId`
+fails with DNS/server errors, switch back to:
+
+```bash
+ARC_RPC=https://rpc.testnet.arc.network
+```
 
 ## Run The Arc Flow
 

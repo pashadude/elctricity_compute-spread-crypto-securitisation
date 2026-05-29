@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import sys
 import time
@@ -26,7 +27,34 @@ CHANNEL_FEEDBACK_UPDATE_KEY = "channel-feedback-update:v1"
 CHANNEL_MARKET_DATA_UPDATE_KEY = "channel-market-data-update:v1"
 CHANNEL_INSTRUMENT_MENU_UPDATE_KEY = "channel-instrument-menu-update:v1"
 CHANNEL_PROFITABILITY_UPDATE_KEY = "channel-profitability-update:v1"
+CHANNEL_MINIAPP_UPDATE_KEY = "channel-miniapp-update:v3"
+CHANNEL_MINIAPP_RELEASE_PREFIX = "channel-miniapp-release:v1"
+CHANNEL_SIGNAL_DISCIPLINE_UPDATE_KEY = "channel-signal-discipline-update:v1"
+CHANNEL_ORACLE_DISCIPLINE_UPDATE_KEY = "channel-oracle-discipline-update:v1"
+CHANNEL_BASIS_SPREAD_UPDATE_KEY = "channel-basis-spread-update:v1"
+CHANNEL_INDEX_TRADEABILITY_UPDATE_KEY = "channel-index-tradeability-update:v1"
 CHANNEL_CAMPAIGN_PREFIX = "channel-campaign:v1"
+CHANNEL_SCREENSHOT_FILES = {
+    CHANNEL_ABOUT_KEY: "miniapp-home.png",
+    CHANNEL_FEEDBACK_UPDATE_KEY: "miniapp-home.png",
+    CHANNEL_MARKET_DATA_UPDATE_KEY: "venue-copy.png",
+    CHANNEL_INSTRUMENT_MENU_UPDATE_KEY: "indexes-spreads.png",
+    CHANNEL_PROFITABILITY_UPDATE_KEY: "profitability.png",
+    CHANNEL_MINIAPP_UPDATE_KEY: "miniapp-updates.png",
+    CHANNEL_SIGNAL_DISCIPLINE_UPDATE_KEY: "profitability.png",
+    CHANNEL_ORACLE_DISCIPLINE_UPDATE_KEY: "venue-copy.png",
+    CHANNEL_BASIS_SPREAD_UPDATE_KEY: "indexes-spreads.png",
+    CHANNEL_INDEX_TRADEABILITY_UPDATE_KEY: "indexes-spreads.png",
+    f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:home": "miniapp-home.png",
+    f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:contract": "miniapp-contract.png",
+    f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:portfolio": "miniapp-portfolio.png",
+    f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:profitability": "profitability.png",
+    f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:scouting": "venue-copy.png",
+    f"{CHANNEL_CAMPAIGN_PREFIX}:indexes-spreads": "indexes-spreads.png",
+    f"{CHANNEL_CAMPAIGN_PREFIX}:profitability": "profitability.png",
+    f"{CHANNEL_CAMPAIGN_PREFIX}:venue-copy": "venue-copy.png",
+    f"{CHANNEL_CAMPAIGN_PREFIX}:arc-collateral": "miniapp-portfolio.png",
+}
 
 
 def admin_ids() -> set[str]:
@@ -133,6 +161,75 @@ def send_message(chat_id: str | int, text: str, *, reply_markup: dict[str, Any] 
     if reply_markup:
         payload["reply_markup"] = reply_markup
     telegram_call("sendMessage", payload)
+
+
+def _caption_text(text: str, *, max_len: int = 1000) -> str:
+    clean = str(text or "").strip()
+    if len(clean) <= max_len:
+        return clean
+    clipped = clean[:max_len - 44].rstrip()
+    if "\n" in clipped:
+        clipped = clipped.rsplit("\n", 1)[0].rstrip()
+    return clipped + "\n\nOpen the dashboard for the full detail."
+
+
+def screenshot_dir(*, logs: Path | str | None = None) -> Path:
+    configured = os.environ.get("TELEGRAM_SCREENSHOT_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    return log_dir(logs) / "telegram_screenshots"
+
+
+def screenshot_path_for_key(key: str, *, logs: Path | str | None = None) -> Path | None:
+    filename = CHANNEL_SCREENSHOT_FILES.get(str(key or ""))
+    if not filename:
+        return None
+    path = screenshot_dir(logs=logs) / filename
+    return path if path.exists() and path.is_file() else None
+
+
+def send_photo(chat_id: str | int, photo_path: Path | str, caption: str, *, reply_markup: dict[str, Any] | None = None) -> None:
+    path = Path(photo_path)
+    if not path.exists() or not path.is_file():
+        send_message(chat_id, caption, reply_markup=reply_markup)
+        return
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "caption": _caption_text(caption),
+    }
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    ctype = mimetypes.guess_type(str(path))[0] or "image/png"
+    try:
+        with path.open("rb") as fh:
+            resp = requests.post(
+                TELEGRAM_API.format(token=bot_token(), method="sendPhoto"),
+                data=payload,
+                files={"photo": (path.name, fh, ctype)},
+                timeout=30,
+            )
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", "unknown")
+        detail = str(getattr(response, "text", "") or "")[:300]
+        raise RuntimeError(f"Telegram sendPhoto HTTP {status}: {detail}") from None
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Telegram sendPhoto request failed: {exc.__class__.__name__}") from None
+    data = resp.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram sendPhoto failed: {data}")
+
+
+def send_channel_post(chat_id: str | int, key: str, text: str, *, logs: Path | str | None = None) -> None:
+    image = screenshot_path_for_key(key, logs=logs)
+    if image:
+        caption = _caption_text(text)
+        send_photo(chat_id, image, caption)
+        if caption != str(text or "").strip():
+            send_message(chat_id, text)
+        return
+    send_message(chat_id, text)
 
 
 def _latest_verdict(snap: dict[str, Any]) -> dict[str, Any] | None:
@@ -1002,6 +1099,8 @@ def channel_feedback_update_message() -> str:
         "- IBKR/Polymarket are now agent scouting inputs, not the main product funnel",
         "- channel and bot mute raw REJECT/DEFER/watchlist noise",
         "",
+        "Screenshot attached when refreshed: Mini App home with the account state, walkthrough, and links to the bot/channel/web surfaces.",
+        "",
         "Open Mini App: https://power.botozen.com/tg",
         "Dashboard: https://power.botozen.com/dashboard",
     ])
@@ -1020,6 +1119,8 @@ def channel_market_data_update_message() -> str:
         "",
         "This keeps the story honest: the contract is the judged compute/energy package; IBKR and Polymarket are scouting surfaces until priced, thesis-matched, and approved by the judge.",
         "",
+        "Screenshot attached when refreshed: venue-copy matrix showing which surfaces are direct legs, which are liquid proxies, and which are evidence-only.",
+        "",
         "Mini App: https://power.botozen.com/tg",
         "Dashboard: https://power.botozen.com/dashboard",
     ])
@@ -1034,7 +1135,7 @@ def channel_instrument_menu_update_message() -> str:
         "New index universe:",
         "- electricity: EIA regional power, IBKR ForecastTrader power indexes, Henry Hub, Brent/WTI, merchant power proxies",
         "- compute: AWS GPU spot, H100 rental marks, cloud GPU providers, AI event contracts, NVDA/VRT/ETN, BTC/ETH miner-margin proxies",
-        "- spread archetypes: compute spark, power-cost share, regional compute-power basis, compute calendar, fuel-stack compute",
+        "- spread archetypes: compute spark, power-cost share, regional compute basis, regional power basis, regional compute-power basis, compute calendar, fuel-stack compute",
         "",
         "New syndicated structures:",
         "- compute scarcity receivable hedge note",
@@ -1042,8 +1143,12 @@ def channel_instrument_menu_update_message() -> str:
         "- grid load-growth basket note",
         "- miner-margin power pair",
         "- fuel-stack compute input hedge",
+        "- regional compute capacity basis note",
+        "- regional power congestion basis note",
         "",
         "Each structure now carries a replay signal: BUY, HOLD, SELL, or MONITOR, with 5d and 1m public proxy PnL. Still no Arc action before judge.classify() returns EXECUTE, and these are not asset-backed until collateral is attached.",
+        "",
+        "Screenshot attached when refreshed: the index catalog and spread menu inside the Mini App.",
         "",
         "Mini App: https://power.botozen.com/tg",
         "Dashboard: https://power.botozen.com/dashboard",
@@ -1065,9 +1170,232 @@ def channel_profitability_update_message() -> str:
         "",
         "Current interpretation: a spread can be PROMOTABLE as an index replay and still be SELL_OR_AVOID if the mapped proxy basket's current signal says sell. That is intentional.",
         "",
+        "Screenshot attached when refreshed: profitability ledger with paper-ticket PnL, latest mark PnL, OOS gate, and buy/avoid labels.",
+        "",
         "No Arc action can happen unless judge.classify() returns EXECUTE.",
         "",
         "Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def channel_miniapp_update_message() -> str:
+    return "\n".join([
+        "Product update: Telegram Mini App walkthrough shipped",
+        "",
+        "The Mini App now mirrors the web desk and has its own release-notes screen so users can see what changed without reading operator docs.",
+        "",
+        "New in Telegram:",
+        "- home screen now has a four-step walkthrough: read signal, create account/open ticket, track PnL, check venue scouting",
+        "- What Changed screen explains the Mini App release and maps channel screenshots to product sections",
+        "- My Portfolio screen with server-side Operator account, wallet label, open paper tickets, realized ledger, and net paper PnL",
+        "- Open Paper Ticket from the mock contract screen after Operator setup",
+        "- Close buttons for paper tickets, with backend NAV refresh after every action",
+        "- clear labels separating paper ticket PnL from settled venue PnL and Arc escrow PnL",
+        "- direct links to the bot, channel, web account, and live dashboard",
+        "",
+        "Screenshot attached when refreshed: the What Changed screen. Other channel posts attach the portfolio ledger, spread menu, profitability ledger, and venue-copy matrix.",
+        "",
+        "Still unchanged: no IBKR, Polymarket, Circle, or Arc execution happens from a Mini App tap. It only saves a paper ticket unless judge.classify() later returns EXECUTE and the operator runs the gated Arc path.",
+        "",
+        "Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def channel_miniapp_release_messages() -> list[tuple[str, str]]:
+    return [
+        (
+            f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:home",
+            "\n".join([
+                "Mini App release 1/5: user path",
+                "",
+                "The Telegram Mini App is now the same product flow as the web desk, not a separate bot demo.",
+                "",
+                "Screenshot: home screen with system status, notional, Circle test-USDC ask, Operator account state, and the four-step walkthrough.",
+                "",
+                "What changed:",
+                "- read the live compute/energy spread signal",
+                "- create or restore the Operator account",
+                "- open the mock contract screen",
+                "- track PnL and venue scouting without channel reject spam",
+                "",
+                "Mini App: https://power.botozen.com/tg",
+            ]),
+        ),
+        (
+            f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:contract",
+            "\n".join([
+                "Mini App release 2/5: mock contract",
+                "",
+                "This is the user-facing trade surface. It shows electricity, compute, S_t, z-score, notional, Circle ask, weighted legs, and the buy/monitor/sell recommendation.",
+                "",
+                "Screenshot: Mock Contract screen. BTC, ETH, equities, IBKR, Kalshi, and Polymarket are labelled by role: proxy hedge, direct event leg, or research-only scouting input.",
+                "",
+                "A tap only saves a local paper ticket. It is not an IBKR, Polymarket, Circle, or Arc order.",
+                "",
+                "Guardrail: judge.classify() first, Arc second.",
+            ]),
+        ),
+        (
+            f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:portfolio",
+            "\n".join([
+                "Mini App release 3/5: account and PnL",
+                "",
+                "The Mini App now has a real backend Operator account surface. Paper positions and PnL are restored from the signed session instead of disappearing after a browser refresh.",
+                "",
+                "Screenshot: My Portfolio screen with account id, wallet label, open paper tickets, realized ledger, unrealized PnL, realized PnL, and net PnL.",
+                "",
+                "Important label: paper PnL is NAV versus entry. Settled venue PnL and Arc escrow PnL remain separate.",
+            ]),
+        ),
+        (
+            f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:profitability",
+            "\n".join([
+                "Mini App release 4/5: profitability discipline",
+                "",
+                "The app no longer shows isolated BUY labels without context. Each syndicated spread has replay status, latest mark PnL, paper-ticket PnL, OOS state, and a current action.",
+                "",
+                "Screenshot: profitability ledger. Entry-day $0 is expected because it is the baseline; subsequent marks show whether the proposed arb made or lost money.",
+                "",
+                "A spread can be interesting but still be WAIT or SELL_OR_AVOID if replay and proxy marks disagree.",
+            ]),
+        ),
+        (
+            f"{CHANNEL_MINIAPP_RELEASE_PREFIX}:scouting",
+            "\n".join([
+                "Mini App release 5/5: venue scouting",
+                "",
+                "The scouting screen explains what each venue contributes before anything is promoted into the user funnel.",
+                "",
+                "Screenshot: venue matrix with Polymarket, Kalshi, IBKR ForecastTrader, public quotes, crypto proxies, and Opoint/Nebius evidence roles.",
+                "",
+                "Opoint/Nebius is evidence only. IBKR/Polymarket/Kalshi are direct-leg candidates only when priced, thesis-matched, and judged. The public channel stays sparse: no repeated REJECT/DEFER/watchlist rows.",
+                "",
+                "Mini App: https://power.botozen.com/tg?screen=scouting",
+            ]),
+        ),
+    ]
+
+
+def channel_miniapp_release_draft_text() -> str:
+    return "\n\n---\n\n".join(text for _key, text in channel_miniapp_release_messages())
+
+
+def channel_signal_discipline_update_message() -> str:
+    return "\n".join([
+        "Product update: signal discipline tightened",
+        "",
+        "We fixed the confusing case where a syndicated note could show BUY in the menu while the profitability ledger still said wait.",
+        "",
+        "New rule:",
+        "- a proxy basket BUY is not enough for a fresh paper-buy label",
+        "- the matching oil-style spread replay must also clear its promotion gate",
+        "- if spread replay or OOS replay fails, the note is downgraded to WAIT_FOR_SPREAD_REPLAY",
+        "- SELL and CLOSE/AVOID signals stay explicit when current proxy marks deteriorate",
+        "",
+        "Current live interpretation: some proxy baskets still mark BUY, but the portfolio action is CLOSE_OR_AVOID because the matching spread/OOS evidence is not strong enough for a user-facing fresh buy.",
+        "",
+        "Screenshot attached when refreshed: profitability ledger proving the buy label is suppressed until spread replay and proxy replay agree.",
+        "",
+        "This keeps the product honest: real venues and liquid proxies can mark the package, but profitability discipline decides whether a user should open, hold, or close a paper ticket. Arc remains locked unless judge.classify() returns EXECUTE.",
+        "",
+        "Mini App: https://power.botozen.com/tg",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def channel_oracle_discipline_update_message() -> str:
+    return "\n".join([
+        "Product update: Opoint/Nebius evidence discipline shipped",
+        "",
+        "We tightened the news/LLM layer so the current desk summary prefers compute-power receipts instead of whichever generic energy receipt was newest.",
+        "",
+        "New rule:",
+        "- data-center moratorium, grid interconnection, AI capex, GPU capacity, and nuclear/data-center candidates use compute-power query templates",
+        "- Opoint topic filters still use working numeric topic ids, not scraped medtop URIs",
+        "- Hormuz/tanker/oil-shipping false positives are rejected for compute-power evidence",
+        "- Mini App scouting now shows total receipts, current-desk receipts, latest scope, query label, verdict counts, and article coverage",
+        "",
+        "This remains evidence only. Opoint/Nebius can support or criticize a direct leg, but it cannot replace the premium scorer or judge.classify(), and it cannot trigger Circle or Arc.",
+        "",
+        "Screenshot attached when refreshed: Mini App venue/scouting matrix with oracle scope and venue-role labels.",
+        "",
+        "Mini App: https://power.botozen.com/tg?screen=scouting",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def channel_basis_spread_update_message() -> str:
+    return "\n".join([
+        "Product update: regional basis spreads shipped",
+        "",
+        "Power by Botozen now splits the old combined regional compute/power basis into two cleaner oil-style basis legs.",
+        "",
+        "New spread forms:",
+        "- Regional compute rental basis: Region A GPU rental minus Region B GPU rental",
+        "- Regional power basis: Region A electricity $/MWh minus Region B electricity $/MWh",
+        "",
+        "New syndicated copies:",
+        "- Regional compute capacity basis note",
+        "- Regional power congestion basis note",
+        "",
+        "Why this matters: this is closer to WTI-Brent or regional power hub basis trading. The desk can now ask whether compute-region dislocation and power-region congestion are separate opportunities before combining them into a compute-power package.",
+        "",
+        "Both forms go through the same replay path: no-lookahead spread replay, proxy-basket replay, paper-ticket PnL, OOS check, and judge-before-Arc guardrail.",
+        "",
+        "Screenshot attached when refreshed: Mini App index catalog and spread menu with the new basis forms.",
+        "",
+        "Mini App: https://power.botozen.com/tg?screen=dashboard",
+        "Dashboard: https://power.botozen.com/dashboard",
+    ])
+
+
+def _format_count_map(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "none"
+    items = sorted(value.items(), key=lambda item: (-int(float(item[1] or 0)), str(item[0])))
+    return ", ".join(
+        f"{str(key).replace('_', ' ')} {int(float(count or 0))}"
+        for key, count in items
+    )
+
+
+def channel_index_tradeability_update_message(snap: dict[str, Any]) -> str:
+    spread_families = snap.get("spread_families") if isinstance(snap.get("spread_families"), dict) else {}
+    coverage = spread_families.get("index_coverage") if isinstance(spread_families.get("index_coverage"), dict) else {}
+    electricity = coverage.get("electricity") if isinstance(coverage.get("electricity"), dict) else {}
+    compute = coverage.get("compute") if isinstance(coverage.get("compute"), dict) else {}
+    archetypes = coverage.get("spread_archetypes") if isinstance(coverage.get("spread_archetypes"), dict) else {}
+    return "\n".join([
+        "Product update: index tradeability labels shipped",
+        "",
+        "The index catalog now says what each row can actually do in the desk.",
+        "",
+        "Power index tradeability:",
+        _format_count_map(electricity.get("tradeability_counts")),
+        "",
+        "Compute index tradeability:",
+        _format_count_map(compute.get("tradeability_counts")),
+        "",
+        "Family buckets:",
+        f"- power: {_format_count_map(electricity.get('family_counts'))}",
+        f"- compute: {_format_count_map(compute.get('family_counts'))}",
+        "",
+        f"Spread forms replayed: {int(float(archetypes.get('replayed') or 0))}/{int(float(archetypes.get('total') or 0))}; OOS passed: {int(float(archetypes.get('oos_passed') or archetypes.get('oos_pass') or 0))}.",
+        "",
+        "How to read the labels:",
+        "- live/derived marks can support the spread index directly",
+        "- priced proxies can mark paper syndicated baskets after replay gates pass",
+        "- labelled proxies like BTC/ETH stay miner-margin proxies, not the securitized asset",
+        "- direct-event watchlists can become Polymarket/Kalshi/IBKR legs only after venue price, premium gate where required, and judge.classify()",
+        "- planned gaps are visible research gaps, not tradable marks",
+        "",
+        "This prevents the old confusion where a real feed, a proxy, and a future research target looked equivalent.",
+        "",
+        "Screenshot attached when refreshed: Mini App index/scouting surface with family and tradeability labels.",
+        "",
+        "Mini App: https://power.botozen.com/tg?screen=scouting",
         "Dashboard: https://power.botozen.com/dashboard",
     ])
 
@@ -1261,8 +1589,10 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "",
                 "Core idea: all is compute, compute is energy, and the tradable object is the judged compute/energy spread package.",
                 "",
-                "Examples: compute spark spread, power-cost share, regional compute-power basis, compute calendar, electricity calendar, fuel-stack/miner-margin spread.",
-                "New syndicated copies include compute calendar forward hedge, electricity calendar power hedge, and compute-power calendar basis note.",
+                "Examples: compute spark spread, power-cost share, regional compute basis, regional power basis, regional compute-power basis, compute calendar, electricity calendar, fuel-stack/miner-margin spread.",
+                "New syndicated copies include compute calendar forward hedge, electricity calendar power hedge, compute-power calendar basis note, regional compute capacity basis note, and regional power congestion basis note.",
+                "",
+                "Screenshot attached when refreshed: Mini App index catalog and oil-style spread menu.",
                 "",
                 "Mini App: https://power.botozen.com/tg",
             ]),
@@ -1286,6 +1616,8 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "",
                 "An entry-day $0.00 mark is not a broken spread. It is just the entry mark; ticket replay shows what the proposed arb would have made after entry.",
                 "",
+                "Screenshot attached when refreshed: Mini App profitability ledger with paper-ticket PnL, latest mark PnL, and OOS status.",
+                "",
                 "Dashboard: https://power.botozen.com/dashboard",
             ]),
         ),
@@ -1308,6 +1640,8 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "Live gate labels and IBKR auth hints stay in the Mini App so operators can see exactly why a venue leg is or is not usable.",
                 "",
                 "No raw REJECT/DEFER/watchlist spam belongs in this channel.",
+                "",
+                "Screenshot attached when refreshed: Mini App venue-copy matrix.",
             ]),
         ),
         (
@@ -1323,6 +1657,8 @@ def channel_campaign_messages(snap: dict[str, Any]) -> list[tuple[str, str]]:
                 "Arc is the wrapper: ERC-8004 identity, ERC-8183 job escrow, USDC budget, completion, reputation, and audit trail.",
                 "",
                 "Guardrail: judge.classify() first, Arc second. If the verdict is not EXECUTE, Circle and Arc stay locked.",
+                "",
+                "Screenshot attached when refreshed: Mini App portfolio/account ledger, where user tickets and PnL are tracked separately from Arc escrow.",
                 "",
                 "Repo: https://github.com/pashadude/elctricity_compute-spread-crypto-securitisation",
             ]),
@@ -1594,7 +1930,7 @@ def notify_channel_about_once(*, logs: Path | str | None = None) -> int:
     sent = _sent_keys(logs=logs)
     if CHANNEL_ABOUT_KEY in sent:
         return 0
-    send_message(channel_id, channel_about_message())
+    send_channel_post(channel_id, CHANNEL_ABOUT_KEY, channel_about_message(), logs=logs)
     _mark_sent(CHANNEL_ABOUT_KEY, logs=logs)
     return 1
 
@@ -1606,7 +1942,7 @@ def notify_channel_feedback_update_once(*, logs: Path | str | None = None) -> in
     sent = _sent_keys(logs=logs)
     if CHANNEL_FEEDBACK_UPDATE_KEY in sent:
         return 0
-    send_message(channel_id, channel_feedback_update_message())
+    send_channel_post(channel_id, CHANNEL_FEEDBACK_UPDATE_KEY, channel_feedback_update_message(), logs=logs)
     _mark_sent(CHANNEL_FEEDBACK_UPDATE_KEY, logs=logs)
     return 1
 
@@ -1618,7 +1954,7 @@ def notify_channel_market_data_update_once(*, logs: Path | str | None = None) ->
     sent = _sent_keys(logs=logs)
     if CHANNEL_MARKET_DATA_UPDATE_KEY in sent:
         return 0
-    send_message(channel_id, channel_market_data_update_message())
+    send_channel_post(channel_id, CHANNEL_MARKET_DATA_UPDATE_KEY, channel_market_data_update_message(), logs=logs)
     _mark_sent(CHANNEL_MARKET_DATA_UPDATE_KEY, logs=logs)
     return 1
 
@@ -1630,7 +1966,7 @@ def notify_channel_instrument_menu_update_once(*, logs: Path | str | None = None
     sent = _sent_keys(logs=logs)
     if CHANNEL_INSTRUMENT_MENU_UPDATE_KEY in sent:
         return 0
-    send_message(channel_id, channel_instrument_menu_update_message())
+    send_channel_post(channel_id, CHANNEL_INSTRUMENT_MENU_UPDATE_KEY, channel_instrument_menu_update_message(), logs=logs)
     _mark_sent(CHANNEL_INSTRUMENT_MENU_UPDATE_KEY, logs=logs)
     return 1
 
@@ -1642,8 +1978,84 @@ def notify_channel_profitability_update_once(*, logs: Path | str | None = None) 
     sent = _sent_keys(logs=logs)
     if CHANNEL_PROFITABILITY_UPDATE_KEY in sent:
         return 0
-    send_message(channel_id, channel_profitability_update_message())
+    send_channel_post(channel_id, CHANNEL_PROFITABILITY_UPDATE_KEY, channel_profitability_update_message(), logs=logs)
     _mark_sent(CHANNEL_PROFITABILITY_UPDATE_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_miniapp_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_MINIAPP_UPDATE_KEY in sent:
+        return 0
+    send_channel_post(channel_id, CHANNEL_MINIAPP_UPDATE_KEY, channel_miniapp_update_message(), logs=logs)
+    _mark_sent(CHANNEL_MINIAPP_UPDATE_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_miniapp_release_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    posted = 0
+    for key, text in channel_miniapp_release_messages():
+        if key in sent:
+            continue
+        send_channel_post(channel_id, key, text, logs=logs)
+        _mark_sent(key, logs=logs)
+        posted += 1
+    return posted
+
+
+def notify_channel_signal_discipline_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_SIGNAL_DISCIPLINE_UPDATE_KEY in sent:
+        return 0
+    send_channel_post(channel_id, CHANNEL_SIGNAL_DISCIPLINE_UPDATE_KEY, channel_signal_discipline_update_message(), logs=logs)
+    _mark_sent(CHANNEL_SIGNAL_DISCIPLINE_UPDATE_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_oracle_discipline_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_ORACLE_DISCIPLINE_UPDATE_KEY in sent:
+        return 0
+    send_channel_post(channel_id, CHANNEL_ORACLE_DISCIPLINE_UPDATE_KEY, channel_oracle_discipline_update_message(), logs=logs)
+    _mark_sent(CHANNEL_ORACLE_DISCIPLINE_UPDATE_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_basis_spread_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_BASIS_SPREAD_UPDATE_KEY in sent:
+        return 0
+    send_channel_post(channel_id, CHANNEL_BASIS_SPREAD_UPDATE_KEY, channel_basis_spread_update_message(), logs=logs)
+    _mark_sent(CHANNEL_BASIS_SPREAD_UPDATE_KEY, logs=logs)
+    return 1
+
+
+def notify_channel_index_tradeability_update_once(*, logs: Path | str | None = None) -> int:
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+    if not channel_id:
+        return 0
+    sent = _sent_keys(logs=logs)
+    if CHANNEL_INDEX_TRADEABILITY_UPDATE_KEY in sent:
+        return 0
+    snap = campaign_snapshot_for_messaging(logs=logs)
+    send_channel_post(channel_id, CHANNEL_INDEX_TRADEABILITY_UPDATE_KEY, channel_index_tradeability_update_message(snap), logs=logs)
+    _mark_sent(CHANNEL_INDEX_TRADEABILITY_UPDATE_KEY, logs=logs)
     return 1
 
 
@@ -1657,7 +2069,7 @@ def notify_channel_campaign_once(*, logs: Path | str | None = None) -> int:
     for key, text in channel_campaign_messages(snap):
         if key in sent:
             continue
-        send_message(channel_id, text)
+        send_channel_post(channel_id, key, text, logs=logs)
         _mark_sent(key, logs=logs)
         count += 1
     return count
@@ -1674,7 +2086,7 @@ def notify_channel_once(*, logs: Path | str | None = None) -> int:
             break
         if not key or key in sent:
             continue
-        send_message(channel_id, text)
+        send_channel_post(channel_id, key, text, logs=logs)
         _mark_sent(key, logs=logs)
         count += 1
     return count
@@ -1718,6 +2130,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--post-market-data-update", action="store_true", help="Post the deduped IBKR/proxy market-data update")
     parser.add_argument("--post-instrument-menu-update", action="store_true", help="Post the deduped index/spread/instrument menu update")
     parser.add_argument("--post-profitability-update", action="store_true", help="Post the deduped profitability-ledger channel update")
+    parser.add_argument("--post-miniapp-update", action="store_true", help="Post the deduped Telegram Mini App account/portfolio update")
+    parser.add_argument("--draft-miniapp-release", action="store_true", help="Print the five-post Mini App screenshot release deck")
+    parser.add_argument("--post-miniapp-release", action="store_true", help="Post the deduped five-post Mini App screenshot release deck")
+    parser.add_argument("--post-signal-discipline-update", action="store_true", help="Post the deduped signal-discipline/profitability update")
+    parser.add_argument("--post-oracle-discipline-update", action="store_true", help="Post the deduped Opoint/Nebius evidence-discipline update")
+    parser.add_argument("--post-basis-spread-update", action="store_true", help="Post the deduped regional basis spread update")
+    parser.add_argument("--post-index-tradeability-update", action="store_true", help="Post the deduped index-tradeability update")
     parser.add_argument("--draft-campaign", action="store_true", help="Print the four-post Telegram campaign draft without sending")
     parser.add_argument("--post-campaign", action="store_true", help="Post the deduped four-post Telegram campaign")
     args = parser.parse_args(argv)
@@ -1744,6 +2163,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.post_profitability_update:
         print(notify_channel_profitability_update_once())
+        return 0
+    if args.post_miniapp_update:
+        print(notify_channel_miniapp_update_once())
+        return 0
+    if args.draft_miniapp_release:
+        print(channel_miniapp_release_draft_text())
+        return 0
+    if args.post_miniapp_release:
+        print(notify_channel_miniapp_release_once())
+        return 0
+    if args.post_signal_discipline_update:
+        print(notify_channel_signal_discipline_update_once())
+        return 0
+    if args.post_oracle_discipline_update:
+        print(notify_channel_oracle_discipline_update_once())
+        return 0
+    if args.post_basis_spread_update:
+        print(notify_channel_basis_spread_update_once())
+        return 0
+    if args.post_index_tradeability_update:
+        print(notify_channel_index_tradeability_update_once())
         return 0
     if args.draft_campaign:
         snap = campaign_snapshot_for_messaging()

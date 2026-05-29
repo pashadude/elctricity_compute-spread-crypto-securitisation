@@ -6,10 +6,14 @@ This module intentionally reads only public runtime artifacts. It never exposes
 from __future__ import annotations
 
 import csv
+import concurrent.futures
+import copy
 import functools
 import json
 import os
+import socket
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -62,6 +66,13 @@ TELEGRAM_CAMPAIGN_POSTS = (
     ("channel-campaign:v1:profitability", "Profitability discipline", "Backtested spread replay and paper-ticket PnL."),
     ("channel-campaign:v1:venue-copy", "Real venue roles", "Polymarket/Kalshi/IBKR/direct legs versus public/crypto proxies."),
     ("channel-campaign:v1:arc-collateral", "Securitization shape", "Collateral, Arc wrapper, and judge-before-Arc guardrail."),
+)
+TELEGRAM_MINIAPP_RELEASE_POSTS = (
+    ("channel-miniapp-release:v1:home", "User path", "Home screen with status, notional, Circle ask, Operator account state, and walkthrough."),
+    ("channel-miniapp-release:v1:contract", "Mock contract", "Trade surface with spread metrics, weighted legs, buy/monitor/sell recommendation, and judge gate."),
+    ("channel-miniapp-release:v1:portfolio", "Account and PnL", "Server-side account, wallet label, open tickets, realized ledger, and net paper PnL."),
+    ("channel-miniapp-release:v1:profitability", "Profitability discipline", "Paper-ticket replay, latest mark PnL, OOS state, and buy/avoid labels."),
+    ("channel-miniapp-release:v1:scouting", "Venue scouting", "Venue role matrix for Polymarket, Kalshi, IBKR, public quotes, crypto, and Opoint/Nebius evidence."),
 )
 IBKR_FORECAST_SYMBOL_META: dict[str, dict[str, str]] = {
     "RETXC": {
@@ -204,6 +215,9 @@ SENSITIVE_FIELD_MARKERS = (
     "mnemonic",
     "seed",
 )
+_COMPACT_SNAPSHOT_LOCK = threading.RLock()
+_COMPACT_SNAPSHOT_BUILD_LOCK = threading.Lock()
+_COMPACT_SNAPSHOT_CACHE: tuple[float, str, dict[str, Any]] | None = None
 
 
 def log_dir(path: Path | str | None = None) -> Path:
@@ -794,6 +808,23 @@ def _fetch_ibkr_public_quote(symbol: str) -> dict[str, Any] | None:
     clean = str(symbol or "").strip().upper()
     if not clean:
         return None
+    if _docker_local_ibkr_host_misconfigured():
+        return {
+            "symbol": clean,
+            "price": None,
+            "source": "ibkr_tws",
+            "error": "ibkr_host_points_to_container",
+            "action": "Set IBKR_HOST=host.docker.internal for Docker, or remove ibkr from PUBLIC_HEDGE_PRICE_SOURCES.",
+        }
+    if not _ibkr_tws_socket_reachable():
+        host, port = _ibkr_socket_target()
+        return {
+            "symbol": clean,
+            "price": None,
+            "source": "ibkr_tws",
+            "error": "ibkr_tws_unreachable",
+            "action": f"Start IBKR Gateway/TWS at {host}:{port}, or remove ibkr from PUBLIC_HEDGE_PRICE_SOURCES.",
+        }
     try:
         from adapters.ibkr import fetch_public_quote
 
@@ -808,6 +839,35 @@ def _fetch_ibkr_public_quote(symbol: str) -> dict[str, Any] | None:
     if not isinstance(quote, dict) or quote.get("price") is None:
         return None
     return quote
+
+
+def _running_in_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _docker_local_ibkr_host_misconfigured() -> bool:
+    host = os.environ.get("IBKR_HOST", "127.0.0.1").strip().lower()
+    return _running_in_docker() and host in {"", "127.0.0.1", "localhost", "::1"}
+
+
+def _ibkr_socket_target() -> tuple[str, int]:
+    host = os.environ.get("IBKR_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    raw_port = os.environ.get("IBKR_GATEWAY_PORT") or os.environ.get("IBKR_PORT") or "4002"
+    try:
+        port = int(raw_port)
+    except ValueError:
+        port = 4002
+    return host, port
+
+
+def _ibkr_tws_socket_reachable() -> bool:
+    host, port = _ibkr_socket_target()
+    timeout = _num_env("IBKR_PUBLIC_QUOTE_CONNECT_TIMEOUT", 0.4)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def _fetch_alpaca_public_quote(symbol: str) -> dict[str, Any] | None:
@@ -851,7 +911,7 @@ def _fetch_alpaca_public_quote(symbol: str) -> dict[str, Any] | None:
 
 def _fetch_yahoo_public_quote(symbol: str) -> dict[str, Any] | None:
     try:
-        return fetch_chart_quote(symbol)
+        return fetch_chart_quote(symbol, timeout=_num_env("PUBLIC_HEDGE_QUOTE_TIMEOUT", 2.0))
     except Exception as exc:
         return {
             "symbol": str(symbol or "").strip().upper(),
@@ -905,23 +965,33 @@ def _fetch_public_quote(symbol: str, sources: list[str] | tuple[str, ...] | None
     return quote
 
 
+def _worker_count(name: str, default: int, item_count: int) -> int:
+    if item_count <= 1:
+        return 1
+    raw = os.environ.get(name, "").strip()
+    try:
+        configured = int(raw) if raw else default
+    except ValueError:
+        configured = default
+    return max(1, min(item_count, configured))
+
+
 def public_hedge_state(*, logs: Path | str | None = None) -> list[dict[str, Any]]:
     """Priced public-market proxies used when direct event contracts are unpriced.
 
     These are not direct claims on compute or electricity. They are liquid,
     priced hedge references for the commercial compute-sale package.
     """
-    now = time.time()
-    rows: list[dict[str, Any]] = []
     fetch_live = bool_env("PUBLIC_HEDGE_FETCH", True)
-    for symbol in _env_csv("PUBLIC_HEDGE_SYMBOLS", DEFAULT_PUBLIC_HEDGE_SYMBOLS):
-        clean = symbol.strip().upper()
-        if not clean:
-            continue
+    symbols = [symbol.strip().upper() for symbol in _env_csv("PUBLIC_HEDGE_SYMBOLS", DEFAULT_PUBLIC_HEDGE_SYMBOLS)]
+    symbols = [symbol for symbol in symbols if symbol]
+
+    def build_row(clean: str) -> dict[str, Any]:
+        now = time.time()
         meta = PUBLIC_HEDGE_META.get(clean, {})
         quote = _fetch_public_quote(clean) if fetch_live else None
         price = quote.get("price") if isinstance(quote, dict) else None
-        row = sanitize_row({
+        return sanitize_row({
             "ts": now,
             "surface": "public_market",
             "instrument": clean,
@@ -942,8 +1012,14 @@ def public_hedge_state(*, logs: Path | str | None = None) -> list[dict[str, Any]
             "leg_description": meta.get("description") or "",
             "inventory": True,
         })
-        rows.append(row)
-    return rows
+
+    if not symbols:
+        return []
+    if fetch_live:
+        workers = _worker_count("PUBLIC_HEDGE_FETCH_WORKERS", 6, len(symbols))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            return list(executor.map(build_row, symbols))
+    return [build_row(symbol) for symbol in symbols]
 
 
 def _forecast_inventory_path(*, logs: Path | str | None = None) -> Path:
@@ -1039,8 +1115,8 @@ def _ibkr_external_proxy_quote_fields(symbol: str, pricing_status: str) -> dict[
 def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, Any]]:
     symbols = [s.upper() for s in _env_csv("IBKR_DIRECT_EVENT_SYMBOLS", DEFAULT_IBKR_DIRECT_EVENT_SYMBOLS)]
     live_events = _read_ibkr_forecast_inventory(logs=logs)
-    rows: list[dict[str, Any]] = []
-    for symbol in symbols:
+
+    def build_row(symbol: str) -> dict[str, Any]:
         meta = IBKR_FORECAST_SYMBOL_META.get(symbol, {})
         event = live_events.get(symbol, {})
         title = str(event.get("title") or meta.get("title") or symbol)
@@ -1082,8 +1158,13 @@ def _ibkr_inventory_rows(*, logs: Path | str | None = None) -> list[dict[str, An
             "source": "ibkr_forecast_inventory",
         }
         row.update(proxy_fields)
-        rows.append(row)
-    return rows
+        return row
+
+    if not symbols:
+        return []
+    workers = _worker_count("IBKR_INVENTORY_WORKERS", 4, len(symbols))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(build_row, symbols))
 
 
 def _polymarket_inventory_rows() -> list[dict[str, Any]]:
@@ -1135,6 +1216,7 @@ def _fetch_kalshi_ai_events() -> list[dict[str, Any]]:
         max_pages=int(os.environ.get("KALSHI_DIRECT_EVENT_MAX_PAGES", "3")),
         max_events=int(os.environ.get("KALSHI_DIRECT_EVENT_MAX_EVENTS", "8")),
         terms=_env_csv("KALSHI_DIRECT_EVENT_TERMS", DEFAULT_KALSHI_DIRECT_EVENT_TERMS),
+        timeout=_num_env("KALSHI_EVENT_TIMEOUT", 3.0),
     )
 
 
@@ -1188,7 +1270,20 @@ def direct_inventory_state(*, logs: Path | str | None = None) -> list[dict[str, 
     """
     if not bool_env("DIRECT_EVENT_INVENTORY_ENABLED", True):
         return []
-    rows = _ibkr_inventory_rows(logs=logs) + _polymarket_inventory_rows() + _kalshi_inventory_rows()
+    builders = (
+        lambda: _ibkr_inventory_rows(logs=logs),
+        _polymarket_inventory_rows,
+        _kalshi_inventory_rows,
+    )
+    rows: list[dict[str, Any]] = []
+    workers = _worker_count("DIRECT_EVENT_INVENTORY_WORKERS", 3, len(builders))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(fn) for fn in builders]
+        for future in futures:
+            try:
+                rows.extend(future.result())
+            except Exception:
+                continue
     return _visible_leg_rows(_enrich_leg_rows(rows, logs=logs))
 
 
@@ -1369,6 +1464,39 @@ def _venue_row(
     }
 
 
+COMPUTE_POWER_ORACLE_QUERY_LABELS = {
+    "ai_infra",
+    "ai_capex_compute_demand",
+    "data_center_power_policy",
+    "nuclear_power_compute",
+    "nvidia_ai_infra",
+}
+
+
+def _oracle_query_label(row: dict[str, Any]) -> str:
+    query = row.get("query") if isinstance(row.get("query"), dict) else {}
+    return str(query.get("label") or "").strip()
+
+
+def _is_compute_power_oracle_receipt(row: dict[str, Any]) -> bool:
+    label = _oracle_query_label(row)
+    template = str(row.get("energy_template_id") or "").strip()
+    slug_blob = f"{row.get('slug') or ''} {row.get('event_slug') or ''}".lower()
+    if label in COMPUTE_POWER_ORACLE_QUERY_LABELS or template == "energy_ai_infra":
+        return True
+    return any(term in slug_blob for term in (
+        "data-center",
+        "data center",
+        "datacenter",
+        "ai-bubble",
+        "ai capex",
+        "ai-capex",
+        "gpu",
+        "compute",
+        "nvidia",
+    ))
+
+
 def _oracle_evidence_state(*, logs: Path | str | None = None) -> dict[str, Any]:
     receipts = read_jsonl(log_dir(logs) / "energy_llm_oracle.jsonl", limit=250)
     verdict_counts: dict[str, int] = {}
@@ -1383,13 +1511,18 @@ def _oracle_evidence_state(*, logs: Path | str | None = None) -> dict[str, Any]:
         coverage = row.get("coverage") if isinstance(row.get("coverage"), dict) else {}
         raw_articles += int(_as_float(coverage.get("raw")) or 0)
         filtered_articles += int(_as_float(coverage.get("after_filter")) or 0)
-    latest = receipts[-1] if receipts else {}
+    current_desk_receipts = [row for row in receipts if _is_compute_power_oracle_receipt(row)]
+    latest_scope = "compute_power" if current_desk_receipts else ("all_energy" if receipts else "none")
+    latest = (current_desk_receipts or receipts)[-1] if receipts else {}
     return {
         "surface": "opoint_nebius",
         "label": "Opoint + Nebius oracle receipts",
         "role": "news-grounded evidence only",
         "status": "EVIDENCE_LOGGED" if receipts else "NO_RECEIPTS",
         "row_count": len(receipts),
+        "current_desk_row_count": len(current_desk_receipts),
+        "latest_scope": latest_scope,
+        "latest_query_label": _oracle_query_label(latest),
         "priced_count": 0,
         "watchlist_count": 0,
         "external_proxy_count": 0,
@@ -1863,6 +1996,545 @@ def telegram_campaign_state(*, logs: Path | str | None = None) -> dict[str, Any]
     }
 
 
+def _telegram_post_status(
+    posts_def: tuple[tuple[str, str, str], ...],
+    *,
+    version: str,
+    draft_command: str,
+    post_command: str,
+    note: str,
+    logs: Path | str | None = None,
+) -> dict[str, Any]:
+    sent = _telegram_sent_keys(logs=logs)
+    posts = [
+        {
+            "key": key,
+            "title": title,
+            "description": description,
+            "posted": key in sent,
+            "status": "POSTED" if key in sent else "READY_TO_POST",
+        }
+        for key, title, description in posts_def
+    ]
+    posted_count = sum(1 for post in posts if post["posted"])
+    return {
+        "version": version,
+        "draft_command": draft_command,
+        "post_command": post_command,
+        "draft_available": True,
+        "channel_configured": bool(os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()),
+        "total_posts": len(posts),
+        "posted_count": posted_count,
+        "pending_count": len(posts) - posted_count,
+        "status": "POSTED" if posted_count == len(posts) else "READY_TO_POST",
+        "note": note,
+        "posts": posts,
+    }
+
+
+def telegram_miniapp_release_state(*, logs: Path | str | None = None) -> dict[str, Any]:
+    return _telegram_post_status(
+        TELEGRAM_MINIAPP_RELEASE_POSTS,
+        version="telegram_miniapp_release_state_v1",
+        draft_command="npm run telegram:miniapp-release-draft",
+        post_command="npm run telegram:miniapp-release-post",
+        note="Mini App release status is read from telegram_sent.jsonl keys only; message bodies and bot tokens are not exposed.",
+        logs=logs,
+    )
+
+
+def _count_rows(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coverage_status(score: float) -> str:
+    if score >= 0.85:
+        return "READY"
+    if score >= 0.50:
+        return "PARTIAL"
+    return "NEEDS_WORK"
+
+
+def _coverage_item(
+    *,
+    item_id: str,
+    label: str,
+    score: float,
+    metric: str,
+    evidence: str,
+    next_step: str,
+) -> dict[str, Any]:
+    clean_score = max(0.0, min(1.0, float(score)))
+    return {
+        "id": item_id,
+        "label": label,
+        "status": _coverage_status(clean_score),
+        "score": round(clean_score * 100.0, 1),
+        "metric": metric,
+        "evidence": evidence,
+        "next_step": next_step,
+    }
+
+
+def _requirement_item(
+    *,
+    item_id: str,
+    label: str,
+    score: float,
+    evidence: list[str],
+    gaps: list[str] | None = None,
+) -> dict[str, Any]:
+    clean_score = max(0.0, min(1.0, float(score)))
+    return {
+        "id": item_id,
+        "label": label,
+        "status": _coverage_status(clean_score),
+        "score": round(clean_score * 100.0, 1),
+        "evidence": [str(item) for item in evidence if str(item).strip()],
+        "gaps": [str(item) for item in (gaps or []) if str(item).strip()],
+    }
+
+
+def goal_coverage_state(
+    *,
+    spread_families: dict[str, Any],
+    synthetic_instrument: dict[str, Any],
+    profitability_ledger: dict[str, Any],
+    portfolio_signal: dict[str, Any],
+    venue_evidence: dict[str, Any],
+    oracle_evidence: dict[str, Any],
+    telegram_campaign: dict[str, Any],
+    telegram_miniapp_release: dict[str, Any],
+    pnl: dict[str, Any],
+) -> dict[str, Any]:
+    """Summarize progress against the current product goal.
+
+    This is a product/readiness projection. It only aggregates already-public
+    sanitized state; it does not fetch venues, score candidates, judge, or call
+    Circle/Arc.
+    """
+    coverage = spread_families.get("index_coverage") if isinstance(spread_families.get("index_coverage"), dict) else {}
+    electricity = coverage.get("electricity") if isinstance(coverage.get("electricity"), dict) else {}
+    compute = coverage.get("compute") if isinstance(coverage.get("compute"), dict) else {}
+    archetypes = coverage.get("spread_archetypes") if isinstance(coverage.get("spread_archetypes"), dict) else {}
+    outputs = synthetic_instrument.get("outputs") if isinstance(synthetic_instrument.get("outputs"), dict) else {}
+    menu = outputs.get("syndicated_instrument_menu") if isinstance(outputs.get("syndicated_instrument_menu"), list) else []
+    trade_map = outputs.get("spread_archetype_trade_map") if isinstance(outputs.get("spread_archetype_trade_map"), list) else []
+    direct_pairs = outputs.get("direct_event_pair_candidates") if isinstance(outputs.get("direct_event_pair_candidates"), dict) else {}
+    ledger_rows = profitability_ledger.get("rows") if isinstance(profitability_ledger.get("rows"), list) else []
+    portfolio_rows = portfolio_signal.get("rows") if isinstance(portfolio_signal.get("rows"), list) else []
+    venue_rows = venue_evidence.get("rows") if isinstance(venue_evidence.get("rows"), list) else []
+    venue_summary = venue_evidence.get("summary") if isinstance(venue_evidence.get("summary"), dict) else {}
+
+    electricity_usable = _safe_int(electricity.get("usable"))
+    electricity_total = _safe_int(electricity.get("total"))
+    compute_usable = _safe_int(compute.get("usable"))
+    compute_total = _safe_int(compute.get("total"))
+    archetype_total = _safe_int(archetypes.get("total"))
+    archetype_replayed = _safe_int(archetypes.get("replayed"))
+    archetype_oos = _safe_int(archetypes.get("oos_passed") or archetypes.get("oos_pass"))
+    promotable_rows = sum(
+        1
+        for row in [*trade_map, *ledger_rows]
+        if isinstance(row, dict)
+        and (
+            row.get("is_promotable")
+            or row.get("replay_promotable")
+            or row.get("spread_replay_promotable")
+            or row.get("oos_passed")
+            or row.get("oos_status") == "PASSED"
+            or row.get("spread_oos_status") == "PASSED"
+        )
+    )
+    profitable_rows = sum(
+        1
+        for row in ledger_rows
+        if isinstance(row, dict)
+        and (
+            (_as_float(row.get("paper_total_return_pct") or row.get("total_return_pct")) or 0.0) > 0
+            or (_as_float(row.get("latest_paper_pnl_usdc") or row.get("latest_mark_pnl_usdc") or row.get("latest_pnl_usdc")) or 0.0) > 0
+        )
+    )
+    buy_or_sell_rows = sum(
+        1
+        for row in ledger_rows
+        if isinstance(row, dict)
+        and any(token in str(row.get("profitability_status") or row.get("latest_signal") or row.get("tradability_action") or "").upper() for token in ("BUY", "SELL", "CLOSE", "AVOID"))
+    )
+    direct_surfaces = _safe_int(venue_summary.get("direct_event_surfaces"))
+    priced_surfaces = _safe_int(venue_summary.get("priced_surfaces"))
+    real_feed_surfaces = _safe_int(venue_summary.get("real_feed_surfaces"))
+    ready_pairs = _safe_int(direct_pairs.get("ready_for_judge_count"))
+    total_pairs = _safe_int(direct_pairs.get("total_count") or _count_rows(direct_pairs.get("rows")))
+    oracle_current = _safe_int(oracle_evidence.get("current_desk_row_count"))
+    campaign_total = _safe_int(telegram_campaign.get("total_posts"))
+    campaign_posted = _safe_int(telegram_campaign.get("posted_count"))
+    release_total = _safe_int(telegram_miniapp_release.get("total_posts"))
+    release_posted = _safe_int(telegram_miniapp_release.get("posted_count"))
+    electricity_tradeability = electricity.get("tradeability_counts") if isinstance(electricity.get("tradeability_counts"), dict) else {}
+    compute_tradeability = compute.get("tradeability_counts") if isinstance(compute.get("tradeability_counts"), dict) else {}
+    electricity_families = electricity.get("family_counts") if isinstance(electricity.get("family_counts"), dict) else {}
+    compute_families = compute.get("family_counts") if isinstance(compute.get("family_counts"), dict) else {}
+
+    index_score = (
+        (1.0 if electricity_usable >= 5 else electricity_usable / 5.0)
+        + (1.0 if compute_usable >= 4 else compute_usable / 4.0)
+        + (1.0 if archetype_replayed >= 10 else archetype_replayed / 10.0)
+        + (1.0 if archetype_oos >= 1 else 0.0)
+    ) / 4.0
+    profitability_score = (
+        (1.0 if ledger_rows else 0.0)
+        + (1.0 if profitable_rows >= 3 else profitable_rows / 3.0)
+        + (1.0 if promotable_rows >= 5 else promotable_rows / 5.0)
+        + (1.0 if buy_or_sell_rows >= 1 else 0.0)
+    ) / 4.0
+    venue_score = (
+        (1.0 if direct_surfaces >= 3 else direct_surfaces / 3.0)
+        + (1.0 if priced_surfaces >= 2 else priced_surfaces / 2.0)
+        + (1.0 if real_feed_surfaces >= 4 else real_feed_surfaces / 4.0)
+        + (1.0 if ready_pairs >= 1 else 0.0)
+        + (1.0 if oracle_current >= 1 else 0.0)
+    ) / 5.0
+    signal_score = (
+        (1.0 if portfolio_rows else 0.0)
+        + (1.0 if portfolio_signal.get("action") else 0.0)
+        + (1.0 if _safe_int(pnl.get("paper_buy_count")) + _safe_int(pnl.get("paper_close_or_avoid_count")) >= 1 else 0.0)
+        + (1.0 if pnl.get("paper_latest_mark_pnl_usdc") not in ("", None) else 0.0)
+    ) / 4.0
+    ui_score = (
+        (release_posted / release_total if release_total else 0.0)
+        + (campaign_posted / campaign_total if campaign_total else 0.0)
+    ) / 2.0
+
+    items = [
+        _coverage_item(
+            item_id="indexes_spreads",
+            label="Indexes and oil-style spreads",
+            score=index_score,
+            metric=f"{electricity_usable}/{electricity_total} electricity, {compute_usable}/{compute_total} compute, {archetype_replayed}/{archetype_total} spreads replayed",
+            evidence=coverage.get("summary") or "Index catalog and spread archetype coverage are generated from backend replay state.",
+            next_step="Wire planned ISO/regional compute curves so proxy basis rows become physical basis rows.",
+        ),
+        _coverage_item(
+            item_id="profitability_backtests",
+            label="Backtested profitability",
+            score=profitability_score,
+            metric=f"{len(ledger_rows)} ledger rows, {profitable_rows} positive, {promotable_rows} promotable/OOS rows",
+            evidence=profitability_ledger.get("realized_note") or "Replay rows and local paper marks are separated from settled PnL.",
+            next_step="Keep counting every tested spread/slug and reconcile real fills when settlements exist.",
+        ),
+        _coverage_item(
+            item_id="real_venue_copy",
+            label="Real venue copy matrix",
+            score=venue_score,
+            metric=f"{len(venue_rows)} surfaces, {priced_surfaces} priced, {ready_pairs}/{total_pairs} direct pairs ready",
+            evidence=venue_evidence.get("guardrail") or "Venues are evidence/watchlist state until judge.classify() returns EXECUTE.",
+            next_step="Refresh IBKR/Kalshi/Polymarket pricing and run premium scorer + judge on matched direct pairs.",
+        ),
+        _coverage_item(
+            item_id="signals_pnl",
+            label="Buy/sell and PnL tracking",
+            score=signal_score,
+            metric=f"action {portfolio_signal.get('action') or 'none'}, paper latest {pnl.get('paper_latest_mark_pnl_usdc') or 'n/a'} USDC",
+            evidence=pnl.get("mark_to_market_note") or "Paper tickets are tracked separately from settled venue/Arc PnL.",
+            next_step="Open and close account-owned paper tickets during demo to populate realized paper PnL.",
+        ),
+        _coverage_item(
+            item_id="frontend_tg",
+            label="Frontend, Mini App, Telegram campaign",
+            score=ui_score,
+            metric=f"Mini App release {release_posted}/{release_total}, campaign {campaign_posted}/{campaign_total}",
+            evidence="Release/campaign state is read from sent keys only; message bodies and bot tokens are not exposed.",
+            next_step="Post any remaining deduped channel campaign updates after the latest screenshot refresh.",
+        ),
+    ]
+    requirements = [
+        _requirement_item(
+            item_id="req_1_indexes_spreads",
+            label="1. Index universe and spread families",
+            score=(
+                (1.0 if electricity_total >= 10 and electricity_usable >= 5 else min(electricity_usable / 5.0, 0.8))
+                + (1.0 if compute_total >= 10 and compute_usable >= 4 else min(compute_usable / 4.0, 0.8))
+                + (1.0 if archetype_total >= 8 and archetype_replayed >= 8 else min(archetype_replayed / 8.0, 0.8))
+                + (1.0 if electricity_families and compute_families else 0.0)
+            ) / 4.0,
+            evidence=[
+                f"{electricity_usable}/{electricity_total} electricity indexes usable; families: {', '.join(sorted(electricity_families)) or 'not bucketed'}",
+                f"{compute_usable}/{compute_total} compute indexes usable; families: {', '.join(sorted(compute_families)) or 'not bucketed'}",
+                f"{archetype_replayed}/{archetype_total} oil-style spread forms replayed.",
+            ],
+            gaps=[] if electricity_total >= 10 and compute_total >= 10 and archetype_replayed >= 8 else [
+                "Expand catalog or replay evidence until both index universes and spread families clear thresholds.",
+            ],
+        ),
+        _requirement_item(
+            item_id="req_2_profitable_backtests",
+            label="2. Profitability and OOS backtests",
+            score=profitability_score,
+            evidence=[
+                f"{len(ledger_rows)} profitability ledger rows.",
+                f"{profitable_rows} rows positive by paper return or latest mark PnL.",
+                f"{promotable_rows} rows promotable/OOS; {archetype_oos} spread archetypes OOS-passed.",
+            ],
+            gaps=[] if profitability_score >= 0.85 else [
+                "Need more positive replay/OOS rows before fresh buy labels should be promoted.",
+            ],
+        ),
+        _requirement_item(
+            item_id="req_3_real_venue_syndication",
+            label="3. Real venues, LLM evidence, syndicated instruments",
+            score=venue_score,
+            evidence=[
+                f"{len(menu)} syndicated instrument types generated.",
+                f"{len(venue_rows)} venue rows, {real_feed_surfaces} real-feed surfaces, {priced_surfaces} priced surfaces.",
+                f"{direct_surfaces} direct-event surfaces; {ready_pairs}/{total_pairs} direct pairs ready for premium/judge.",
+                f"{oracle_current} current-desk Opoint/Nebius receipts.",
+                f"Power tradeability: {electricity_tradeability}; compute tradeability: {compute_tradeability}.",
+            ],
+            gaps=[] if venue_score >= 0.85 and len(menu) >= 5 else [
+                "Need more priced real venue rows or syndicated structures before treating this as a broad venue copy matrix.",
+            ],
+        ),
+        _requirement_item(
+            item_id="req_4_signals_pnl",
+            label="4. Buy/sell signals and PnL tracking",
+            score=signal_score,
+            evidence=[
+                f"Portfolio action: {portfolio_signal.get('action') or 'none'}.",
+                f"{len(portfolio_rows)} signal rows; paper latest mark PnL {pnl.get('paper_latest_mark_pnl_usdc') or 'n/a'} USDC.",
+                f"Paper buy count {_safe_int(pnl.get('paper_buy_count'))}; close/avoid count {_safe_int(pnl.get('paper_close_or_avoid_count'))}.",
+            ],
+            gaps=[] if signal_score >= 0.85 else [
+                "Need account-owned paper tickets or signal rows before PnL tracking is demonstrable.",
+            ],
+        ),
+        _requirement_item(
+            item_id="req_5_frontend_tg",
+            label="5. Frontend, Mini App, Telegram posts",
+            score=ui_score,
+            evidence=[
+                f"Mini App release posts {release_posted}/{release_total}.",
+                f"Campaign posts {campaign_posted}/{campaign_total}.",
+                "Dashboard and Mini App consume this same sanitized goal coverage payload.",
+            ],
+            gaps=[] if ui_score >= 0.85 else [
+                "Post remaining deduped Telegram updates and expose the latest payload in the Mini App.",
+            ],
+        ),
+    ]
+    overall_score = round(sum(float(item["score"]) for item in items) / max(len(items), 1), 1)
+    return {
+        "version": "goal_coverage_v1",
+        "overall_score": overall_score,
+        "overall_status": _coverage_status(overall_score / 100.0),
+        "items": items,
+        "requirements": requirements,
+        "summary": (
+            f"{archetype_replayed}/{archetype_total} spread forms replayed, "
+            f"{len(menu)} syndicated instruments, {len(ledger_rows)} profitability rows, "
+            f"{priced_surfaces} priced venue surfaces, {release_posted}/{release_total} Mini App release posts."
+        ),
+        "guardrail": "This is readiness telemetry only; Circle/Arc remain locked unless judge.classify() returns EXECUTE.",
+    }
+
+
+def _compact_row(row: dict[str, Any], *, max_text: int = 900) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, str) and key in {"description", "leg_description", "pricing_detail", "leg_connection"}:
+            out[key] = value if len(value) <= max_text else f"{value[:max_text].rstrip()}..."
+        else:
+            out[key] = value
+    return out
+
+
+def _compact_trade_replay(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    closed = out.get("closed_trades")
+    if isinstance(closed, list):
+        out["closed_trades"] = closed[-2:]
+    return out
+
+
+def _compact_synthetic_menu_item(row: dict[str, Any]) -> dict[str, Any]:
+    out = _compact_row(row, max_text=600)
+    for key in ("paper_trade_replay", "out_of_sample_replay"):
+        if key in out:
+            out[key] = _compact_trade_replay(out[key])
+    return out
+
+
+def _compact_profitability_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = _compact_row(row, max_text=600)
+    marks = out.get("recent_paper_marks")
+    if isinstance(marks, list):
+        out["recent_paper_marks"] = marks[-3:]
+    for key in ("paper_trade_replay", "out_of_sample_replay", "spread_out_of_sample_replay"):
+        if key in out:
+            out[key] = _compact_trade_replay(out[key])
+    return out
+
+
+def _compact_trade_map_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = _compact_row(row, max_text=600)
+    out.pop("expressions", None)
+    if "spread_out_of_sample_replay" in out:
+        out["spread_out_of_sample_replay"] = _compact_trade_replay(out["spread_out_of_sample_replay"])
+    selected = out.get("selected_expression")
+    if isinstance(selected, dict):
+        out["selected_expression"] = _compact_synthetic_menu_item(selected)
+    return out
+
+
+def _compact_venue_matrix(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    rows = []
+    for row in out.get("rows") or []:
+        if not isinstance(row, dict):
+            rows.append(row)
+            continue
+        clean = _compact_row(row, max_text=500)
+        sample_legs = []
+        for leg in clean.get("sample_legs") or []:
+            if not isinstance(leg, dict):
+                sample_legs.append(leg)
+                continue
+            leg_clean = _compact_row(leg, max_text=280)
+            leg_clean.pop("description", None)
+            sample_legs.append(leg_clean)
+        clean["sample_legs"] = sample_legs[:3]
+        links = clean.get("spread_links")
+        if isinstance(links, list):
+            clean["spread_links"] = links[:3]
+        rows.append(clean)
+    out["rows"] = rows
+    return out
+
+
+def _build_compact_snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
+    out = snapshot(logs=logs)
+
+    spread_families = out.get("spread_families")
+    if isinstance(spread_families, dict):
+        spread_families.pop("recorded_history_replay", None)
+        spread_families.pop("proxy_history_replay", None)
+
+    synthetic = out.get("synthetic_instrument")
+    outputs = synthetic.get("outputs") if isinstance(synthetic, dict) else None
+    if isinstance(outputs, dict):
+        outputs.pop("spread_family_validation", None)
+        outputs.pop("proxy_basket_validation", None)
+        if isinstance(outputs.get("spread_archetype_trade_map"), list):
+            outputs["spread_archetype_trade_map"] = [
+                _compact_trade_map_row(row) if isinstance(row, dict) else row
+                for row in outputs["spread_archetype_trade_map"][:10]
+            ]
+        ledger = outputs.get("spread_profitability_ledger")
+        if isinstance(ledger, dict) and isinstance(ledger.get("rows"), list):
+            ledger["rows"] = [
+                _compact_profitability_row(row) if isinstance(row, dict) else row
+                for row in ledger["rows"][:10]
+            ]
+        if isinstance(outputs.get("syndicated_instrument_menu"), list):
+            outputs["syndicated_instrument_menu"] = [
+                _compact_synthetic_menu_item(row) if isinstance(row, dict) else row
+                for row in outputs["syndicated_instrument_menu"][:10]
+            ]
+        if isinstance(outputs.get("real_venue_copy_matrix"), dict):
+            outputs["real_venue_copy_matrix"] = _compact_venue_matrix(outputs["real_venue_copy_matrix"])
+        pairs = outputs.get("direct_event_pair_candidates")
+        if isinstance(pairs, dict) and isinstance(pairs.get("rows"), list):
+            pairs["rows"] = [
+                _compact_row(row, max_text=500) if isinstance(row, dict) else row
+                for row in pairs["rows"][:6]
+            ]
+
+    for key, limit in (("verdicts", 20), ("positions", 20), ("arc_txs", 20), ("packages", 12)):
+        rows = out.get(key)
+        if isinstance(rows, list):
+            out[key] = [_compact_row(row) if isinstance(row, dict) else row for row in rows[:limit]]
+
+    for key in ("verdict_rollups", "direct_inventory", "public_hedges"):
+        rows = out.get(key)
+        if isinstance(rows, list):
+            out[key] = [_compact_row(row) if isinstance(row, dict) else row for row in rows]
+
+    ledger = out.get("profitability_ledger")
+    if isinstance(ledger, dict) and isinstance(ledger.get("rows"), list):
+        ledger["rows"] = [
+            _compact_profitability_row(row) if isinstance(row, dict) else row
+            for row in ledger["rows"][:10]
+        ]
+    portfolio_signal = out.get("portfolio_signal")
+    if isinstance(portfolio_signal, dict) and isinstance(portfolio_signal.get("rows"), list):
+        portfolio_signal["rows"] = [
+            _compact_profitability_row(row) if isinstance(row, dict) else row
+            for row in portfolio_signal["rows"][:10]
+        ]
+    venue = out.get("venue_evidence")
+    if isinstance(venue, dict):
+        out["venue_evidence"] = _compact_venue_matrix(venue)
+
+    return out
+
+
+def compact_snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
+    """Return the same product state with duplicate replay blobs removed.
+
+    The full `snapshot()` remains the audit/internal projection. This compact
+    shape is for browser, Mini App, and account endpoints where repeated
+    backtest blobs and old raw rows make the UI slow without adding new user
+    information.
+    """
+    global _COMPACT_SNAPSHOT_CACHE
+    cache_seconds = _num_env("SNAPSHOT_CACHE_SECONDS", 60.0)
+    cache_enabled = logs is None and cache_seconds > 0
+    cache_key = str(log_dir(logs).resolve())
+    now = time.time()
+    if cache_enabled:
+        with _COMPACT_SNAPSHOT_LOCK:
+            if _COMPACT_SNAPSHOT_CACHE and _COMPACT_SNAPSHOT_CACHE[0] > now and _COMPACT_SNAPSHOT_CACHE[1] == cache_key:
+                return copy.deepcopy(_COMPACT_SNAPSHOT_CACHE[2])
+
+        _COMPACT_SNAPSHOT_BUILD_LOCK.acquire()
+        try:
+            with _COMPACT_SNAPSHOT_LOCK:
+                if (
+                    _COMPACT_SNAPSHOT_CACHE
+                    and _COMPACT_SNAPSHOT_CACHE[0] > time.time()
+                    and _COMPACT_SNAPSHOT_CACHE[1] == cache_key
+                ):
+                    return copy.deepcopy(_COMPACT_SNAPSHOT_CACHE[2])
+
+            out = _build_compact_snapshot(logs=logs)
+            with _COMPACT_SNAPSHOT_LOCK:
+                _COMPACT_SNAPSHOT_CACHE = (time.time() + cache_seconds, cache_key, copy.deepcopy(out))
+            return out
+        finally:
+            _COMPACT_SNAPSHOT_BUILD_LOCK.release()
+
+    return _build_compact_snapshot(logs=logs)
+
+
+def warm_compact_snapshot_cache() -> bool:
+    try:
+        compact_snapshot()
+    except Exception:
+        return False
+    return True
+
+
 def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
     now = time.time()
     spread = spread_state(logs=logs)
@@ -1944,6 +2616,19 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
             "paper_wait_count": portfolio_signal.get("wait_count", 0),
             "paper_replay_realized": bool(portfolio_signal.get("realized")),
         })
+    telegram_campaign = telegram_campaign_state(logs=logs)
+    telegram_miniapp_release = telegram_miniapp_release_state(logs=logs)
+    goal_coverage = goal_coverage_state(
+        spread_families=spread_families,
+        synthetic_instrument=synthetic_instrument,
+        profitability_ledger=profitability_ledger,
+        portfolio_signal=portfolio_signal,
+        venue_evidence=venue_evidence,
+        oracle_evidence=oracle_evidence,
+        telegram_campaign=telegram_campaign,
+        telegram_miniapp_release=telegram_miniapp_release,
+        pnl=pnl,
+    )
     return {
         "ok": True,
         "generated_at": now,
@@ -1969,5 +2654,7 @@ def snapshot(*, logs: Path | str | None = None) -> dict[str, Any]:
         "arc_txs": arc_tx_state(logs=logs),
         "pnl": pnl,
         "oracle": oracle_evidence,
-        "telegram_campaign": telegram_campaign_state(logs=logs),
+        "telegram_campaign": telegram_campaign,
+        "telegram_miniapp_release": telegram_miniapp_release,
+        "goal_coverage": goal_coverage,
     }

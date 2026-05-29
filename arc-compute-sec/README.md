@@ -277,6 +277,18 @@ The router then expresses that package on available surfaces:
   `IBKR_PORT` alias. Use paper ports by default: `4002` for IB Gateway paper or
   `7497` for TWS paper. Live ports are `4001` / `7496` and should not be used
   for this demo unless the operator explicitly changes the risk mode.
+  If the website runs in Docker, use `IBKR_HOST=host.docker.internal`; inside a
+  container, `127.0.0.1` points at the container itself, not the Mac terminal.
+  Docker Compose sets this automatically. The API, worker, and Telegram service
+  use separate high client ids by default (`4210`, `4220`, `4230`) so they do
+  not collide with your manual TWS/IB Gateway sessions. If the socket is closed,
+  the dashboard skips the IBKR attempt quickly via
+  `IBKR_PUBLIC_QUOTE_CONNECT_TIMEOUT` and falls through to the next configured
+  source. Docker also defaults the web-facing quote path to fast public reads
+  (`PUBLIC_DOCKER_HEDGE_PRICE_SOURCES=yahoo`,
+  `IBKR_DOCKER_FORECAST_PROXY_PRICE_SOURCES=yahoo`,
+  `KALSHI_DOCKER_DIRECT_EVENT_MAX_PAGES=1`) so the Mini App does not stall
+  while deeper operator scans can still use broader local settings.
   If IBKR blocks live and historical market data because another session owns
   the data bridge, the adapter can fall back to the Brent repo's local
   `improm_signal/data/ibkr_energy_history.csv` file, or an explicit
@@ -574,8 +586,21 @@ announcement, and `npm run telegram:market-data-update` to post the IBKR
 paper-terminal/proxy-source labelling update. Use
 `npm run telegram:instrument-menu-update` for the multi-spread structure
 announcement and `npm run telegram:profitability-update` for the profitability
-ledger announcement. Each notification pass is capped by `TELEGRAM_NOTIFY_MAX_PER_PASS`
-(default `3`) to avoid Telegram rate limits.
+ledger announcement.
+
+For the public Mini App launch sequence, refresh screenshots first and then post
+the five screenshot-backed release notes:
+
+```bash
+npm run telegram:screenshots
+npm run telegram:miniapp-release-draft
+npm run telegram:miniapp-release-post
+```
+
+Those posts attach `miniapp-home.png`, `miniapp-contract.png`,
+`miniapp-portfolio.png`, `profitability.png`, and `venue-copy.png`, with one
+short description per product section. Each notification pass is capped by
+`TELEGRAM_NOTIFY_MAX_PER_PASS` (default `3`) to avoid Telegram rate limits.
 Use `npm run telegram:configure` after token rotation to set the bot description,
 command menu, and Mini App menu button from `PUBLIC_BASE_URL`.
 Polling mode works locally without ngrok. Use `ngrok http 8080` and set

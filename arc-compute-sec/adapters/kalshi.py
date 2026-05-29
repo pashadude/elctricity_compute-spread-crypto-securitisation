@@ -41,6 +41,16 @@ DEFAULT_AI_TERMS = (
 )
 
 
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -150,6 +160,7 @@ def fetch_events(
     with_nested_markets: bool = True,
     max_pages: int = 2,
     ttl: float = 60.0,
+    timeout: float | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch public Kalshi events without authentication."""
     limit = max(1, min(int(limit), 200))
@@ -173,7 +184,7 @@ def fetch_events(
                 f"{KALSHI_API_BASE}/events",
                 params=params,
                 headers={"accept": "application/json", "user-agent": "arc-compute-sec/1.0"},
-                timeout=12,
+                timeout=timeout if timeout is not None else _float_env("KALSHI_EVENT_TIMEOUT", 3.0),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -198,9 +209,10 @@ def fetch_ai_events(
     max_events: int = 8,
     terms: Iterable[str] | None = None,
     ttl: float = 60.0,
+    timeout: float | None = None,
 ) -> list[dict[str, Any]]:
     """Return AI/compute-relevant Kalshi events normalized for routing."""
-    raw = fetch_events(limit=limit, status="open", with_nested_markets=True, max_pages=max_pages, ttl=ttl)
+    raw = fetch_events(limit=limit, status="open", with_nested_markets=True, max_pages=max_pages, ttl=ttl, timeout=timeout)
     matched = [event for event in raw if _matches_terms(event, terms)]
     matched.sort(key=_event_sort_key)
     return [_summarize_event(event) for event in matched[:max_events]]

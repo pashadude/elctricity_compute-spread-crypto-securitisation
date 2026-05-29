@@ -154,6 +154,8 @@ def test_derived_calendar_families_use_prior_marks_without_forward_curves():
     power_calendar = next(f for f in summary["families"] if f["family_id"] == "electricity_prompt_calendar_21d")
     curve_basis = next(f for f in summary["families"] if f["family_id"] == "compute_power_prompt_basis_21d")
     regional_basis = next(f for f in summary["families"] if f["family_id"] == "regional_compute_power_basis_proxy")
+    regional_compute = next(f for f in summary["families"] if f["family_id"] == "regional_compute_rental_basis_proxy")
+    regional_power = next(f for f in summary["families"] if f["family_id"] == "regional_power_price_basis_proxy")
     scoreboard = summary["archetype_scoreboard"]
 
     assert compute_calendar["observations"] > 100
@@ -161,11 +163,15 @@ def test_derived_calendar_families_use_prior_marks_without_forward_curves():
     assert power_calendar["observations"] > 100
     assert curve_basis["observations"] > 100
     assert regional_basis["observations"] > 100
+    assert regional_compute["observations"] > 100
+    assert regional_power["observations"] > 100
     assert "prior 21-mark" in compute_calendar["formula"]
     assert next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")["evidence_level"] == "replayed"
     assert next(item for item in scoreboard if item["archetype_id"] == "electricity_calendar_spread")["evidence_level"] == "replayed"
     assert next(item for item in scoreboard if item["archetype_id"] == "compute_power_calendar_basis")["evidence_level"] == "replayed"
     assert next(item for item in scoreboard if item["archetype_id"] == "regional_compute_power_basis")["evidence_level"] == "replayed"
+    assert next(item for item in scoreboard if item["archetype_id"] == "regional_compute_basis")["evidence_level"] == "replayed"
+    assert next(item for item in scoreboard if item["archetype_id"] == "regional_power_basis")["evidence_level"] == "replayed"
 
 
 def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
@@ -180,11 +186,15 @@ def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     assert any(item["id"] == "silicondata_h100_rental" for item in catalog["compute"])
     assert any(item["id"] == "aws_gpu_region_basis" for item in catalog["compute"])
     assert any(item["id"] == "public_compute_region_basis_proxy" for item in catalog["compute"])
+    assert any(item["id"] == "regional_compute_basis_proxy" for item in catalog["compute"])
     assert any(item["id"] == "compute_curve_prompt_term_proxy" for item in catalog["compute"])
     assert any(item["id"] == "public_power_region_basis_proxy" for item in catalog["electricity"])
+    assert any(item["id"] == "regional_power_basis_proxy" for item in catalog["electricity"])
     assert any(item["id"] == "compute_calendar_spread" for item in catalog["spread_archetypes"])
     assert any(item["id"] == "electricity_calendar_spread" for item in catalog["spread_archetypes"])
     assert any(item["id"] == "compute_power_calendar_basis" for item in catalog["spread_archetypes"])
+    assert any(item["id"] == "regional_compute_basis" for item in catalog["spread_archetypes"])
+    assert any(item["id"] == "regional_power_basis" for item in catalog["spread_archetypes"])
     assert any(item["archetype_id"] == "compute_spark_spread" and item["evidence_level"] == "replayed" for item in scoreboard)
     calendar = next(item for item in scoreboard if item["archetype_id"] == "compute_calendar_spread")
     assert calendar["evidence_level"] == "replayed"
@@ -195,9 +205,28 @@ def test_index_catalog_includes_compute_electricity_and_spread_archetypes():
     assert coverage["version"] == "index_coverage_v1"
     assert coverage["electricity"]["usable"] >= 5
     assert coverage["compute"]["usable"] >= 4
-    assert coverage["spread_archetypes"]["total"] >= 8
-    assert coverage["spread_archetypes"]["replayed"] >= 8
+    assert coverage["electricity"]["family_counts"]["physical_power"] >= 4
+    assert coverage["electricity"]["family_counts"]["regional_basis"] >= 1
+    assert coverage["electricity"]["family_counts"]["direct_event"] >= 1
+    assert coverage["compute"]["family_counts"]["gpu_rental"] >= 1
+    assert coverage["compute"]["family_counts"]["direct_event"] >= 1
+    assert coverage["electricity"]["tradeability_counts"]["live_mark"] >= 1
+    assert coverage["electricity"]["tradeability_counts"]["priced_proxy"] >= 1
+    assert coverage["compute"]["tradeability_counts"]["direct_event_watchlist"] >= 1
+    assert "power_curve_prompt_term_proxy" in coverage["electricity"]["usable_ids"]
+    assert "polymarket_ai_infra_events" in coverage["compute"]["watchlist_ids"]
+    poly = next(item for item in catalog["compute"] if item["id"] == "polymarket_ai_infra_events")
+    assert poly["tradeability"] == "direct_event_watchlist"
+    assert poly["can_be_direct_leg"] is True
+    assert poly["requires_premium_gate"] is True
+    ng = next(item for item in catalog["electricity"] if item["id"] == "ng_front_future")
+    assert ng["tradeability"] == "priced_proxy"
+    assert ng["can_mark_to_market"] is True
+    assert coverage["spread_archetypes"]["total"] >= 10
+    assert coverage["spread_archetypes"]["replayed"] >= 10
     assert coverage["spread_archetypes"]["planned"] == 0
+    assert coverage["spread_archetypes"]["oos_passed"] == coverage["spread_archetypes"]["oos_pass"]
+    assert coverage["spread_archetypes"]["oos_failed"] == coverage["spread_archetypes"]["oos_fail"]
     assert coverage["spread_archetypes"]["needs_history"] == []
     assert "electricity indexes usable" in coverage["summary"]
 

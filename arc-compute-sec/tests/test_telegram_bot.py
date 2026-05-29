@@ -734,6 +734,183 @@ def test_channel_profitability_update_dedupes(tmp_path, monkeypatch):
     assert "judge.classify() returns EXECUTE" in sent[0][1]
 
 
+def test_channel_miniapp_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_miniapp_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_miniapp_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "Telegram Mini App walkthrough shipped" in sent[0][1]
+    assert "four-step walkthrough" in sent[0][1]
+    assert "What Changed screen" in sent[0][1]
+    assert "My Portfolio screen" in sent[0][1]
+    assert "screenshots" in sent[0][1]
+    assert "judge.classify()" in sent[0][1]
+
+
+def test_channel_signal_discipline_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_signal_discipline_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_signal_discipline_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "signal discipline tightened" in sent[0][1]
+    assert "WAIT_FOR_SPREAD_REPLAY" in sent[0][1]
+    assert "CLOSE_OR_AVOID" in sent[0][1]
+    assert "judge.classify() returns EXECUTE" in sent[0][1]
+
+
+def test_channel_oracle_discipline_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_oracle_discipline_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_oracle_discipline_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "Opoint/Nebius evidence discipline shipped" in sent[0][1]
+    assert "compute-power receipts" in sent[0][1]
+    assert "current-desk receipts" in sent[0][1]
+    assert "judge.classify()" in sent[0][1]
+
+
+def test_channel_basis_spread_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_basis_spread_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_basis_spread_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "regional basis spreads shipped" in sent[0][1]
+    assert "Regional compute rental basis" in sent[0][1]
+    assert "Regional power congestion basis note" in sent[0][1]
+    assert "judge-before-Arc" in sent[0][1]
+
+
+def test_channel_index_tradeability_update_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    snap = {
+        "spread_families": {
+            "index_coverage": {
+                "electricity": {
+                    "tradeability_counts": {"live_mark": 1, "priced_proxy": 5, "direct_event_watchlist": 3},
+                    "family_counts": {"physical_power": 6, "fuel_stack": 2},
+                },
+                "compute": {
+                    "tradeability_counts": {"live_mark": 1, "priced_proxy": 3, "labelled_proxy": 1},
+                    "family_counts": {"gpu_rental": 5, "miner_margin": 2},
+                },
+                "spread_archetypes": {"replayed": 10, "total": 10, "oos_passed": 4},
+            }
+        }
+    }
+    monkeypatch.setattr(telegram_bot, "campaign_snapshot_for_messaging", lambda logs=None: snap)
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: sent.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_index_tradeability_update_once(logs=tmp_path) == 1
+    assert telegram_bot.notify_channel_index_tradeability_update_once(logs=tmp_path) == 0
+    assert sent[0][0] == "@desk"
+    assert "index tradeability labels shipped" in sent[0][1]
+    assert "live mark 1" in sent[0][1]
+    assert "direct-event watchlists" in sent[0][1]
+    assert "judge.classify()" in sent[0][1]
+
+
+def test_channel_post_uses_screenshot_when_present(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_SCREENSHOT_DIR", raising=False)
+    shot_dir = tmp_path / "telegram_screenshots"
+    shot_dir.mkdir()
+    shot = shot_dir / "miniapp-updates.png"
+    shot.write_bytes(b"fake-png")
+    photos = []
+    messages = []
+    monkeypatch.setattr(telegram_bot, "send_photo", lambda chat_id, photo_path, caption, reply_markup=None: photos.append((chat_id, photo_path, caption)))
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: messages.append((chat_id, text)))
+
+    telegram_bot.send_channel_post("@desk", telegram_bot.CHANNEL_MINIAPP_UPDATE_KEY, "Short screenshot post", logs=tmp_path)
+
+    assert photos == [("@desk", shot, "Short screenshot post")]
+    assert messages == []
+
+
+def test_channel_post_sends_full_text_after_truncated_photo_caption(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_SCREENSHOT_DIR", raising=False)
+    shot_dir = tmp_path / "telegram_screenshots"
+    shot_dir.mkdir()
+    (shot_dir / "miniapp-updates.png").write_bytes(b"fake-png")
+    photos = []
+    messages = []
+    monkeypatch.setattr(telegram_bot, "send_photo", lambda chat_id, photo_path, caption, reply_markup=None: photos.append((chat_id, photo_path, caption)))
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: messages.append((chat_id, text)))
+
+    long_text = "Header\n" + ("detail " * 250)
+    telegram_bot.send_channel_post("@desk", telegram_bot.CHANNEL_MINIAPP_UPDATE_KEY, long_text, logs=tmp_path)
+
+    assert len(photos) == 1
+    assert photos[0][2].endswith("Open the dashboard for the full detail.")
+    assert messages == [("@desk", long_text)]
+
+
+def test_channel_miniapp_update_uses_release_notes_screenshot(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_SCREENSHOT_DIR", raising=False)
+    shot_dir = tmp_path / "telegram_screenshots"
+    shot_dir.mkdir()
+    shot = shot_dir / "miniapp-updates.png"
+    shot.write_bytes(b"fake-png")
+    photos = []
+    messages = []
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    monkeypatch.setattr(telegram_bot, "send_photo", lambda chat_id, photo_path, caption, reply_markup=None: photos.append((chat_id, photo_path, caption)))
+    monkeypatch.setattr(telegram_bot, "send_message", lambda chat_id, text, reply_markup=None: messages.append((chat_id, text)))
+
+    assert telegram_bot.notify_channel_miniapp_update_once(logs=tmp_path) == 1
+
+    assert photos
+    assert photos[0][0] == "@desk"
+    assert photos[0][1] == shot
+    assert "Telegram Mini App walkthrough shipped" in photos[0][2]
+    assert messages == [("@desk", telegram_bot.channel_miniapp_update_message())]
+    assert "Screenshot attached when refreshed: the What Changed screen" in messages[0][1]
+
+
+def test_channel_miniapp_release_messages_are_screenshot_mapped():
+    messages = telegram_bot.channel_miniapp_release_messages()
+
+    assert len(messages) == 5
+    assert all(key in telegram_bot.CHANNEL_SCREENSHOT_FILES for key, _text in messages)
+    text = "\n".join(body for _key, body in messages)
+    assert "Mini App release 1/5" in text
+    assert "Mini App release 5/5" in text
+    assert "Screenshot:" in text
+    assert "judge.classify() first, Arc second" in text
+    assert "paper PnL is NAV versus entry" in text
+    assert "no repeated REJECT/DEFER/watchlist rows" in text
+
+
+def test_channel_miniapp_release_post_dedupes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHANNEL_ID", "@desk")
+    sent = []
+    monkeypatch.setattr(
+        telegram_bot,
+        "send_channel_post",
+        lambda chat_id, key, text, logs=None: sent.append((chat_id, key, text)),
+    )
+
+    assert telegram_bot.notify_channel_miniapp_release_once(logs=tmp_path) == 5
+    assert telegram_bot.notify_channel_miniapp_release_once(logs=tmp_path) == 0
+    assert len(sent) == 5
+    assert sent[0][0] == "@desk"
+    assert sent[0][1].endswith(":home")
+    assert sent[-1][1].endswith(":scouting")
+    assert "Screenshot:" in sent[0][2]
+
+
 def test_channel_campaign_messages_are_snapshot_grounded_and_mute_rejects():
     snap = {
         "spread_families": {
@@ -830,7 +1007,7 @@ def test_channel_campaign_messages_are_snapshot_grounded_and_mute_rejects():
     assert len(messages) == 4
     assert "2 electricity indexes, 3 compute indexes, and 2 oil-style spread forms" in text
     assert "Currently usable/replayed: 1 electricity indexes, 2 compute indexes, 1 spread forms" in text
-    assert "compute calendar forward hedge, electricity calendar power hedge, and compute-power calendar basis note" in text
+    assert "compute calendar forward hedge, electricity calendar power hedge, compute-power calendar basis note, regional compute capacity basis note, and regional power congestion basis note" in text
     assert "Current buy signal: none. Portfolio action is CLOSE_OR_AVOID; avoid/close Compute spark spread. Why: Both 5d and 1m proxy PnL are negative." in text
     assert "Fuel-stack compute spread" in text
     assert "paper ticket PnL: $+80.15; latest mark PnL: $+30.21" in text

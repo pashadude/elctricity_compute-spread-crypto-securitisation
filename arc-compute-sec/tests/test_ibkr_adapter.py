@@ -71,6 +71,25 @@ def test_ibkr_port_accepts_brent_strategy_alias(monkeypatch):
     assert ibkr._ibkr_port() == 7497
 
 
+def test_ibkr_client_id_auto_avoids_default_collision(monkeypatch):
+    monkeypatch.delenv("IBKR_CLIENT_ID", raising=False)
+    monkeypatch.setenv("IBKR_CLIENT_ID_BASE", "5100")
+    monkeypatch.setattr(ibkr.os, "getpid", lambda: 23456)
+
+    assert ibkr._ibkr_client_id() == 5556
+
+    monkeypatch.setenv("IBKR_CLIENT_ID", "77")
+
+    assert ibkr._ibkr_client_id() == 77
+
+
+def test_fetch_public_quote_suppresses_stock_connect_noise(monkeypatch, capsys):
+    monkeypatch.setattr(ibkr, "_connect", lambda: (_ for _ in ()).throw(RuntimeError("client id busy")))
+
+    assert ibkr.fetch_public_quote("NVDA") is None
+    assert capsys.readouterr().out == ""
+
+
 def test_flatten_forecast_markets_filters_thesis():
     tree = {
         "root": {"label": "Root", "markets": []},
@@ -335,7 +354,7 @@ def test_public_quote_maps_yahoo_future_to_ibkr_front_future(monkeypatch):
 
 
 def test_public_quote_uses_stock_contract_for_equity(monkeypatch):
-    monkeypatch.setattr(ibkr, "fetch_last_price", lambda symbol: 215.33 if symbol == "NVDA" else None)
+    monkeypatch.setattr(ibkr, "fetch_last_price", lambda symbol, **_kwargs: 215.33 if symbol == "NVDA" else None)
 
     quote = ibkr.fetch_public_quote("NVDA")
 

@@ -156,6 +156,34 @@ PROXY_BASKETS: tuple[ProxyBasketTemplate, ...] = (
             "NRG": -0.08,
         },
     ),
+    ProxyBasketTemplate(
+        basket_id="regional_compute_capacity_basis",
+        label="Regional compute capacity basis basket",
+        direction="compute_expensive",
+        thesis="Long regional compute-capacity beneficiaries and short power-cost proxies when one compute region gets rich versus another.",
+        weights={
+            "NVDA": 0.32,
+            "VRT": 0.24,
+            "ETN": 0.16,
+            "CEG": -0.12,
+            "NRG": -0.10,
+            "BTC-USD": 0.06,
+        },
+    ),
+    ProxyBasketTemplate(
+        basket_id="regional_power_congestion_basis",
+        label="Regional power congestion basis basket",
+        direction="electricity_expensive",
+        thesis="Long merchant power, baseload, and grid-equipment proxies when one power region gets rich/congested versus another.",
+        weights={
+            "NRG": 0.26,
+            "CEG": 0.20,
+            "ETN": 0.18,
+            "VRT": 0.12,
+            "NG=F": 0.12,
+            "NVDA": -0.12,
+        },
+    ),
 )
 
 

@@ -130,7 +130,7 @@ const DashboardPage = ({ refreshRate, adminMode, setPage }) => {
         <div key={tab} style={{ animation: 'fadeIn 0.3s ease' }}>
           {tab === 'invest' && <InvestView notes={data.notes} marks={data.marks} account={data.account} onBuy={openBuy} setPage={setPage} />}
           {tab === 'portfolio' && <PortfolioView portfolio={data.portfolio} account={data.account} goInvest={() => setTab('invest')} goAccount={() => setPage?.('account')} onClosePosition={closePosition} />}
-          {tab === 'signal' && <SignalView spread={data.spread} stats={data.stats} indexCatalog={data.indexCatalog} />}
+          {tab === 'signal' && <SignalView spread={data.spread} stats={data.stats} indexCatalog={data.indexCatalog} goalCoverage={data.goalCoverage} />}
           {tab === 'methodology' && <MethodologyView />}
           {tab === 'operator' && adminMode && <OperatorView snapshot={data.snapshot} />}
         </div>

@@ -19,7 +19,7 @@ do not duplicate alpha/scoring logic here
 `arc-canteen` is the hackathon organisers' Python CLI bundled with `the-canteen-dev/ARC-cli`. It serves three purposes:
 
 1. **Visibility on the judging dashboard** — submit `update_product` and `update_traction` events that organisers see. Skipping this means our build is invisible to scoring.
-2. **Authenticated Arc Testnet RPC** — proxy at `https://rpc.testnet.arc-node.thecanteenapp.com/v1/<token>`, less rate-limited than the public `rpc.testnet.arc.network`.
+2. **Optional authenticated Arc Testnet RPC** — proxy at `https://rpc.testnet.arc-node.thecanteenapp.com/v1/<token>`. Treat it as optional: the product should default to the public `https://rpc.testnet.arc.network` unless the proxy is known healthy.
 3. **Coding puzzles / easter eggs** — bonus-point challenges (e.g. cUSDC wrapper); `arc-canteen submit-puzzle` posts the answer.
 
 ## Install (pinned to audited SHA)
@@ -37,10 +37,17 @@ To bump: re-audit the new SHA before changing the pin. Re-install with `uv tool 
 ```bash
 arc-canteen login                  # GitHub Device Flow OAuth (no repo scope)
 arc-canteen profile-edit            # Discord/Telegram/Luma email
-arc-canteen rpc-url --export        # prints: export RPC='https://rpc.testnet.arc-node.thecanteenapp.com/v1/<token>'
+arc-canteen rpc-url --export        # optional; prints: export RPC='https://rpc.testnet.arc-node.thecanteenapp.com/v1/<token>'
 ```
 
-Paste the printed URL into `arc-compute-sec/.env` as both `ARC_RPC` and `RPC` (the second is what TS scripts pick up when they read `process.env.RPC`):
+Default to the public Arc RPC in `arc-compute-sec/.env`:
+
+```
+ARC_RPC=https://rpc.testnet.arc.network
+RPC=https://rpc.testnet.arc.network
+```
+
+Only paste the `arc-canteen rpc-url --export` URL into `ARC_RPC` and `RPC` when the proxy is healthy and you specifically want authenticated proxy attribution:
 
 ```
 ARC_RPC=https://rpc.testnet.arc-node.thecanteenapp.com/v1/<token>
@@ -59,7 +66,7 @@ arc-canteen status                  # show dashboard
 | When | Command | What it does |
 |---|---|---|
 | Once at session start | `arc-canteen login` | Auth, mints 90-day server token |
-| Once at session start | `arc-canteen rpc-url --export` | Returns the per-user RPC URL with token embedded |
+| When the proxy is healthy | `arc-canteen rpc-url --export` | Returns the optional per-user RPC URL with token embedded |
 | **After every phase commit** | `arc-canteen update-product` | Free-text update — paste the commit headline + onchain proof URL |
 | When a position settles onchain | `arc-canteen update-traction` | Free-text update describing the milestone with arcscan link |
 | When a puzzle drops | `arc-canteen submit-puzzle` | Submit answer to the active challenge |
@@ -105,6 +112,7 @@ NEVER auto-invoke just to ping the dashboard. Updates are user-meaningful only �
 
 - **Server down** — `push_event` queues locally and silently retries on next invocation. No hang.
 - **Token expired** (90-day max) — `arc-canteen rpc <method>` returns "token rejected"; rerun `arc-canteen login`.
+- **Proxy DNS/outage risk** — if `arc-canteen rpc eth_chainId` fails with DNS/server errors, keep `ARC_RPC` and `RPC` on the public `https://rpc.testnet.arc.network`. Canteen dashboard/update commands can still be useful even when the RPC proxy path is down.
 - **Hostile-RPC censorship risk** — if the proxy refuses to forward `eth_sendRawTransaction`, swap `ARC_RPC` back to the public `https://rpc.testnet.arc.network` in `.env`. Our code reads `ARC_RPC`; one line of `.env` swaps the entire stack.
 
 ## Integration with our project
@@ -114,4 +122,4 @@ NEVER auto-invoke just to ping the dashboard. Updates are user-meaningful only �
   - Block 1 step 1.11 — autonomous install
   - Gate A step 6 — operator-interactive `login` + paste RPC into `.env`
   - Each subsequent phase commit — `arc-canteen update-product`
-- `arc-compute-sec/.env.template` carries an `RPC=` slot to be filled from `arc-canteen rpc-url --export`.
+- `arc-compute-sec/.env.template` carries `ARC_RPC=` and `RPC=` slots that default to the public Arc RPC; fill them from `arc-canteen rpc-url --export` only when the proxy is healthy.

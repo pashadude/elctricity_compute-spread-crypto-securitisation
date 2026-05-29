@@ -145,6 +145,30 @@ def _regional_compute_power_basis_series(rows: list[dict[str, Any]]) -> list[flo
     return out
 
 
+def _regional_compute_basis_series(rows: list[dict[str, Any]]) -> list[float]:
+    """Region-A GPU rental mark minus Region-B GPU rental mark."""
+    out: list[float] = []
+    for row in rows:
+        a_compute = _num(row.get("region_a_compute_per_gpu_hr"))
+        b_compute = _num(row.get("region_b_compute_per_gpu_hr"))
+        if min(a_compute, b_compute) <= 0.0:
+            continue
+        out.append(a_compute - b_compute)
+    return out
+
+
+def _regional_power_basis_series(rows: list[dict[str, Any]]) -> list[float]:
+    """Region-A electricity mark minus Region-B electricity mark."""
+    out: list[float] = []
+    for row in rows:
+        a_elec = _num(row.get("region_a_electricity_per_mwh"))
+        b_elec = _num(row.get("region_b_electricity_per_mwh"))
+        if min(a_elec, b_elec) <= 0.0:
+            continue
+        out.append(a_elec - b_elec)
+    return out
+
+
 SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
     SpreadFamily(
         family_id="compute_net_power_margin",
@@ -196,6 +220,28 @@ SPREAD_FAMILIES: tuple[SpreadFamily, ...] = (
         trade_rule="Mean-revert or momentum depending on replay mode; region marks must be present in the row history.",
         value_fn=lambda x: 0.0,
         series_fn=_regional_compute_power_basis_series,
+    ),
+    SpreadFamily(
+        family_id="regional_compute_rental_basis_proxy",
+        archetype_id="regional_compute_basis",
+        label="Regional compute rental basis proxy",
+        formula="region A GPU rental - region B GPU rental",
+        unit="USD/GPU-hr",
+        expensive_side="High = region A GPU rental rich versus region B.",
+        trade_rule="Mean-revert or momentum depending on replay mode; regional compute marks must be present in the row history.",
+        value_fn=lambda x: 0.0,
+        series_fn=_regional_compute_basis_series,
+    ),
+    SpreadFamily(
+        family_id="regional_power_price_basis_proxy",
+        archetype_id="regional_power_basis",
+        label="Regional power price basis proxy",
+        formula="region A electricity $/MWh - region B electricity $/MWh",
+        unit="USD/MWh",
+        expensive_side="High = region A power rich/congested versus region B.",
+        trade_rule="Mean-revert or momentum depending on replay mode; regional electricity marks must be present in the row history.",
+        value_fn=lambda x: 0.0,
+        series_fn=_regional_power_basis_series,
     ),
     SpreadFamily(
         family_id="compute_prompt_calendar_21d",
@@ -329,7 +375,14 @@ ELECTRICITY_INDEX_CATALOG = [
         "id": "public_power_region_basis_proxy",
         "label": "Public proxy power regional-basis basket",
         "venue": "Yahoo/IBKR/Alpaca public close histories",
-        "role": "temporary regional-basis proxy until ISO LMP curves are wired",
+        "role": "temporary regional power-basis proxy until ISO LMP curves are wired",
+        "status": "proxy",
+    },
+    {
+        "id": "regional_power_basis_proxy",
+        "label": "Region A minus Region B power basis",
+        "venue": "derived from public proxy marks",
+        "role": "WTI-Brent style regional electricity basis leg",
         "status": "proxy",
     },
 ]
@@ -433,6 +486,13 @@ COMPUTE_INDEX_CATALOG = [
         "role": "temporary regional compute basis proxy until regional GPU rental curves are wired",
         "status": "proxy",
     },
+    {
+        "id": "regional_compute_basis_proxy",
+        "label": "Region A minus Region B GPU rental basis",
+        "venue": "derived from regional GPU rental or public proxy marks",
+        "role": "WTI-Brent style regional compute-capacity basis leg",
+        "status": "proxy",
+    },
 ]
 
 SPREAD_ARCHETYPE_CATALOG = [
@@ -467,6 +527,22 @@ SPREAD_ARCHETYPE_CATALOG = [
         "oil_analogy": "WTI-Brent or regional basis",
         "status": "proxy",
         "required_indexes": ["two regional electricity marks or proxy baskets", "two regional compute rental marks or proxy baskets"],
+    },
+    {
+        "id": "regional_compute_basis",
+        "label": "Regional compute rental basis",
+        "formula": "region A GPU rental - region B GPU rental",
+        "oil_analogy": "WTI-Brent regional commodity basis",
+        "status": "proxy",
+        "required_indexes": ["two regional compute rental marks or proxy baskets"],
+    },
+    {
+        "id": "regional_power_basis",
+        "label": "Regional power basis",
+        "formula": "region A electricity $/MWh - region B electricity $/MWh",
+        "oil_analogy": "regional power hub basis",
+        "status": "proxy",
+        "required_indexes": ["two regional electricity marks or proxy baskets"],
     },
     {
         "id": "compute_calendar_spread",
@@ -504,6 +580,14 @@ SPREAD_ARCHETYPE_CATALOG = [
 
 
 USABLE_INDEX_STATUSES = {"active", "derived_active", "proxy", "proxy_only"}
+TRADEABILITY_LABELS = {
+    "live_mark": "Live mark",
+    "derived_mark": "Derived mark",
+    "priced_proxy": "Priced proxy",
+    "labelled_proxy": "Labelled proxy",
+    "direct_event_watchlist": "Direct event watchlist",
+    "planned_gap": "Planned gap",
+}
 
 
 def _status_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
@@ -512,6 +596,105 @@ def _status_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
         status = str(row.get("status") or "unknown")
         counts[status] = counts.get(status, 0) + 1
     return counts
+
+
+def _index_family(row: dict[str, Any], *, kind: str) -> str:
+    text = " ".join(str(row.get(key) or "") for key in ("id", "label", "venue", "role")).lower()
+    if any(term in text for term in ("forecasttrader", "polymarket", "kalshi", "event contract", "forecast")):
+        return "direct_event"
+    if any(term in text for term in ("curve", "calendar", "term proxy", "prior-mark")):
+        return "curve_calendar"
+    if kind == "electricity":
+        if "basis" in text or "region a" in text:
+            return "regional_basis"
+        if any(term in text for term in ("gas", "crude", "brent", "wti", "fuel")):
+            return "fuel_stack"
+        if any(term in text for term in ("eia", "lmp", "oasis", "electricity", "generation", "power")):
+            return "physical_power"
+        return "power_proxy"
+    if "basis" in text or "region a" in text or "regional" in text:
+        return "regional_basis"
+    if any(term in text for term in ("btc", "eth", "miner", "hashprice")):
+        return "miner_margin"
+    if any(term in text for term in ("nvda", "vrt", "etn", "capex", "infrastructure")):
+        return "public_compute_proxy"
+    if any(term in text for term in ("aws", "gcp", "azure", "gpu", "rental", "cloud", "runpod", "coreweave")):
+        return "gpu_rental"
+    return "compute_proxy"
+
+
+def _index_tradeability(row: dict[str, Any]) -> str:
+    status = str(row.get("status") or "").strip()
+    if status == "active":
+        return "live_mark"
+    if status == "derived_active":
+        return "derived_mark"
+    if status == "proxy":
+        return "priced_proxy"
+    if status == "proxy_only":
+        return "labelled_proxy"
+    if status == "watchlist":
+        return "direct_event_watchlist"
+    return "planned_gap"
+
+
+def _index_copy_role(tradeability: str) -> str:
+    if tradeability in {"live_mark", "derived_mark", "priced_proxy", "labelled_proxy"}:
+        return "Can mark or proxy-price a paper syndicated basket after replay gates pass."
+    if tradeability == "direct_event_watchlist":
+        return "Can become a direct event leg only after venue price, premium scoring where required, and judge.classify()."
+    return "Research/index gap; not used for current pricing until no-lookahead history exists."
+
+
+def _decorated_index_rows(rows: Iterable[dict[str, Any]], *, kind: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        clean = dict(row)
+        family = _index_family(clean, kind=kind)
+        tradeability = _index_tradeability(clean)
+        venue = str(clean.get("venue") or "").lower()
+        clean.update({
+            "kind": kind,
+            "family": family,
+            "tradeability": tradeability,
+            "tradeability_label": TRADEABILITY_LABELS.get(tradeability, "Planned gap"),
+            "copy_role": _index_copy_role(tradeability),
+            "can_mark_to_market": tradeability in {"live_mark", "derived_mark", "priced_proxy", "labelled_proxy"},
+            "can_be_direct_leg": tradeability == "direct_event_watchlist",
+            "requires_premium_gate": "polymarket" in venue,
+            "requires_judge": tradeability == "direct_event_watchlist",
+        })
+        out.append(clean)
+    return out
+
+
+def _family_counts(rows: Iterable[dict[str, Any]], *, kind: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        family = _index_family(row, kind=kind)
+        counts[family] = counts.get(family, 0) + 1
+    return counts
+
+
+def _tradeability_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        tradeability = _index_tradeability(row)
+        counts[tradeability] = counts.get(tradeability, 0) + 1
+    return counts
+
+
+def _index_ids_by_status(rows: Iterable[dict[str, Any]], statuses: set[str], *, limit: int = 12) -> list[str]:
+    ids: list[str] = []
+    for row in rows:
+        if str(row.get("status") or "") not in statuses:
+            continue
+        row_id = str(row.get("id") or "")
+        if row_id:
+            ids.append(row_id)
+        if len(ids) >= limit:
+            break
+    return ids
 
 
 def _usable_index_count(rows: Iterable[dict[str, Any]]) -> int:
@@ -557,12 +740,20 @@ def _index_coverage(archetype_scoreboard: list[dict[str, Any]]) -> dict[str, Any
             "total": len(ELECTRICITY_INDEX_CATALOG),
             "usable": electricity_usable,
             "status_counts": _status_counts(ELECTRICITY_INDEX_CATALOG),
+            "family_counts": _family_counts(ELECTRICITY_INDEX_CATALOG, kind="electricity"),
+            "tradeability_counts": _tradeability_counts(ELECTRICITY_INDEX_CATALOG),
+            "usable_ids": _index_ids_by_status(ELECTRICITY_INDEX_CATALOG, USABLE_INDEX_STATUSES),
+            "watchlist_ids": _index_ids_by_status(ELECTRICITY_INDEX_CATALOG, {"watchlist"}),
             "planned_gaps": _planned_index_gaps(ELECTRICITY_INDEX_CATALOG),
         },
         "compute": {
             "total": len(COMPUTE_INDEX_CATALOG),
             "usable": compute_usable,
             "status_counts": _status_counts(COMPUTE_INDEX_CATALOG),
+            "family_counts": _family_counts(COMPUTE_INDEX_CATALOG, kind="compute"),
+            "tradeability_counts": _tradeability_counts(COMPUTE_INDEX_CATALOG),
+            "usable_ids": _index_ids_by_status(COMPUTE_INDEX_CATALOG, USABLE_INDEX_STATUSES),
+            "watchlist_ids": _index_ids_by_status(COMPUTE_INDEX_CATALOG, {"watchlist"}),
             "planned_gaps": _planned_index_gaps(COMPUTE_INDEX_CATALOG),
         },
         "spread_archetypes": {
@@ -572,6 +763,8 @@ def _index_coverage(archetype_scoreboard: list[dict[str, Any]]) -> dict[str, Any
             "promotable": len(promotable),
             "oos_passed": len(oos_pass),
             "oos_failed": len(oos_fail),
+            "oos_pass": len(oos_pass),
+            "oos_fail": len(oos_fail),
             "status_counts": _status_counts(SPREAD_ARCHETYPE_CATALOG),
             "needs_history": needs_history,
         },
@@ -997,8 +1190,8 @@ def summarize(
         "archetype_scoreboard": archetype_scoreboard,
         "index_coverage": index_coverage,
         "index_catalog": {
-            "electricity": ELECTRICITY_INDEX_CATALOG,
-            "compute": COMPUTE_INDEX_CATALOG,
+            "electricity": _decorated_index_rows(ELECTRICITY_INDEX_CATALOG, kind="electricity"),
+            "compute": _decorated_index_rows(COMPUTE_INDEX_CATALOG, kind="compute"),
             "spread_archetypes": SPREAD_ARCHETYPE_CATALOG,
         },
         "caveat": (

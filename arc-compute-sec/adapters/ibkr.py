@@ -81,10 +81,17 @@ def _ibkr_port() -> int:
 
 
 def _ibkr_client_id() -> int:
+    raw = os.environ.get("IBKR_CLIENT_ID")
+    if raw is None or raw.strip() == "":
+        try:
+            base = int(os.environ.get("IBKR_CLIENT_ID_BASE", "4200"))
+        except ValueError:
+            base = 4200
+        return base + (os.getpid() % 1000)
     try:
-        return int(os.environ.get("IBKR_CLIENT_ID", "42"))
+        return int(raw)
     except ValueError:
-        return 42
+        return 4200 + (os.getpid() % 1000)
 
 
 def _cp_timeout() -> float:
@@ -132,6 +139,12 @@ def _cp_request(
     """
     base_url = _cp_base_url()
     url = f"{base_url}/{path.lstrip('/')}"
+    verify_ssl = _cp_verify_ssl()
+    if not verify_ssl:
+        try:
+            requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
     try:
         resp = requests.request(
             method,
@@ -139,7 +152,7 @@ def _cp_request(
             params=params,
             json=json_body,
             timeout=timeout if timeout is not None else _cp_timeout(),
-            verify=_cp_verify_ssl(),
+            verify=verify_ssl,
         )
         resp.raise_for_status()
     except requests.RequestException as exc:
@@ -1144,7 +1157,7 @@ def fetch_public_quote(symbol: str) -> dict[str, Any] | None:
         return fetch_energy_history_csv_quote(clean)
     if "-" in clean:
         return None
-    price = fetch_last_price(clean)
+    price = fetch_last_price(clean, quiet=True)
     if price is None:
         return None
     return {
@@ -1156,7 +1169,7 @@ def fetch_public_quote(symbol: str) -> dict[str, Any] | None:
     }
 
 
-def fetch_last_price(symbol: str) -> float | None:
+def fetch_last_price(symbol: str, *, quiet: bool = False) -> float | None:
     """Used by the Phase 0.6 smoke test.
 
     Falls through several ticker fields in preference order because paper
@@ -1167,7 +1180,8 @@ def fetch_last_price(symbol: str) -> float | None:
     try:
         ib = _connect()
     except RuntimeError as exc:
-        print(f"[ibkr] {exc}")
+        if not quiet:
+            print(f"[ibkr] {exc}")
         return None
     from ib_insync import Stock
     contract = Stock(symbol, "SMART", "USD")

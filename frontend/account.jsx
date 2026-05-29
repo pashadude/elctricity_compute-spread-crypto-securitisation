@@ -5,6 +5,25 @@ const DEMO_OPERATOR_TX = '0x3fbd4a19e88c0e2bf98d4c0f6134a946a3e22f19ea2346e8076b
 
 window.__operatorAccount = null;
 window.__operatorAccountMode = null;
+window.__operatorAccountEventKey = '';
+
+const accountFetch = async (path, options = {}) => {
+  const timeoutMs = Number(options.timeoutMs || 5000);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+  const controller = options.signal ? null : new AbortController();
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    return await fetch(path, {
+      ...fetchOptions,
+      signal: options.signal || controller?.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new Error(`HTTP timeout reading ${path}`);
+    throw err;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+};
 
 const maskAccountValue = (value, head = 8, tail = 6) => {
   const s = String(value || '');
@@ -22,15 +41,30 @@ const formatAccountDate = (value) => {
 };
 
 const emitOperatorAccount = (account, mode) => {
-  window.__operatorAccount = account || null;
+  const nextAccount = account || null;
+  const nextMode = mode || window.__operatorAccountMode || null;
+  window.__operatorAccount = nextAccount;
   if (mode) window.__operatorAccountMode = mode;
-  window.dispatchEvent(new CustomEvent('botozen:account', { detail: account || null }));
+  const eventKey = JSON.stringify({
+    accountId: nextAccount?.id || '',
+    status: nextAccount?.status || '',
+    renewsAt: nextAccount?.renewsAt || '',
+    wallet: nextAccount?.walletAddress || nextAccount?.payment?.walletAddress || '',
+    mode: {
+      demo: Boolean(nextMode?.demo_payments_enabled),
+      secure: Boolean(nextMode?.secure_cookie),
+      session: Boolean(nextMode?.session_secret_configured),
+    },
+  });
+  if (eventKey === window.__operatorAccountEventKey) return;
+  window.__operatorAccountEventKey = eventKey;
+  window.dispatchEvent(new CustomEvent('botozen:account', { detail: nextAccount }));
 };
 
 const readDemoOperatorAccount = () => window.__operatorAccount || null;
 
 const accountRequest = async (path, options = {}) => {
-  const resp = await fetch(path, {
+  const resp = await accountFetch(path, {
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
@@ -46,6 +80,18 @@ const accountRequest = async (path, options = {}) => {
 const refreshOperatorAccount = async () => {
   const body = await accountRequest('/api/account');
   return body.account || null;
+};
+
+const refreshAccountPortfolio = async () => {
+  const resp = await accountFetch('/api/account/portfolio', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    timeoutMs: 5000,
+  });
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+  return body;
 };
 
 const createDemoOperatorAccount = async ({ plan, wallet, txHash } = {}) => {
@@ -90,12 +136,15 @@ const AccountMetric = ({ label, value, accent = THEME.primary[400] }) => (
 const AccountPage = ({ setPage }) => {
   const [account, setAccount] = React.useState(readDemoOperatorAccount);
   const [mode, setMode] = React.useState(window.__operatorAccountMode);
+  const [portfolio, setPortfolio] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
   const isMobile = useIsMobile(700);
 
   React.useEffect(() => {
+    let cancelled = false;
     const refresh = (event) => {
+      if (cancelled) return;
       if (event?.type === 'botozen:account') {
         setAccount(event.detail || null);
         setMode(window.__operatorAccountMode || null);
@@ -106,9 +155,26 @@ const AccountPage = ({ setPage }) => {
     window.addEventListener('storage', refresh);
     window.addEventListener('botozen:account', refresh);
     refreshOperatorAccount()
-      .catch(err => setError(String(err.message || err)))
-      .finally(() => setLoading(false));
+      .then(account => {
+        if (cancelled) return null;
+        setAccount(account || null);
+        setMode(window.__operatorAccountMode || null);
+        setLoading(false);
+        if (!account) {
+          setPortfolio(null);
+          return null;
+        }
+        return refreshAccountPortfolio()
+          .then(data => { if (!cancelled) setPortfolio(data); })
+          .catch(() => { if (!cancelled) setPortfolio(null); });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setError(String(err.message || err));
+        setLoading(false);
+      });
     return () => {
+      cancelled = true;
       window.removeEventListener('storage', refresh);
       window.removeEventListener('botozen:account', refresh);
     };
@@ -177,6 +243,10 @@ const AccountPage = ({ setPage }) => {
   };
   const payment = account.payment || {};
   const productionReady = Boolean(mode?.session_secret_configured && mode?.secure_cookie);
+  const portfolioSummary = portfolio?.summary || {};
+  const netPnl = Number(portfolioSummary.netPnlUsdc || 0);
+  const unrealizedPnl = Number(portfolioSummary.unrealizedPnlUsdc || 0);
+  const realizedPnl = Number(portfolioSummary.realizedPnlUsdc || 0);
 
   return (
     <main style={{ padding: isMobile ? '32px 16px 48px' : '56px 32px 72px', minHeight: 'calc(100vh - 64px)' }}>
@@ -213,6 +283,26 @@ const AccountPage = ({ setPage }) => {
             <AccountMetric label="Paid" value={`${account.testUsdc} test USDC`} accent={THEME.amber[400]} />
             <AccountMetric label="Renews" value={formatAccountDate(account.renewsAt)} />
           </div>
+        </Card>
+
+        <Card style={{ marginBottom: '18px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'baseline', flexWrap: 'wrap', marginBottom: '14px' }}>
+            <SectionLabel style={{ margin: 0 }}>Paper portfolio identity</SectionLabel>
+            <Badge color="muted">server-side ledger</Badge>
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: '12px',
+          }}>
+            <AccountMetric label="Open notional" value={fmtUsd(portfolioSummary.openNotionalUsdc || 0, 0)} />
+            <AccountMetric label="Unrealized PnL" value={fmtSigned(unrealizedPnl)} accent={unrealizedPnl >= 0 ? THEME.primary[400] : THEME.red[400]} />
+            <AccountMetric label="Realized PnL" value={fmtSigned(realizedPnl)} accent={realizedPnl >= 0 ? THEME.primary[400] : THEME.red[400]} />
+            <AccountMetric label="Net PnL" value={fmtSigned(netPnl)} accent={netPnl >= 0 ? THEME.primary[400] : THEME.red[400]} />
+          </div>
+          <p style={{ fontFamily: THEME.font.body, fontSize: '12.5px', color: THEME.text.muted, lineHeight: 1.5, margin: '12px 0 0' }}>
+            Paper tickets are keyed to this account ID and payer wallet. Real Circle/Arc movement is still disabled unless a runtime candidate clears the judge gate.
+          </p>
         </Card>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px', alignItems: 'start' }}>
@@ -303,5 +393,6 @@ Object.assign(window, {
   refreshOperatorAccount,
   createDemoOperatorAccount,
   clearDemoOperatorAccount,
+  refreshAccountPortfolio,
   AccountPage,
 });

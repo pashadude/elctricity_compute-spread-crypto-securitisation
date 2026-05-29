@@ -55,6 +55,35 @@ def test_opoint_search_payload_uses_verified_topic_filter_shape():
     assert payload["params"]["main"]["tags"] == 1
 
 
+def test_query_spec_maps_data_center_policy_to_compute_power_terms():
+    spec = oracle.query_spec_for_candidate(_candidate(
+        slug="ai-data-center-moratorium-passed-before-2027",
+        event_slug="ai-data-center-moratorium-passed-before-2027",
+        energy_template_id="energy_ai_infra",
+    ))
+
+    assert spec.label == "data_center_power_policy"
+    assert "AI data center" in spec.core_terms
+    assert "interconnection" in spec.context_terms
+    assert "strait of hormuz" in spec.negative_terms
+    assert "120000256" in spec.opoint_topic_ids
+    assert "220000256" in spec.opoint_topic_ids
+    assert all("medtop:" not in topic_id for topic_id in spec.opoint_topic_ids)
+
+
+def test_query_spec_maps_ai_bubble_to_compute_demand_terms():
+    spec = oracle.query_spec_for_candidate(_candidate(
+        slug="ai-bubble-burst-by",
+        event_slug="ai-bubble-burst-by",
+        energy_template_id="energy_ai_infra",
+    ))
+
+    assert spec.label == "ai_capex_compute_demand"
+    assert "AI infrastructure" in spec.core_terms
+    assert "capital expenditure" in spec.context_terms
+    assert spec.negative_terms
+
+
 def test_article_relevance_requires_core_and_context_terms():
     relevant = oracle.ArticleSnippet(
         article_id="1",
@@ -82,6 +111,24 @@ def test_article_relevance_requires_core_and_context_terms():
         noisy,
         core_terms=["Strait of Hormuz", "Hormuz"],
         context_terms=["tankers", "shipping", "oil"],
+    )
+
+
+def test_compute_power_relevance_rejects_hormuz_false_positive():
+    noisy = oracle.ArticleSnippet(
+        article_id="x",
+        title="AI data center investors watch Strait of Hormuz tanker disruption",
+        summary="The article mentions power prices but is driven by oil tanker shipping and Iran headlines.",
+        source="wire",
+        published_at="2026-05-23",
+        rank_global=1,
+    )
+
+    assert not oracle.is_relevant_article(
+        noisy,
+        core_terms=["AI data center", "data center"],
+        context_terms=["power", "electricity"],
+        negative_terms=oracle.COMPUTE_POWER_NEGATIVE_TERMS,
     )
 
 

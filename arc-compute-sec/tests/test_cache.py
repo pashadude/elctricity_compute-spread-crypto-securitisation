@@ -1,4 +1,5 @@
 import time
+import sqlite3
 from feeds import cache
 
 
@@ -34,3 +35,12 @@ def test_corrupt_cache_db_is_quarantined(tmp_path, monkeypatch):
 
     assert cache.get("ns", "k") == {"ok": True}
     assert list(tmp_path.glob("_feed_cache.sqlite.corrupt.*"))
+
+
+def test_put_degrades_to_memory_when_disk_cache_is_readonly(monkeypatch):
+    monkeypatch.setattr(cache, "_db", lambda: (_ for _ in ()).throw(sqlite3.OperationalError("readonly")))
+    cache._mem.clear()
+
+    cache.put("ns-readonly", "k", {"ok": True}, ttl_seconds=60)
+
+    assert cache.get("ns-readonly", "k") == {"ok": True}

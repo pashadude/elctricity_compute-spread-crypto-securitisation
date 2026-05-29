@@ -15,7 +15,7 @@
       "Circle Developer-Controlled Wallets fit backend-driven agentic execution.",
       "ERC-8183 maps naturally to paid agent work and escrow.",
       "ERC-8004 identity/reputation adds a useful audit trail.",
-      "arc-canteen is useful for hackathon visibility and authenticated RPC."
+      "arc-canteen is useful for hackathon visibility; its authenticated RPC proxy is useful when healthy, but demos should default/fallback to the public Arc RPC."
     ],
     "improve": [
       "Ship a canonical Arc Testnet addresses, ABI, USDC decimals, and chain-config package.",
@@ -25,6 +25,7 @@
       "Improve faucet and SCA funding UX.",
       "Expose ERC-8183 job state as one explorer object.",
       "Add edit/delete for queued arc-canteen updates.",
+      "Document the RPC fallback path clearly: set ARC_RPC/RPC to https://rpc.testnet.arc.network when the Canteen proxy is down.",
       "Add a deterministic local simulator for ERC-8183 lifecycle tests."
     ]
   },
